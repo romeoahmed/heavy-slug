@@ -21,7 +21,6 @@ pub const Library = struct {
         _ = c.FT_Done_FreeType(self.handle);
     }
 
-    /// Returns the linked FreeType version (major, minor, patch).
     pub fn versionString(self: Library) struct { major: i32, minor: i32, patch: i32 } {
         var major: c.FT_Int = 0;
         var minor: c.FT_Int = 0;
@@ -36,7 +35,6 @@ test "init and deinit FreeType library" {
     defer lib.deinit();
 
     const ver = lib.versionString();
-    // FreeType 2.14.3 → major=2, minor=14, patch=3
     try std.testing.expectEqual(@as(i32, 2), ver.major);
     try std.testing.expect(ver.minor >= 14);
 }

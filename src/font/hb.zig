@@ -47,7 +47,6 @@ pub const Buffer = struct {
     }
 };
 
-/// Re-export C constants for callers that need direction/script values.
 pub const Direction = c.hb_direction_t;
 pub const Script = c.hb_script_t;
 pub const HB_DIRECTION_LTR = c.HB_DIRECTION_LTR;
