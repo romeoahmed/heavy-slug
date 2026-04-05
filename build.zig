@@ -41,6 +41,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
+    // --- C library compilation (spec §8.2) ---
+    const ft_dep = b.dependency("freetype_src", .{});
+    const ft_lib = buildFreetype(b, target, optimize);
+    mod.linkLibrary(ft_lib);
+    mod.addIncludePath(ft_dep.path("include"));
+
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
     // to the module defined above, it's sometimes preferable to split business
@@ -153,4 +159,60 @@ pub fn build(b: *std.Build) void {
     //
     // Lastly, the Zig build system is relatively simple and self-contained,
     // and reading its source code will allow you to master it.
+}
+
+fn buildFreetype(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Step.Compile {
+    const ft_dep = b.dependency("freetype_src", .{});
+
+    const lib = b.addLibrary(.{
+        .name = "freetype",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+
+    lib.root_module.addIncludePath(ft_dep.path("include"));
+
+    lib.root_module.addCSourceFiles(.{
+        .root = ft_dep.path(""),
+        .files = &.{
+            "src/base/ftbase.c",
+            "src/base/ftinit.c",
+            "src/base/ftsystem.c",
+            "src/base/ftdebug.c",
+            "src/base/ftbbox.c",
+            "src/base/ftbitmap.c",
+            "src/base/ftglyph.c",
+            "src/base/ftsynth.c",
+            "src/base/ftstroke.c",
+            "src/truetype/truetype.c",
+            "src/cff/cff.c",
+            "src/cid/type1cid.c",
+            "src/type1/type1.c",
+            "src/pfr/pfr.c",
+            "src/sfnt/sfnt.c",
+            "src/autofit/autofit.c",
+            "src/pshinter/pshinter.c",
+            "src/raster/raster.c",
+            "src/smooth/smooth.c",
+            "src/psaux/psaux.c",
+            "src/psnames/psnames.c",
+            "src/gzip/ftgzip.c",
+            "src/lzw/ftlzw.c",
+            "src/sdf/sdf.c",
+            "src/svg/svg.c",
+        },
+        .flags = &.{
+            "-DFT2_BUILD_LIBRARY",
+        },
+    });
+
+    return lib;
 }
