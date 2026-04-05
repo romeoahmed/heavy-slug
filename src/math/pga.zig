@@ -47,6 +47,35 @@ pub const Motor = extern struct {
         } };
     }
 
+    /// Expand motor to a column-major 4×4 matrix, pre-multiplied by `proj`.
+    /// Result = proj × motor_mat.
+    ///
+    /// Motor matrix (column-major, [col][row]):
+    ///   col0 = [s²-α²,  2sα,  0, 0]
+    ///   col1 = [-2sα,  s²-α², 0, 0]
+    ///   col2 = [0,      0,    1, 0]
+    ///   col3 = [2(s·tx+α·ty), 2(s·ty-α·tx), 0, 1]
+    pub fn toMat(self: Motor, proj: [4][4]f32) [4][4]f32 {
+        const s = self.m[0];
+        const alpha = self.m[1];
+        const tx = self.m[2];
+        const ty = self.m[3];
+
+        const s2_a2 = s * s - alpha * alpha;
+        const two_sa = 2.0 * s * alpha;
+        const dx = 2.0 * (s * tx + alpha * ty);
+        const dy = 2.0 * (s * ty - alpha * tx);
+
+        const motor_mat = [4][4]f32{
+            .{ s2_a2, two_sa, 0, 0 },
+            .{ -two_sa, s2_a2, 0, 0 },
+            .{ 0, 0, 1, 0 },
+            .{ dx, dy, 0, 1 },
+        };
+
+        return matMul(proj, motor_mat);
+    }
+
     /// Apply motor to a 2D point via sandwich product M·p·M̃.
     /// For motor [s, α, tx, ty] and point (x, y):
     ///   x' = (s²-α²)·x - 2sα·y + 2(s·tx + α·ty)
@@ -70,6 +99,21 @@ pub const Motor = extern struct {
 comptime {
     std.debug.assert(@sizeOf(Motor) == 16);
     std.debug.assert(@alignOf(Motor) == 4);
+}
+
+/// Column-major 4×4 matrix multiply: result = a × b.
+fn matMul(a: [4][4]f32, b: [4][4]f32) [4][4]f32 {
+    var result: [4][4]f32 = undefined;
+    for (0..4) |col| {
+        for (0..4) |row| {
+            var sum: f32 = 0;
+            for (0..4) |k| {
+                sum += a[k][row] * b[col][k];
+            }
+            result[col][row] = sum;
+        }
+    }
+    return result;
 }
 
 test "Motor identity is unit motor" {
@@ -146,4 +190,52 @@ test "Motor.compose rotate then translate" {
     const p = m.apply(.{ 1.0, 0.0 });
     try testing.expectApproxEqAbs(@as(f32, 2.0), p[0], 1e-5);
     try testing.expectApproxEqAbs(@as(f32, 1.0), p[1], 1e-5);
+}
+
+test "Motor.toMat identity produces identity matrix" {
+    const proj = [4][4]f32{
+        .{ 1, 0, 0, 0 },
+        .{ 0, 1, 0, 0 },
+        .{ 0, 0, 1, 0 },
+        .{ 0, 0, 0, 1 },
+    };
+    const result = Motor.identity.toMat(proj);
+    for (0..4) |col| {
+        for (0..4) |row| {
+            const expected: f32 = if (row == col) 1.0 else 0.0;
+            try testing.expectApproxEqAbs(expected, result[col][row], 1e-6);
+        }
+    }
+}
+
+test "Motor.toMat translation appears in column 3" {
+    const proj = [4][4]f32{
+        .{ 1, 0, 0, 0 },
+        .{ 0, 1, 0, 0 },
+        .{ 0, 0, 1, 0 },
+        .{ 0, 0, 0, 1 },
+    };
+    const m = Motor.fromTranslation(5.0, -2.0);
+    const result = m.toMat(proj);
+    try testing.expectApproxEqAbs(@as(f32, 5.0), result[3][0], 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, -2.0), result[3][1], 1e-5);
+}
+
+test "Motor.toMat rotation matches apply" {
+    const proj = [4][4]f32{
+        .{ 1, 0, 0, 0 },
+        .{ 0, 1, 0, 0 },
+        .{ 0, 0, 1, 0 },
+        .{ 0, 0, 0, 1 },
+    };
+    const m = Motor.fromRotation(std.math.pi / 3.0);
+    const mat = m.toMat(proj);
+    const px: f32 = 3.0;
+    const py: f32 = 1.0;
+    // Transform via matrix (column-major: result[col][row])
+    const mat_x = mat[0][0] * px + mat[1][0] * py + mat[3][0];
+    const mat_y = mat[0][1] * px + mat[1][1] * py + mat[3][1];
+    const applied = m.apply(.{ px, py });
+    try testing.expectApproxEqAbs(applied[0], mat_x, 1e-5);
+    try testing.expectApproxEqAbs(applied[1], mat_y, 1e-5);
 }
