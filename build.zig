@@ -43,9 +43,13 @@ pub fn build(b: *std.Build) void {
 
     // --- C library compilation (spec §8.2) ---
     const ft_dep = b.dependency("freetype_src", .{});
+    const hb_dep = b.dependency("harfbuzz_src", .{});
     const ft_lib = buildFreetype(b, target, optimize);
+    const hb_lib = buildHarfbuzz(b, target, optimize, ft_lib);
     mod.linkLibrary(ft_lib);
+    mod.linkLibrary(hb_lib);
     mod.addIncludePath(ft_dep.path("include"));
+    mod.addIncludePath(hb_dep.path("src"));
 
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
@@ -216,6 +220,67 @@ fn buildFreetype(
         },
         .flags = &.{
             "-DFT2_BUILD_LIBRARY",
+        },
+    });
+
+    return lib;
+}
+
+fn buildHarfbuzz(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    ft_lib: *std.Build.Step.Compile,
+) *std.Build.Step.Compile {
+    const hb_dep = b.dependency("harfbuzz_src", .{});
+    const ft_dep = b.dependency("freetype_src", .{});
+
+    const lib = b.addLibrary(.{
+        .name = "harfbuzz",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .link_libcpp = true,
+        }),
+    });
+
+    // HarfBuzz headers + internal headers live in src/
+    lib.root_module.addIncludePath(hb_dep.path("src"));
+    // HarfBuzz needs FreeType headers for HAVE_FREETYPE
+    lib.root_module.addIncludePath(ft_dep.path("include"));
+    // Link FreeType so HarfBuzz can call FT_* functions
+    lib.root_module.linkLibrary(ft_lib);
+
+    // Core: unity build (includes all non-GPU HarfBuzz source)
+    lib.root_module.addCSourceFiles(.{
+        .root = hb_dep.path("src"),
+        .files = &.{
+            "harfbuzz.cc",
+        },
+        .flags = &.{
+            "-DHAVE_FREETYPE=1",
+            "-fno-exceptions",
+            "-fno-rtti",
+        },
+    });
+
+    // GPU subsystem (spec §8.2: -DHAVE_HB_GPU=1)
+    // These files may already be included in the unity build when HAVE_HB_GPU
+    // is set. If duplicate symbol errors occur, remove this block and add
+    // -DHAVE_HB_GPU=1 to the unity build flags above.
+    lib.root_module.addCSourceFiles(.{
+        .root = hb_dep.path("src"),
+        .files = &.{
+            "hb-gpu-draw.cc",
+            "hb-gpu-shaders.cc",
+        },
+        .flags = &.{
+            "-DHAVE_FREETYPE=1",
+            "-DHAVE_HB_GPU=1",
+            "-fno-exceptions",
+            "-fno-rtti",
         },
     });
 
