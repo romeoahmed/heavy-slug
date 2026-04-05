@@ -9,6 +9,16 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
+    // Vulkan bindings: manual generation from Vulkan-Headers vk.xml
+    const registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml");
+    const vk_gen = b.dependency("vulkan", .{}).artifact("vulkan-zig-generator");
+    const vk_generate_cmd = b.addRunArtifact(vk_gen);
+    vk_generate_cmd.addFileArg(registry);
+    const vulkan_zig = b.addModule("vulkan-zig", .{
+        .root_source_file = vk_generate_cmd.addOutputFileArg("vk.zig"),
+    });
+    mod.addImport("vulkan", vulkan_zig);
+
     // C library compilation (spec §8.2)
     const ft_dep = b.dependency("freetype_src", .{});
     const hb_dep = b.dependency("harfbuzz_src", .{});
@@ -27,6 +37,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "heavy_slug", .module = mod },
+                .{ .name = "vulkan", .module = vulkan_zig },
             },
         }),
     });
