@@ -23,6 +23,30 @@ pub const Motor = extern struct {
         return .{ .m = .{ @cos(half), @sin(half), 0, 0 } };
     }
 
+    /// Compose two motors (geometric product): result applies `b` first, then `a`.
+    /// For motors A=[sA, αA, txA, tyA] and B=[sB, αB, txB, tyB]:
+    ///   s'   = sA·sB - αA·αB
+    ///   e12' = sA·αB + αA·sB
+    ///   e01' = sA·txB + txA·sB + αA·tyB - tyA·αB
+    ///   e02' = sA·tyB + tyA·sB - αA·txB + txA·αB
+    pub fn compose(a: Motor, b: Motor) Motor {
+        const sa = a.m[0];
+        const aa = a.m[1];
+        const txa = a.m[2];
+        const tya = a.m[3];
+        const sb = b.m[0];
+        const ab = b.m[1];
+        const txb = b.m[2];
+        const tyb = b.m[3];
+
+        return .{ .m = .{
+            sa * sb - aa * ab,
+            sa * ab + aa * sb,
+            sa * txb + txa * sb + aa * tyb - tya * ab,
+            sa * tyb + tya * sb - aa * txb + txa * ab,
+        } };
+    }
+
     /// Apply motor to a 2D point via sandwich product M·p·M̃.
     /// For motor [s, α, tx, ty] and point (x, y):
     ///   x' = (s²-α²)·x - 2sα·y + 2(s·tx + α·ty)
@@ -91,5 +115,35 @@ test "Motor.apply rotation 90° rotates point" {
     const m = Motor.fromRotation(std.math.pi / 2.0);
     const p = m.apply(.{ 1.0, 0.0 });
     try testing.expectApproxEqAbs(@as(f32, 0.0), p[0], 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), p[1], 1e-5);
+}
+
+test "Motor.compose identity is neutral" {
+    const m = Motor.fromTranslation(5.0, 3.0);
+    const c1 = Motor.compose(Motor.identity, m);
+    const c2 = Motor.compose(m, Motor.identity);
+    for (0..4) |i| {
+        try testing.expectApproxEqAbs(m.m[i], c1.m[i], 1e-6);
+        try testing.expectApproxEqAbs(m.m[i], c2.m[i], 1e-6);
+    }
+}
+
+test "Motor.compose two translations add" {
+    const a = Motor.fromTranslation(3.0, 0.0);
+    const b = Motor.fromTranslation(0.0, 4.0);
+    const ab = Motor.compose(a, b);
+    const p = ab.apply(.{ 0.0, 0.0 });
+    try testing.expectApproxEqAbs(@as(f32, 3.0), p[0], 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 4.0), p[1], 1e-5);
+}
+
+test "Motor.compose rotate then translate" {
+    // compose(tr, rot) applies rot first, then tr
+    const rot = Motor.fromRotation(std.math.pi / 2.0);
+    const tr = Motor.fromTranslation(2.0, 0.0);
+    const m = Motor.compose(tr, rot);
+    // (1,0) → rotate 90° CCW → (0,1) → translate (2,0) → (2,1)
+    const p = m.apply(.{ 1.0, 0.0 });
+    try testing.expectApproxEqAbs(@as(f32, 2.0), p[0], 1e-5);
     try testing.expectApproxEqAbs(@as(f32, 1.0), p[1], 1e-5);
 }
