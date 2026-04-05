@@ -4,15 +4,44 @@
 
 const vk = @import("vulkan");
 
-/// Vulkan device dispatch table type.
-/// Only loads the commands heavy-slug actually uses.
-/// Populated in init() via vk.DeviceWrapper.load(device, loader).
-///
-/// This version of vulkan-zig (14.1.0) generates a flat dispatch
-/// struct covering all Vulkan commands; filtering to a subset is
-/// not supported via a constructor argument. DeviceWrapper wraps
-/// the full DeviceDispatch.
-pub const DeviceDispatch = vk.DeviceDispatch;
+/// Filtered device dispatch struct — only the commands heavy-slug uses.
+/// vulkan-zig API: define a struct with the exact vkXxx fields you need,
+/// then pass its type to DeviceWrapperWithCustomDispatch() to get a
+/// wrapper type with named helper methods + a .load() constructor.
+const HeavySlugDispatch = struct {
+    vkDestroyDevice: ?vk.PfnDestroyDevice = null,
+    vkCreateDescriptorSetLayout: ?vk.PfnCreateDescriptorSetLayout = null,
+    vkDestroyDescriptorSetLayout: ?vk.PfnDestroyDescriptorSetLayout = null,
+    vkCreateDescriptorPool: ?vk.PfnCreateDescriptorPool = null,
+    vkDestroyDescriptorPool: ?vk.PfnDestroyDescriptorPool = null,
+    vkAllocateDescriptorSets: ?vk.PfnAllocateDescriptorSets = null,
+    vkUpdateDescriptorSets: ?vk.PfnUpdateDescriptorSets = null,
+    vkCreatePipelineLayout: ?vk.PfnCreatePipelineLayout = null,
+    vkDestroyPipelineLayout: ?vk.PfnDestroyPipelineLayout = null,
+    vkCreateGraphicsPipelines: ?vk.PfnCreateGraphicsPipelines = null,
+    vkDestroyPipeline: ?vk.PfnDestroyPipeline = null,
+    vkCreateShaderModule: ?vk.PfnCreateShaderModule = null,
+    vkDestroyShaderModule: ?vk.PfnDestroyShaderModule = null,
+    vkCreateBuffer: ?vk.PfnCreateBuffer = null,
+    vkDestroyBuffer: ?vk.PfnDestroyBuffer = null,
+    vkAllocateMemory: ?vk.PfnAllocateMemory = null,
+    vkFreeMemory: ?vk.PfnFreeMemory = null,
+    vkBindBufferMemory: ?vk.PfnBindBufferMemory = null,
+    vkMapMemory: ?vk.PfnMapMemory = null,
+    vkUnmapMemory: ?vk.PfnUnmapMemory = null,
+    vkGetBufferDeviceAddress: ?vk.PfnGetBufferDeviceAddress = null,
+    vkCmdBindPipeline: ?vk.PfnCmdBindPipeline = null,
+    vkCmdBindDescriptorSets: ?vk.PfnCmdBindDescriptorSets = null,
+    vkCmdPushConstants: ?vk.PfnCmdPushConstants = null,
+    vkCmdDrawMeshTasksEXT: ?vk.PfnCmdDrawMeshTasksEXT = null,
+    vkQueueSubmit2: ?vk.PfnQueueSubmit2 = null,
+    vkDeviceWaitIdle: ?vk.PfnDeviceWaitIdle = null,
+    vkGetDeviceProcAddr: ?vk.PfnGetDeviceProcAddr = null,
+};
+
+/// Vulkan device dispatch wrapper — provides named helper methods for
+/// all commands in HeavySlugDispatch. Load via DeviceDispatch.load(device, loader).
+pub const DeviceDispatch = vk.DeviceWrapperWithCustomDispatch(HeavySlugDispatch);
 
 test "vulkan types are available" {
     // Verify binding generation produced usable types
@@ -29,10 +58,9 @@ test "vulkan types are available" {
 }
 
 test "DeviceDispatch type compiles" {
-    // Verify the dispatch wrapper type is valid
+    // Verify the filtered dispatch wrapper type is valid
     _ = DeviceDispatch;
-    // The dispatch table has the expected fields
-    _ = @hasField(DeviceDispatch, "vkDestroyDevice");
-    _ = @hasField(DeviceDispatch, "vkCreateBuffer");
-    _ = @hasField(DeviceDispatch, "vkCmdDrawMeshTasksEXT");
+    _ = @hasField(HeavySlugDispatch, "vkDestroyDevice");
+    _ = @hasField(HeavySlugDispatch, "vkCreateBuffer");
+    _ = @hasField(HeavySlugDispatch, "vkCmdDrawMeshTasksEXT");
 }
