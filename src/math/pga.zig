@@ -29,16 +29,16 @@ pub const Motor = extern struct {
     ///   y' =  2sα·x + (s²-α²)·y + 2(s·ty - α·tx)
     pub fn apply(self: Motor, p: [2]f32) [2]f32 {
         const s = self.m[0];
-        const a = self.m[1];
+        const alpha = self.m[1];
         const tx = self.m[2];
         const ty = self.m[3];
 
-        const s2_a2 = s * s - a * a;
-        const two_sa = 2.0 * s * a;
+        const s2_a2 = s * s - alpha * alpha;
+        const two_sa = 2.0 * s * alpha;
 
         return .{
-            s2_a2 * p[0] - two_sa * p[1] + 2.0 * (s * tx + a * ty),
-            two_sa * p[0] + s2_a2 * p[1] + 2.0 * (s * ty - a * tx),
+            s2_a2 * p[0] - two_sa * p[1] + 2.0 * (s * tx + alpha * ty),
+            two_sa * p[0] + s2_a2 * p[1] + 2.0 * (s * ty - alpha * tx),
         };
     }
 };
