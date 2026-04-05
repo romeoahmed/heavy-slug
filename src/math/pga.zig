@@ -101,6 +101,25 @@ comptime {
     std.debug.assert(@alignOf(Motor) == 4);
 }
 
+/// 2D point in Euclidean coordinates.
+/// Storage: [x, y] as [2]f32 (w=1 implicit).
+pub const Point = extern struct {
+    v: [2]f32,
+
+    pub fn init(x: f32, y: f32) Point {
+        return .{ .v = .{ x, y } };
+    }
+
+    /// Transform this point by a motor.
+    pub fn transform(self: Point, motor: Motor) Point {
+        return .{ .v = motor.apply(self.v) };
+    }
+};
+
+comptime {
+    std.debug.assert(@sizeOf(Point) == 8);
+}
+
 /// Column-major 4×4 matrix multiply: result = a × b.
 fn matMul(a: [4][4]f32, b: [4][4]f32) [4][4]f32 {
     var result: [4][4]f32 = undefined;
@@ -278,4 +297,38 @@ test "Motor.toMat combined motor matches apply" {
     const applied = m.apply(.{ px, py });
     try testing.expectApproxEqAbs(applied[0], mat_x, 1e-5);
     try testing.expectApproxEqAbs(applied[1], mat_y, 1e-5);
+}
+
+test "Point.transform matches Motor.apply" {
+    const m = Motor.compose(
+        Motor.fromTranslation(1.0, 2.0),
+        Motor.fromRotation(std.math.pi / 4.0),
+    );
+    const p = Point.init(3.0, 0.0);
+    const transformed = p.transform(m);
+    const applied = m.apply(.{ 3.0, 0.0 });
+    try testing.expectApproxEqAbs(applied[0], transformed.v[0], 1e-6);
+    try testing.expectApproxEqAbs(applied[1], transformed.v[1], 1e-6);
+}
+
+test "Motor round-trip: reverse recovers original point" {
+    // For a normalized motor, reverse M~ = [s, -e12, -e01, -e02] is the inverse.
+    // This holds for pure rotors and pure translators individually.
+    // Apply the inverse in reverse order: undo rotation, then undo translation.
+    const angle: f32 = 1.2;
+    const tx: f32 = 7.0;
+    const ty: f32 = -3.0;
+    const rot = Motor.fromRotation(angle);
+    const tr = Motor.fromTranslation(tx, ty);
+    const rot_rev = Motor{ .m = .{ rot.m[0], -rot.m[1], -rot.m[2], -rot.m[3] } };
+    const tr_rev = Motor{ .m = .{ tr.m[0], -tr.m[1], -tr.m[2], -tr.m[3] } };
+    const original = [2]f32{ 42.0, -17.0 };
+    // Forward: compose(tr, rot) applies rot first, then tr.
+    const m = Motor.compose(tr, rot);
+    const forward = m.apply(original);
+    // Inverse: undo tr (tr_rev), then undo rot (rot_rev).
+    const after_tr_rev = tr_rev.apply(forward);
+    const back = rot_rev.apply(after_tr_rev);
+    try testing.expectApproxEqAbs(original[0], back[0], 1e-4);
+    try testing.expectApproxEqAbs(original[1], back[1], 1e-4);
 }
