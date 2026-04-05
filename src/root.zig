@@ -19,4 +19,5 @@ test "basic add functionality" {
 
 test {
     _ = @import("font/ft.zig");
+    _ = @import("font/hb.zig");
 }
