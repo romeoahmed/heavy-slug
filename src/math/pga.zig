@@ -10,6 +10,12 @@ pub const Motor = extern struct {
     /// Identity motor (no rotation, no translation).
     pub const identity = Motor{ .m = .{ 1, 0, 0, 0 } };
 
+    /// Convert storage array to @Vector for SIMD operations.
+    /// Free conversion — same memory layout, no copy.
+    inline fn vec(self: Motor) @Vector(4, f32) {
+        return self.m;
+    }
+
     /// Motor from pure translation (tx, ty).
     /// Encoding: s=1, e12=0, e01=tx/2, e02=ty/2
     pub fn fromTranslation(tx: f32, ty: f32) Motor {
@@ -81,18 +87,22 @@ pub const Motor = extern struct {
     ///   x' = (s²-α²)·x - 2sα·y + 2(s·tx + α·ty)
     ///   y' =  2sα·x + (s²-α²)·y + 2(s·ty - α·tx)
     pub fn apply(self: Motor, p: [2]f32) [2]f32 {
-        const s = self.m[0];
-        const alpha = self.m[1];
-        const tx = self.m[2];
-        const ty = self.m[3];
+        const v = self.vec();
+        const s = v[0];
+        const alpha = v[1];
 
         const s2_a2 = s * s - alpha * alpha;
         const two_sa = 2.0 * s * alpha;
 
-        return .{
-            s2_a2 * p[0] - two_sa * p[1] + 2.0 * (s * tx + alpha * ty),
-            two_sa * p[0] + s2_a2 * p[1] + 2.0 * (s * ty - alpha * tx),
+        const pv: @Vector(2, f32) = p;
+        const rot = @Vector(2, f32){ s2_a2, two_sa } * @as(@Vector(2, f32), @splat(pv[0])) +
+            @Vector(2, f32){ -two_sa, s2_a2 } * @as(@Vector(2, f32), @splat(pv[1]));
+        const trans = @Vector(2, f32){
+            2.0 * (s * v[2] + alpha * v[3]),
+            2.0 * (s * v[3] - alpha * v[2]),
         };
+
+        return rot + trans;
     }
 };
 
