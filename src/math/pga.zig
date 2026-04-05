@@ -31,19 +31,19 @@ pub const Motor = extern struct {
     ///   e02' = sA·tyB + tyA·sB - αA·txB + txA·αB
     pub fn compose(a: Motor, b: Motor) Motor {
         const sa = a.m[0];
-        const aa = a.m[1];
+        const alpha_a = a.m[1];
         const txa = a.m[2];
         const tya = a.m[3];
         const sb = b.m[0];
-        const ab = b.m[1];
+        const alpha_b = b.m[1];
         const txb = b.m[2];
         const tyb = b.m[3];
 
         return .{ .m = .{
-            sa * sb - aa * ab,
-            sa * ab + aa * sb,
-            sa * txb + txa * sb + aa * tyb - tya * ab,
-            sa * tyb + tya * sb - aa * txb + txa * ab,
+            sa * sb - alpha_a * alpha_b,
+            sa * alpha_b + alpha_a * sb,
+            sa * txb + txa * sb + alpha_a * tyb - tya * alpha_b,
+            sa * tyb + tya * sb - alpha_a * txb + txa * alpha_b,
         } };
     }
 
