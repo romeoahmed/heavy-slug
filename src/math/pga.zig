@@ -156,16 +156,19 @@ comptime {
 }
 
 /// Column-major 4×4 matrix multiply: result = a × b.
+/// Each column of the result is a linear combination of columns of a,
+/// weighted by the corresponding column of b. Uses @Vector(4, f32)
+/// for SIMD column operations.
 fn matMul(a: [4][4]f32, b: [4][4]f32) [4][4]f32 {
     var result: [4][4]f32 = undefined;
-    for (0..4) |col| {
-        for (0..4) |row| {
-            var sum: f32 = 0;
-            for (0..4) |k| {
-                sum += a[k][row] * b[col][k];
-            }
-            result[col][row] = sum;
+    inline for (0..4) |col| {
+        const bc: @Vector(4, f32) = b[col];
+        var sum: @Vector(4, f32) = @splat(@as(f32, 0));
+        inline for (0..4) |k| {
+            const ac: @Vector(4, f32) = a[k];
+            sum += ac * @as(@Vector(4, f32), @splat(bc[k]));
         }
+        result[col] = sum;
     }
     return result;
 }
