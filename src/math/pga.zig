@@ -239,3 +239,43 @@ test "Motor.toMat rotation matches apply" {
     try testing.expectApproxEqAbs(applied[0], mat_x, 1e-5);
     try testing.expectApproxEqAbs(applied[1], mat_y, 1e-5);
 }
+
+test "Motor.toMat respects non-identity proj" {
+    // Uniform scale proj (2x in x, 3x in y)
+    const proj = [4][4]f32{
+        .{ 2, 0, 0, 0 },
+        .{ 0, 3, 0, 0 },
+        .{ 0, 0, 1, 0 },
+        .{ 0, 0, 0, 1 },
+    };
+    // Pure translation by (4, 6)
+    const m = Motor.fromTranslation(4.0, 6.0);
+    const result = m.toMat(proj);
+    // proj × motor_mat: translation column is proj × [4, 6, 0, 1]ᵀ = [8, 18, 0, 1]
+    try testing.expectApproxEqAbs(@as(f32, 8.0), result[3][0], 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 18.0), result[3][1], 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), result[3][3], 1e-5);
+}
+
+test "Motor.toMat combined motor matches apply" {
+    const proj = [4][4]f32{
+        .{ 1, 0, 0, 0 },
+        .{ 0, 1, 0, 0 },
+        .{ 0, 0, 1, 0 },
+        .{ 0, 0, 0, 1 },
+    };
+    // Combine: rotate 45° then translate (1, 2)
+    const rot = Motor.fromRotation(std.math.pi / 4.0);
+    const tr = Motor.fromTranslation(1.0, 2.0);
+    const m = Motor.compose(tr, rot); // rot first, then tr
+
+    const mat = m.toMat(proj);
+    // Test point (2, 0)
+    const px: f32 = 2.0;
+    const py: f32 = 0.0;
+    const mat_x = mat[0][0] * px + mat[1][0] * py + mat[3][0];
+    const mat_y = mat[0][1] * px + mat[1][1] * py + mat[3][1];
+    const applied = m.apply(.{ px, py });
+    try testing.expectApproxEqAbs(applied[0], mat_x, 1e-5);
+    try testing.expectApproxEqAbs(applied[1], mat_y, 1e-5);
+}
