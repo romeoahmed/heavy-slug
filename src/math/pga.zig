@@ -54,12 +54,17 @@ pub const Motor = extern struct {
         const term1 = sa * bv;
         // Term 2: alpha_a * b_swap = [αA·αB, αA·sB, αA·tyB, αA·txB]
         const term2 = alpha_a * b_swap_01;
-        // Term 3: txa * [_, _, sB, αB] and tya * [_, _, αB, sB] for slots 2,3
-        // For slots 0,1: zero (tx/ty don't contribute to s' or α')
+        // b_s_a = [sB, sB, sB, αB] — slots 2,3 carry sB and αB for tx/ty cross-terms.
+        // b_a_s = [sB, sB, αB, sB] — slots 2,3 carry αB and sB for ty/tx cross-terms.
+        // Slots 0,1 of both hold sB but are masked to zero by signs_34/signs_34n below.
         const b_s_a: @Vector(4, f32) = @shuffle(f32, bv, undefined, [4]i32{ 0, 0, 0, 1 });
         const b_a_s: @Vector(4, f32) = @shuffle(f32, bv, undefined, [4]i32{ 0, 0, 1, 0 });
-        const term3 = txa * b_s_a; // [_, _, txA·sB, txA·αB]
-        const term4 = tya * b_a_s; // [_, _, tyA·αB, tyA·sB]
+        const term3 = txa * b_s_a; // slots 2,3: txA·sB, txA·αB (slots 0,1 masked below)
+        const term4 = tya * b_a_s; // slots 2,3: tyA·αB, tyA·sB (slots 0,1 masked below)
+
+        // Signs for the geometric product formula.
+        // signs_34/signs_34n: zeros in slots 0,1 mask out tx/ty contributions from
+        // s' and e12'; ±1 in slots 2,3 apply the required sign for e01' and e02'.
 
         // Signs: s' = +sa·sB - αA·αB, α' = +sA·αB + αA·sB
         //        tx' = +sA·txB + txA·sB + αA·tyB - tyA·αB
