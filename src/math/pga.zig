@@ -22,6 +22,25 @@ pub const Motor = extern struct {
         const half: f32 = angle * 0.5;
         return .{ .m = .{ @cos(half), @sin(half), 0, 0 } };
     }
+
+    /// Apply motor to a 2D point via sandwich product M·p·M̃.
+    /// For motor [s, α, tx, ty] and point (x, y):
+    ///   x' = (s²-α²)·x - 2sα·y + 2(s·tx + α·ty)
+    ///   y' =  2sα·x + (s²-α²)·y + 2(s·ty - α·tx)
+    pub fn apply(self: Motor, p: [2]f32) [2]f32 {
+        const s = self.m[0];
+        const a = self.m[1];
+        const tx = self.m[2];
+        const ty = self.m[3];
+
+        const s2_a2 = s * s - a * a;
+        const two_sa = 2.0 * s * a;
+
+        return .{
+            s2_a2 * p[0] - two_sa * p[1] + 2.0 * (s * tx + a * ty),
+            two_sa * p[0] + s2_a2 * p[1] + 2.0 * (s * ty - a * tx),
+        };
+    }
 };
 
 comptime {
@@ -53,4 +72,24 @@ test "Motor.fromRotation encodes angle" {
     try testing.expectApproxEqAbs(s, m.m[1], 1e-6);
     try testing.expectEqual(@as(f32, 0), m.m[2]);
     try testing.expectEqual(@as(f32, 0), m.m[3]);
+}
+
+test "Motor.apply identity preserves point" {
+    const p = Motor.identity.apply(.{ 5.0, 7.0 });
+    try testing.expectApproxEqAbs(@as(f32, 5.0), p[0], 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, 7.0), p[1], 1e-6);
+}
+
+test "Motor.apply translation moves point" {
+    const m = Motor.fromTranslation(10.0, -3.0);
+    const p = m.apply(.{ 1.0, 2.0 });
+    try testing.expectApproxEqAbs(@as(f32, 11.0), p[0], 1e-6);
+    try testing.expectApproxEqAbs(@as(f32, -1.0), p[1], 1e-6);
+}
+
+test "Motor.apply rotation 90° rotates point" {
+    const m = Motor.fromRotation(std.math.pi / 2.0);
+    const p = m.apply(.{ 1.0, 0.0 });
+    try testing.expectApproxEqAbs(@as(f32, 0.0), p[0], 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 1.0), p[1], 1e-5);
 }
