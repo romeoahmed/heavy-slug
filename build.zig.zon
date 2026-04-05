@@ -36,6 +36,10 @@
             .url = "https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.gz",
             .hash = "N-V-__8AAJo-LAHFNfa0p0oMQqmwlBEAZMOeo03azXgrKLTT",
         },
+        .harfbuzz_src = .{
+            .url = "https://github.com/harfbuzz/harfbuzz/releases/download/14.1.0/harfbuzz-14.1.0.tar.xz",
+            .hash = "N-V-__8AAJ5J4QV1Qw46kP_V9eNRdRVk9Cp65YNLuECHurpK",
+        },
     },
     .paths = .{
         "build.zig",
