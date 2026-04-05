@@ -36,21 +36,41 @@ pub const Motor = extern struct {
     ///   e01' = sA·txB + txA·sB + αA·tyB - tyA·αB
     ///   e02' = sA·tyB + tyA·sB - αA·txB + txA·αB
     pub fn compose(a: Motor, b: Motor) Motor {
-        const sa = a.m[0];
-        const alpha_a = a.m[1];
-        const txa = a.m[2];
-        const tya = a.m[3];
-        const sb = b.m[0];
-        const alpha_b = b.m[1];
-        const txb = b.m[2];
-        const tyb = b.m[3];
+        const av = a.vec();
+        const bv = b.vec();
 
-        return .{ .m = .{
-            sa * sb - alpha_a * alpha_b,
-            sa * alpha_b + alpha_a * sb,
-            sa * txb + txa * sb + alpha_a * tyb - tya * alpha_b,
-            sa * tyb + tya * sb - alpha_a * txb + txa * alpha_b,
-        } };
+        // Broadcast each scalar component of A across a full vector
+        const sa: @Vector(4, f32) = @splat(av[0]); // [sA, sA, sA, sA]
+        const alpha_a: @Vector(4, f32) = @splat(av[1]); // [αA, αA, αA, αA]
+        const txa: @Vector(4, f32) = @splat(av[2]); // [txA, txA, txA, txA]
+        const tya: @Vector(4, f32) = @splat(av[3]); // [tyA, tyA, tyA, tyA]
+
+        // Swizzle B components for the cross-terms:
+        // bv           = [sB,  αB,  txB, tyB]
+        // b_swap_01    = [αB,  sB,  tyB, txB]  (swap pairs)
+        const b_swap_01: @Vector(4, f32) = @shuffle(f32, bv, undefined, [4]i32{ 1, 0, 3, 2 });
+
+        // Term 1: sa * bv = [sA·sB, sA·αB, sA·txB, sA·tyB]
+        const term1 = sa * bv;
+        // Term 2: alpha_a * b_swap = [αA·αB, αA·sB, αA·tyB, αA·txB]
+        const term2 = alpha_a * b_swap_01;
+        // Term 3: txa * [_, _, sB, αB] and tya * [_, _, αB, sB] for slots 2,3
+        // For slots 0,1: zero (tx/ty don't contribute to s' or α')
+        const b_s_a: @Vector(4, f32) = @shuffle(f32, bv, undefined, [4]i32{ 0, 0, 0, 1 });
+        const b_a_s: @Vector(4, f32) = @shuffle(f32, bv, undefined, [4]i32{ 0, 0, 1, 0 });
+        const term3 = txa * b_s_a; // [_, _, txA·sB, txA·αB]
+        const term4 = tya * b_a_s; // [_, _, tyA·αB, tyA·sB]
+
+        // Signs: s' = +sa·sB - αA·αB, α' = +sA·αB + αA·sB
+        //        tx' = +sA·txB + txA·sB + αA·tyB - tyA·αB
+        //        ty' = +sA·tyB + tyA·sB - αA·txB + txA·αB
+        const signs_2 = @Vector(4, f32){ -1, 1, 1, -1 };
+        const signs_34 = @Vector(4, f32){ 0, 0, 1, 1 };
+        const signs_34n = @Vector(4, f32){ 0, 0, -1, 1 };
+
+        const result = term1 + term2 * signs_2 + term3 * signs_34 + term4 * signs_34n;
+
+        return .{ .m = result };
     }
 
     /// Expand motor to a column-major 4×4 matrix, pre-multiplied by `proj`.
