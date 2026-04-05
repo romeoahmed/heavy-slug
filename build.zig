@@ -208,6 +208,11 @@ fn buildFreetype(
             "src/lzw/ftlzw.c",
             "src/sdf/sdf.c",
             "src/svg/svg.c",
+            "src/type42/type42.c",
+            "src/winfonts/winfnt.c",
+            "src/pcf/pcf.c",
+            "src/bdf/bdf.c",
+            "src/base/ftmm.c",
         },
         .flags = &.{
             "-DFT2_BUILD_LIBRARY",
