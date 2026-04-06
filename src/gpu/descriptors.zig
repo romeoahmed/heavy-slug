@@ -161,6 +161,7 @@ pub const DescriptorTable = struct {
         allocator: std.mem.Allocator,
         slot_capacity: u32,
     ) !DescriptorTable {
+        std.debug.assert(slot_capacity > 0);
         std.debug.assert(slot_capacity <= max_glyph_descriptors);
         // -- Create descriptor set layout --
         const binding_flags = [2]vk.DescriptorBindingFlags{
@@ -240,6 +241,8 @@ pub const DescriptorTable = struct {
 
     pub fn deinit(self: *DescriptorTable, allocator: std.mem.Allocator) void {
         self.slots.deinit(allocator);
+        // Pool is destroyed before layout: the set was allocated without FREE_DESCRIPTOR_SET_BIT
+        // so destroying the pool implicitly frees it. Layout has no dependency on the pool.
         self.dispatch.destroyDescriptorPool(self.device, self.pool, null);
         self.dispatch.destroyDescriptorSetLayout(self.device, self.layout, null);
         self.* = undefined;
@@ -253,6 +256,7 @@ pub const DescriptorTable = struct {
         offset: vk.DeviceSize,
         range: vk.DeviceSize,
     ) void {
+        std.debug.assert(index < self.slots.capacity);
         const buf_info = vk.DescriptorBufferInfo{
             .buffer = buffer,
             .offset = offset,
