@@ -118,6 +118,34 @@ pub const GlyphCache = struct {
         entry.last_frame = self.current_frame;
         return entry;
     }
+
+    /// Evict the least-recently-used cold entry. Returns the evicted entry's
+    /// key, slot, and pool allocation so the caller can free Vulkan resources.
+    /// Returns null if there are no cold entries.
+    pub fn evictLru(self: *GlyphCache) ?EvictedEntry {
+        if (self.cold_count == 0) return null;
+
+        var oldest_key: ?CacheKey = null;
+        var oldest_frame: u32 = std.math.maxInt(u32);
+
+        var it = self.map.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.tier == .cold and entry.value_ptr.last_frame < oldest_frame) {
+                oldest_frame = entry.value_ptr.last_frame;
+                oldest_key = entry.key_ptr.*;
+            }
+        }
+
+        const key = oldest_key orelse return null;
+        const removed = self.map.fetchRemove(key) orelse return null;
+        self.cold_count -= 1;
+
+        return .{
+            .key = key,
+            .slot = removed.value.slot,
+            .pool_alloc = removed.value.pool_alloc,
+        };
+    }
 };
 
 test "GlyphCache: init and deinit" {
@@ -170,4 +198,53 @@ test "GlyphCache: count tracks hot and cold" {
     try std.testing.expectEqual(@as(u32, 2), cache.count());
     try std.testing.expectEqual(@as(u32, 1), cache.hot_count);
     try std.testing.expectEqual(@as(u32, 1), cache.cold_count);
+}
+
+test "GlyphCache: evict LRU cold entry" {
+    var cache = GlyphCache.init(std.testing.allocator, 4, 2, 3);
+    defer cache.deinit();
+
+    const key1 = CacheKey{ .font_id = 1, .glyph_id = 1 };
+    const key2 = CacheKey{ .font_id = 1, .glyph_id = 2 };
+
+    try cache.insertCold(key1, 10, .{ .offset = 0, .size = 64 });
+    cache.current_frame = 1; // advance manually for insertion ordering
+    try cache.insertCold(key2, 11, .{ .offset = 64, .size = 64 });
+
+    // key1 was inserted at frame 0 (older), key2 at frame 1
+    const evicted = cache.evictLru().?;
+    try std.testing.expectEqual(key1, evicted.key);
+    try std.testing.expectEqual(@as(u32, 10), evicted.slot);
+    try std.testing.expectEqual(@as(u32, 1), cache.cold_count);
+}
+
+test "GlyphCache: evict returns null when no cold entries" {
+    var cache = GlyphCache.init(std.testing.allocator, 4, 8, 3);
+    defer cache.deinit();
+
+    // Only hot entries
+    try cache.insertHot(.{ .font_id = 1, .glyph_id = 1 }, 0, .{ .offset = 0, .size = 64 });
+
+    try std.testing.expectEqual(@as(?EvictedEntry, null), cache.evictLru());
+}
+
+test "GlyphCache: evict prefers least recently used" {
+    var cache = GlyphCache.init(std.testing.allocator, 4, 4, 3);
+    defer cache.deinit();
+
+    const key_a = CacheKey{ .font_id = 1, .glyph_id = 1 };
+    const key_b = CacheKey{ .font_id = 1, .glyph_id = 2 };
+    const key_c = CacheKey{ .font_id = 1, .glyph_id = 3 };
+
+    try cache.insertCold(key_a, 0, .{ .offset = 0, .size = 64 });
+    try cache.insertCold(key_b, 1, .{ .offset = 64, .size = 64 });
+    try cache.insertCold(key_c, 2, .{ .offset = 128, .size = 64 });
+
+    // Touch key_a at frame 5 — it becomes most recently used
+    cache.current_frame = 5;
+    _ = cache.lookup(key_a);
+
+    // key_b and key_c still at frame 0; evict should pick one of them
+    const evicted = cache.evictLru().?;
+    try std.testing.expect(evicted.key.glyph_id == 2 or evicted.key.glyph_id == 3);
 }
