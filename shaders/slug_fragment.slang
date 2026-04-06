@@ -10,9 +10,6 @@ import slug_common;
 [[vk::binding(0, 0)]]
 ByteAddressBuffer glyphBlobs[];
 
-[[vk::push_constant]]
-PushConstants pc;
-
 // --- Interpolants from mesh shader ---
 
 struct FragmentInput
@@ -126,11 +123,13 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
     float2 pixelsPerEm = 1.0 / emsPerPixel;
 
     // Compute band indices from render coordinates.
-    float2 bandScale = float2(float(numHBands), float(numVBands)) /
-                       max(bounds.zw - bounds.xy, float2(1.0 / 65536.0, 1.0 / 65536.0));
-    float2 bandOffset = -bounds.xy * bandScale;
+    // Horizontal bands partition by y coordinate; vertical bands partition by x.
+    // bounds = (min_x, min_y, max_x, max_y).
+    float hBandScale = float(numHBands) / max(bounds.w - bounds.y, 1.0 / 65536.0);
+    float vBandScale = float(numVBands) / max(bounds.z - bounds.x, 1.0 / 65536.0);
     int2 bandIndex = clamp(
-        int2(renderCoord.yx * bandScale + bandOffset),
+        int2(int((renderCoord.y - bounds.y) * hBandScale),
+             int((renderCoord.x - bounds.x) * vBandScale)),
         int2(0, 0),
         int2(numHBands - 1, numVBands - 1)
     );
@@ -140,9 +139,9 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
     float xwgt = 0.0;
 
     uint hbandTexel = HEADER_LEN + uint(bandIndex.x);
-    uint hCurveCount, hDescOff, hAscOff;
-    float hSplit;
-    blob.readBandHeader(hbandTexel, hCurveCount, hDescOff, hAscOff, hSplit);
+    uint hCurveCount, hDescOff;
+    uint hAscOff_unused; float hSplit_unused;  // ascending-list optimization deferred
+    blob.readBandHeader(hbandTexel, hCurveCount, hDescOff, hAscOff_unused, hSplit_unused);
 
     for (uint ci = 0; ci < hCurveCount; ci++)
     {
@@ -184,9 +183,9 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
     float ywgt = 0.0;
 
     uint vbandTexel = HEADER_LEN + uint(numHBands) + uint(bandIndex.y);
-    uint vCurveCount, vDescOff, vAscOff;
-    float vSplit;
-    blob.readBandHeader(vbandTexel, vCurveCount, vDescOff, vAscOff, vSplit);
+    uint vCurveCount, vDescOff;
+    uint vAscOff_unused; float vSplit_unused;  // ascending-list optimization deferred
+    blob.readBandHeader(vbandTexel, vCurveCount, vDescOff, vAscOff_unused, vSplit_unused);
 
     for (uint ci = 0; ci < vCurveCount; ci++)
     {
