@@ -132,6 +132,7 @@ pub const GlyphCache = struct {
                 entry.value_ptr.consecutive_frames >= self.promote_frames)
             {
                 entry.value_ptr.tier = .hot;
+                entry.value_ptr.consecutive_frames = 0;
                 self.hot_count += 1;
                 self.cold_count -= 1;
                 if (self.hot_count >= self.hot_capacity) break;
