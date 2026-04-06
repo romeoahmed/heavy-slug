@@ -45,7 +45,7 @@ pub const PoolAllocator = struct {
             if (block.size >= aligned_size) {
                 const result = Allocation{ .offset = block.offset, .size = size };
                 const remaining = block.size - aligned_size;
-                if (remaining >= self.alignment) {
+                if (remaining > 0) {
                     self.free_blocks.items[i] = .{
                         .offset = block.offset + aligned_size,
                         .size = remaining,
