@@ -90,8 +90,10 @@ fn compileSlangShader(
     cmd.addArgs(&.{ "-stage", stage });
     cmd.addArgs(&.{ "-target", "spirv" });
     cmd.addArgs(&.{ "-profile", "spirv_1_6" });
+    cmd.addArgs(&.{"-matrix-layout-column-major"});
     cmd.addArgs(&.{ "-I", "shaders" });
     cmd.addArgs(&.{"-O2"});
+    cmd.addArg("-o");
     return cmd.addOutputFileArg(name);
 }
 
