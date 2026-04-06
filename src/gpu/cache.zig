@@ -119,6 +119,26 @@ pub const GlyphCache = struct {
         return entry;
     }
 
+    /// Advance the frame counter. Promotes cold entries that have been used for
+    /// `promote_frames` consecutive frames into the hot tier (if hot has capacity).
+    pub fn advanceFrame(self: *GlyphCache) void {
+        self.current_frame += 1;
+
+        if (self.hot_count >= self.hot_capacity) return;
+
+        var it = self.map.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.tier == .cold and
+                entry.value_ptr.consecutive_frames >= self.promote_frames)
+            {
+                entry.value_ptr.tier = .hot;
+                self.hot_count += 1;
+                self.cold_count -= 1;
+                if (self.hot_count >= self.hot_capacity) break;
+            }
+        }
+    }
+
     /// Evict the least-recently-used cold entry. Returns the evicted entry's
     /// key, slot, and pool allocation so the caller can free Vulkan resources.
     /// Returns null if there are no cold entries.
@@ -247,4 +267,93 @@ test "GlyphCache: evict prefers least recently used" {
     // key_b and key_c still at frame 0; evict should pick one of them
     const evicted = cache.evictLru().?;
     try std.testing.expect(evicted.key.glyph_id == 2 or evicted.key.glyph_id == 3);
+}
+
+test "GlyphCache: consecutive frame tracking" {
+    var cache = GlyphCache.init(std.testing.allocator, 4, 8, 3);
+    defer cache.deinit();
+
+    const key = CacheKey{ .font_id = 1, .glyph_id = 65 };
+    try cache.insertCold(key, 0, .{ .offset = 0, .size = 64 });
+
+    // Frame 0: insert set consecutive = 1
+    var entry = cache.lookup(key).?;
+    try std.testing.expectEqual(@as(u8, 1), entry.consecutive_frames);
+
+    // Frame 1: consecutive should increment to 2
+    cache.advanceFrame();
+    entry = cache.lookup(key).?;
+    try std.testing.expectEqual(@as(u8, 2), entry.consecutive_frames);
+
+    // Frame 2: consecutive should increment to 3
+    cache.advanceFrame();
+    entry = cache.lookup(key).?;
+    try std.testing.expectEqual(@as(u8, 3), entry.consecutive_frames);
+
+    // Skip frame 3 (no lookup), advance to frame 4
+    cache.advanceFrame();
+    cache.advanceFrame();
+    entry = cache.lookup(key).?;
+    try std.testing.expectEqual(@as(u8, 1), entry.consecutive_frames); // reset after gap
+}
+
+test "GlyphCache: cold promoted to hot after consecutive frames" {
+    var cache = GlyphCache.init(std.testing.allocator, 4, 8, 3); // promote after 3 frames
+    defer cache.deinit();
+
+    const key = CacheKey{ .font_id = 1, .glyph_id = 65 };
+    try cache.insertCold(key, 0, .{ .offset = 0, .size = 64 });
+    // Frame 0: insert → consecutive = 1
+
+    cache.advanceFrame(); // frame 1
+    _ = cache.lookup(key); // consecutive = 2
+
+    cache.advanceFrame(); // frame 2
+    _ = cache.lookup(key); // consecutive = 3 (>= promote_frames)
+
+    cache.advanceFrame(); // frame 3: promotion happens here
+
+    const entry = cache.lookup(key).?;
+    try std.testing.expectEqual(Tier.hot, entry.tier);
+    try std.testing.expectEqual(@as(u32, 1), cache.hot_count);
+    try std.testing.expectEqual(@as(u32, 0), cache.cold_count);
+}
+
+test "GlyphCache: promotion skipped when hot tier full" {
+    var cache = GlyphCache.init(std.testing.allocator, 1, 8, 2); // hot capacity = 1
+    defer cache.deinit();
+
+    // Fill hot tier
+    try cache.insertHot(.{ .font_id = 1, .glyph_id = 1 }, 0, .{ .offset = 0, .size = 64 });
+
+    // Add cold entry and use for 2 consecutive frames
+    const cold_key = CacheKey{ .font_id = 1, .glyph_id = 2 };
+    try cache.insertCold(cold_key, 1, .{ .offset = 64, .size = 64 });
+
+    cache.advanceFrame();
+    _ = cache.lookup(cold_key);
+    cache.advanceFrame();
+    _ = cache.lookup(cold_key);
+    cache.advanceFrame(); // would promote, but hot is full
+
+    const entry = cache.lookup(cold_key).?;
+    try std.testing.expectEqual(Tier.cold, entry.tier); // stays cold
+    try std.testing.expectEqual(@as(u32, 1), cache.hot_count);
+    try std.testing.expectEqual(@as(u32, 1), cache.cold_count);
+}
+
+test "GlyphCache: duplicate lookup in same frame does not double-count" {
+    var cache = GlyphCache.init(std.testing.allocator, 4, 8, 3);
+    defer cache.deinit();
+
+    const key = CacheKey{ .font_id = 1, .glyph_id = 65 };
+    try cache.insertCold(key, 0, .{ .offset = 0, .size = 64 });
+
+    // Multiple lookups in the same frame
+    _ = cache.lookup(key);
+    _ = cache.lookup(key);
+    _ = cache.lookup(key);
+
+    const entry = cache.lookup(key).?;
+    try std.testing.expectEqual(@as(u8, 1), entry.consecutive_frames); // still 1
 }
