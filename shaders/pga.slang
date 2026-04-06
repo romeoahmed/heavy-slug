@@ -31,7 +31,8 @@ struct Motor
         return rot + trans;
     }
 
-    // Expand motor to row-major 4x4 matrix, pre-multiplied by proj.
+    // Expand motor to 4x4 matrix, pre-multiplied by proj.
+    // Constructor args are rows; slangc stores column-major in memory.
     // Returns proj * motor_mat.
     float4x4 toMat(float4x4 proj)
     {
