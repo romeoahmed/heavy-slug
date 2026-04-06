@@ -7,6 +7,7 @@ pub const glyph = @import("font/glyph.zig");
 pub const pga = @import("math/pga.zig");
 pub const gpu_context = @import("gpu/context.zig");
 pub const descriptors = @import("gpu/descriptors.zig");
+pub const pool = @import("gpu/pool.zig");
 
 test {
     _ = ft;
@@ -15,4 +16,5 @@ test {
     _ = pga;
     _ = gpu_context;
     _ = descriptors;
+    _ = pool;
 }
