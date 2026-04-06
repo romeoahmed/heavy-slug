@@ -127,7 +127,7 @@ pub fn shape(font: Font, buf: Buffer) void {
     c.hb_shape(font.handle, buf.handle, null, 0);
 }
 
-const test_font_path: [*:0]const u8 = "C:/Windows/Fonts/segoeui.ttf";
+const test_font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
 
 test "create and destroy HarfBuzz buffer" {
     const buf = try Buffer.create();

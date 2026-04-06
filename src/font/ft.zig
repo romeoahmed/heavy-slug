@@ -60,7 +60,7 @@ pub const Face = struct {
     }
 };
 
-const test_font_path: [*:0]const u8 = "C:/Windows/Fonts/segoeui.ttf";
+const test_font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
 
 test "Face: load system font and query glyph count" {
     const lib = try Library.init();

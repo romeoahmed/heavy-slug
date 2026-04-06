@@ -94,6 +94,8 @@ const vulkan_zig = b.addModule("vulkan-zig", .{
 
 **Cross-module @cImport interop:** `ft.zig` and `hb.zig` each have their own `@cImport` blocks including FreeType headers — Zig treats them as distinct type namespaces. Passing `FT_Face` across modules uses `*anyopaque` as the bridge: `ft.Face.rawHandle()` returns `@ptrCast(self.handle.?)`, and `hb.Font.createFromFtFace` reconstructs with `@ptrCast(@alignCast(ptr))`.
 
+**Test fonts:** Font tests use `assets/Inter-Regular.otf` (relative to the project root, where `zig build test` runs). Do not hardcode system font paths.
+
 **Font pipeline:** `glyph.FontContext` owns FT_Face + hb_font + reusable hb_gpu_draw. Call `shapeText(text, null, null)` for auto-detected direction/script (calls `hb_buffer_guess_segment_properties`), or pass explicit `hb.Direction`/`hb.Script` values. `encodeGlyph(glyph_id)` runs the drawGlyph→encode→getExtents→reset cycle and returns an `EncodedGlyph` (caller owns the blob).
 
 **HarfBuzz GPU draw cycle:** `GpuDraw.drawGlyph` → `GpuDraw.encode` (returns `Blob`) → `GpuDraw.getExtents` → `GpuDraw.reset`. Always call reset after encode (or on encode failure via errdefer) to avoid dirty state on the next glyph.

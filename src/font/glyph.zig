@@ -84,7 +84,7 @@ pub const FontContext = struct {
     }
 };
 
-const test_font_path: [*:0]const u8 = "C:/Windows/Fonts/segoeui.ttf";
+const test_font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
 
 test "FontContext: load font and encode glyph" {
     const ft_lib = try ft.Library.init();
