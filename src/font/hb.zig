@@ -180,3 +180,99 @@ test "Font: create from FT_Face and shape text" {
     try std.testing.expectEqual(@as(usize, 2), positions.len);
     try std.testing.expect(positions[0].x_advance > 0);
 }
+
+pub const GlyphExtents = c.hb_glyph_extents_t;
+
+pub const Blob = struct {
+    handle: *c.hb_blob_t,
+
+    /// Get the raw blob data as a byte slice.
+    pub fn getData(self: Blob) []const u8 {
+        var len: c_uint = 0;
+        const ptr = c.hb_blob_get_data(self.handle, &len);
+        if (len == 0) return &.{};
+        return @as([*]const u8, @ptrCast(ptr))[0..len];
+    }
+
+    pub fn getLength(self: Blob) u32 {
+        return c.hb_blob_get_length(self.handle);
+    }
+
+    pub fn destroy(self: Blob) void {
+        c.hb_blob_destroy(self.handle);
+    }
+};
+
+pub const GpuDraw = struct {
+    handle: *c.hb_gpu_draw_t,
+
+    pub fn create() !GpuDraw {
+        const draw = c.hb_gpu_draw_create_or_fail() orelse return error.AllocationFailed;
+        return .{ .handle = draw };
+    }
+
+    pub fn destroy(self: GpuDraw) void {
+        c.hb_gpu_draw_destroy(self.handle);
+    }
+
+    /// Draw a glyph outline into this GpuDraw context.
+    pub fn drawGlyph(self: GpuDraw, font: Font, glyph_id: u32) void {
+        c.hb_gpu_draw_glyph(self.handle, font.handle, glyph_id);
+    }
+
+    /// Encode the accumulated drawing into a Slug-format blob.
+    pub fn encode(self: GpuDraw) !Blob {
+        const blob = c.hb_gpu_draw_encode(self.handle) orelse return error.AllocationFailed;
+        return .{ .handle = blob };
+    }
+
+    /// Get the bounding box extents of the drawn glyph.
+    pub fn getExtents(self: GpuDraw) GlyphExtents {
+        var extents: GlyphExtents = undefined;
+        c.hb_gpu_draw_get_extents(self.handle, &extents);
+        return extents;
+    }
+
+    /// Reset for encoding the next glyph. Reuse the same GpuDraw object.
+    pub fn reset(self: GpuDraw) void {
+        c.hb_gpu_draw_reset(self.handle);
+    }
+};
+
+test "GpuDraw: encode glyph produces non-empty blob" {
+    // Load font
+    const ft_lib = try ft.Library.init();
+    defer ft_lib.deinit();
+    const ft_face = ft.Face.init(ft_lib, test_font_path) catch return;
+    defer ft_face.deinit();
+    try ft_face.setPixelSizes(0, 32);
+
+    const font = try Font.createFromFtFace(ft_face.rawHandle());
+    defer font.destroy();
+
+    // Shape to get a valid glyph ID
+    const buf = try Buffer.create();
+    defer buf.destroy();
+    buf.setDirection(.ltr);
+    buf.setScript(.latin);
+    buf.addUtf8("A");
+    shape(font, buf);
+    const glyph_id = buf.getGlyphInfos()[0].codepoint;
+
+    // Encode the glyph
+    const draw = try GpuDraw.create();
+    defer draw.destroy();
+    draw.drawGlyph(font, glyph_id);
+
+    const blob = try draw.encode();
+    defer blob.destroy();
+
+    // Blob should have data (the Slug-encoded glyph)
+    try std.testing.expect(blob.getLength() > 0);
+    try std.testing.expect(blob.getData().len > 0);
+
+    // Extents should have non-zero dimensions for 'A'
+    const extents = draw.getExtents();
+    try std.testing.expect(extents.width != 0);
+    try std.testing.expect(extents.height != 0);
+}
