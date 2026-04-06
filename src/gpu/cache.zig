@@ -137,7 +137,7 @@ pub const GlyphCache = struct {
         }
 
         const key = oldest_key orelse return null;
-        const removed = self.map.fetchRemove(key) orelse return null;
+        const removed = self.map.fetchRemove(key) orelse unreachable;
         self.cold_count -= 1;
 
         return .{
