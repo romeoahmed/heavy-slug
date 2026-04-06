@@ -1,4 +1,6 @@
 const std = @import("std");
+const vk = @import("vulkan");
+const gpu_context = @import("context.zig");
 
 /// Per-glyph draw command uploaded to GPU each frame (spec §10.1).
 /// 64 bytes, tightly packed for storage buffer access.
@@ -143,9 +145,6 @@ test "SlotAllocator: free and re-alloc cycle" {
     try std.testing.expectEqual(x, y);
 }
 
-const vk = @import("vulkan");
-const gpu_context = @import("context.zig");
-
 pub const max_glyph_descriptors: u32 = 65_536;
 
 pub const DescriptorTable = struct {
@@ -162,6 +161,7 @@ pub const DescriptorTable = struct {
         allocator: std.mem.Allocator,
         slot_capacity: u32,
     ) !DescriptorTable {
+        std.debug.assert(slot_capacity <= max_glyph_descriptors);
         // -- Create descriptor set layout --
         const binding_flags = [2]vk.DescriptorBindingFlags{
             .{ .partially_bound_bit = true, .update_after_bind_bit = true },
@@ -222,6 +222,8 @@ pub const DescriptorTable = struct {
             .p_set_layouts = @ptrCast(&layout),
         };
         try dispatch.allocateDescriptorSets(device, &alloc_info, @ptrCast(&set));
+        // No errdefer needed for `set`: descriptor sets allocated from a pool without
+        // FREE_DESCRIPTOR_SET_BIT are freed implicitly when the pool is destroyed.
 
         // -- Slot allocator --
         const slots = try SlotAllocator.init(allocator, slot_capacity);
@@ -264,8 +266,8 @@ pub const DescriptorTable = struct {
             .descriptor_count = 1,
             .descriptor_type = .storage_buffer,
             .p_buffer_info = @ptrCast(&buf_info),
-            .p_image_info = undefined,
-            .p_texel_buffer_view = undefined,
+            .p_image_info = null,
+            .p_texel_buffer_view = null,
         };
         self.dispatch.updateDescriptorSets(self.device, 1, @ptrCast(&write), 0, null);
     }
@@ -290,8 +292,8 @@ pub const DescriptorTable = struct {
             .descriptor_count = 1,
             .descriptor_type = .storage_buffer,
             .p_buffer_info = @ptrCast(&buf_info),
-            .p_image_info = undefined,
-            .p_texel_buffer_view = undefined,
+            .p_image_info = null,
+            .p_texel_buffer_view = null,
         };
         self.dispatch.updateDescriptorSets(self.device, 1, @ptrCast(&write), 0, null);
     }
@@ -305,6 +307,9 @@ pub const DescriptorTable = struct {
     pub fn freeSlot(self: *DescriptorTable, slot: u32) void {
         self.slots.free(slot);
     }
+
+    // TODO(Plan 9): add nullSlot(index: u32) void — writes a null descriptor to binding 0
+    // slot `index` on glyph cache eviction. Safe because binding 0 has PARTIALLY_BOUND.
 };
 
 test "DescriptorTable type and field layout compiles" {
