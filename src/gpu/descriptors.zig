@@ -1,5 +1,4 @@
 const std = @import("std");
-const vk = @import("vulkan");
 
 /// Per-glyph draw command uploaded to GPU each frame (spec §10.1).
 /// 64 bytes, tightly packed for storage buffer access.

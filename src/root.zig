@@ -5,12 +5,12 @@ pub const ft = @import("font/ft.zig");
 pub const hb = @import("font/hb.zig");
 pub const pga = @import("math/pga.zig");
 pub const gpu_context = @import("gpu/context.zig");
-pub const gpu_descriptors = @import("gpu/descriptors.zig");
+pub const descriptors = @import("gpu/descriptors.zig");
 
 test {
     _ = ft;
     _ = hb;
     _ = pga;
     _ = gpu_context;
-    _ = gpu_descriptors;
+    _ = descriptors;
 }
