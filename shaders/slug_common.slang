@@ -71,10 +71,15 @@ struct BlobReader
         int4 t1 = readTexel(1);  // (num_hbands, num_vbands, x_scale, y_scale)
         bounds = float4(t0) / UNITS_PER_EM;
         bandCounts = int2(t1.x, t1.y);
+        // t1.b (x_scale) and t1.a (y_scale) are font design units; not needed by band lookup.
     }
 
     // Read a band header at the given texel index.
-    // Returns: curve_count, desc_offset (decoded), asc_offset (decoded), split.
+    // descOffset: start of curve index list sorted by max coordinate descending
+    //             (use for forward iteration with early-exit when max < sample - 0.5px).
+    // ascOffset:  start of curve index list sorted by min coordinate ascending
+    //             (use for reverse iteration with early-exit when min > sample + 0.5px).
+    // split:      coordinate separating which list has fewer curves for this sample.
     void readBandHeader(uint texelIndex, out uint curveCount, out uint descOffset,
                         out uint ascOffset, out float split)
     {
@@ -89,6 +94,7 @@ struct BlobReader
     uint readCurveIndex(uint texelIndex)
     {
         int4 t = readTexel(texelIndex);
+        // t.gba are always zero per encoder spec; only .r contains the offset.
         return decodeOffset(t.x);
     }
 };
