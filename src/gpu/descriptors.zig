@@ -142,3 +142,178 @@ test "SlotAllocator: free and re-alloc cycle" {
     const y = sa.alloc().?;
     try std.testing.expectEqual(x, y);
 }
+
+const vk = @import("vulkan");
+const gpu_context = @import("context.zig");
+
+pub const max_glyph_descriptors: u32 = 65_536;
+
+pub const DescriptorTable = struct {
+    device: vk.Device,
+    dispatch: gpu_context.DeviceDispatch,
+    layout: vk.DescriptorSetLayout,
+    pool: vk.DescriptorPool,
+    set: vk.DescriptorSet,
+    slots: SlotAllocator,
+
+    pub fn init(
+        device: vk.Device,
+        dispatch: gpu_context.DeviceDispatch,
+        allocator: std.mem.Allocator,
+        slot_capacity: u32,
+    ) !DescriptorTable {
+        // -- Create descriptor set layout --
+        const binding_flags = [2]vk.DescriptorBindingFlags{
+            .{ .partially_bound_bit = true, .update_after_bind_bit = true },
+            .{},
+        };
+        const bindings = [2]vk.DescriptorSetLayoutBinding{
+            .{
+                .binding = 0,
+                .descriptor_type = .storage_buffer,
+                .descriptor_count = max_glyph_descriptors,
+                .stage_flags = .{ .mesh_shader_bit_ext = true, .fragment_bit = true },
+                .p_immutable_samplers = null,
+            },
+            .{
+                .binding = 1,
+                .descriptor_type = .storage_buffer,
+                .descriptor_count = 1,
+                .stage_flags = .{ .task_shader_bit_ext = true, .mesh_shader_bit_ext = true },
+                .p_immutable_samplers = null,
+            },
+        };
+        const flags_info = vk.DescriptorSetLayoutBindingFlagsCreateInfo{
+            .s_type = .descriptor_set_layout_binding_flags_create_info,
+            .binding_count = 2,
+            .p_binding_flags = &binding_flags,
+        };
+        const layout_ci = vk.DescriptorSetLayoutCreateInfo{
+            .s_type = .descriptor_set_layout_create_info,
+            .p_next = @ptrCast(&flags_info),
+            .flags = .{ .update_after_bind_pool_bit = true },
+            .binding_count = 2,
+            .p_bindings = &bindings,
+        };
+        const layout = try dispatch.createDescriptorSetLayout(device, &layout_ci, null);
+        errdefer dispatch.destroyDescriptorSetLayout(device, layout, null);
+
+        // -- Create descriptor pool --
+        const pool_sizes = [2]vk.DescriptorPoolSize{
+            .{ .type = .storage_buffer, .descriptor_count = max_glyph_descriptors },
+            .{ .type = .storage_buffer, .descriptor_count = 1 },
+        };
+        const pool_ci = vk.DescriptorPoolCreateInfo{
+            .s_type = .descriptor_pool_create_info,
+            .flags = .{ .update_after_bind_bit = true },
+            .max_sets = 1,
+            .pool_size_count = 2,
+            .p_pool_sizes = &pool_sizes,
+        };
+        const pool = try dispatch.createDescriptorPool(device, &pool_ci, null);
+        errdefer dispatch.destroyDescriptorPool(device, pool, null);
+
+        // -- Allocate descriptor set --
+        var set: vk.DescriptorSet = undefined;
+        const alloc_info = vk.DescriptorSetAllocateInfo{
+            .s_type = .descriptor_set_allocate_info,
+            .descriptor_pool = pool,
+            .descriptor_set_count = 1,
+            .p_set_layouts = @ptrCast(&layout),
+        };
+        try dispatch.allocateDescriptorSets(device, &alloc_info, @ptrCast(&set));
+
+        // -- Slot allocator --
+        const slots = try SlotAllocator.init(allocator, slot_capacity);
+
+        return .{
+            .device = device,
+            .dispatch = dispatch,
+            .layout = layout,
+            .pool = pool,
+            .set = set,
+            .slots = slots,
+        };
+    }
+
+    pub fn deinit(self: *DescriptorTable, allocator: std.mem.Allocator) void {
+        self.slots.deinit(allocator);
+        self.dispatch.destroyDescriptorPool(self.device, self.pool, null);
+        self.dispatch.destroyDescriptorSetLayout(self.device, self.layout, null);
+        self.* = undefined;
+    }
+
+    /// Point descriptor slot `index` at a sub-range of `buffer`.
+    pub fn updateSlot(
+        self: *DescriptorTable,
+        index: u32,
+        buffer: vk.Buffer,
+        offset: vk.DeviceSize,
+        range: vk.DeviceSize,
+    ) void {
+        const buf_info = vk.DescriptorBufferInfo{
+            .buffer = buffer,
+            .offset = offset,
+            .range = range,
+        };
+        const write = vk.WriteDescriptorSet{
+            .s_type = .write_descriptor_set,
+            .dst_set = self.set,
+            .dst_binding = 0,
+            .dst_array_element = index,
+            .descriptor_count = 1,
+            .descriptor_type = .storage_buffer,
+            .p_buffer_info = @ptrCast(&buf_info),
+            .p_image_info = undefined,
+            .p_texel_buffer_view = undefined,
+        };
+        self.dispatch.updateDescriptorSets(self.device, 1, @ptrCast(&write), 0, null);
+    }
+
+    /// Update binding 1 to point at the GlyphCommand[] buffer for this frame.
+    pub fn updateCommandBuffer(
+        self: *DescriptorTable,
+        buffer: vk.Buffer,
+        offset: vk.DeviceSize,
+        range: vk.DeviceSize,
+    ) void {
+        const buf_info = vk.DescriptorBufferInfo{
+            .buffer = buffer,
+            .offset = offset,
+            .range = range,
+        };
+        const write = vk.WriteDescriptorSet{
+            .s_type = .write_descriptor_set,
+            .dst_set = self.set,
+            .dst_binding = 1,
+            .dst_array_element = 0,
+            .descriptor_count = 1,
+            .descriptor_type = .storage_buffer,
+            .p_buffer_info = @ptrCast(&buf_info),
+            .p_image_info = undefined,
+            .p_texel_buffer_view = undefined,
+        };
+        self.dispatch.updateDescriptorSets(self.device, 1, @ptrCast(&write), 0, null);
+    }
+
+    /// Allocate a descriptor slot index from the free-list.
+    pub fn allocSlot(self: *DescriptorTable) ?u32 {
+        return self.slots.alloc();
+    }
+
+    /// Return a descriptor slot to the free-list.
+    pub fn freeSlot(self: *DescriptorTable, slot: u32) void {
+        self.slots.free(slot);
+    }
+};
+
+test "DescriptorTable type and field layout compiles" {
+    _ = DescriptorTable;
+    // Verify the struct has expected fields
+    try std.testing.expect(@hasField(DescriptorTable, "device"));
+    try std.testing.expect(@hasField(DescriptorTable, "dispatch"));
+    try std.testing.expect(@hasField(DescriptorTable, "layout"));
+    try std.testing.expect(@hasField(DescriptorTable, "pool"));
+    try std.testing.expect(@hasField(DescriptorTable, "set"));
+    try std.testing.expect(@hasField(DescriptorTable, "slots"));
+}
