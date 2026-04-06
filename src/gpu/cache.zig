@@ -31,6 +31,8 @@ pub const EvictedEntry = struct {
 ///   consecutive frames of use.
 ///
 /// This is a pure metadata tracker — it does not own Vulkan resources.
+///
+/// TODO(renderer): add `removeFont(font_id)` to evict all entries for a font on unload.
 pub const GlyphCache = struct {
     map: std.AutoHashMap(CacheKey, CacheEntry),
     hot_count: u32,
@@ -67,6 +69,7 @@ pub const GlyphCache = struct {
     }
 
     /// Insert a glyph into the hot tier. Caller must ensure hot tier has capacity.
+    /// Caller must ensure key is not already present (lookup first).
     pub fn insertHot(
         self: *GlyphCache,
         key: CacheKey,
@@ -74,6 +77,7 @@ pub const GlyphCache = struct {
         pool_alloc: pool_mod.Allocation,
     ) !void {
         std.debug.assert(self.hot_count < self.hot_capacity);
+        std.debug.assert(!self.map.contains(key));
         try self.map.put(key, .{
             .slot = slot,
             .pool_alloc = pool_alloc,
@@ -85,7 +89,7 @@ pub const GlyphCache = struct {
     }
 
     /// Insert a glyph into the cold tier. Caller must ensure cold tier has capacity
-    /// (evict first if full).
+    /// (evict first if full). Caller must ensure key is not already present (lookup first).
     pub fn insertCold(
         self: *GlyphCache,
         key: CacheKey,
@@ -93,6 +97,7 @@ pub const GlyphCache = struct {
         pool_alloc: pool_mod.Allocation,
     ) !void {
         std.debug.assert(self.cold_count < self.cold_capacity);
+        std.debug.assert(!self.map.contains(key));
         try self.map.put(key, .{
             .slot = slot,
             .pool_alloc = pool_alloc,
@@ -126,6 +131,7 @@ pub const GlyphCache = struct {
 
         if (self.hot_count >= self.hot_capacity) return;
 
+        // Only mutate value_ptr fields in-place — do NOT call map.put/remove here.
         var it = self.map.iterator();
         while (it.next()) |entry| {
             if (entry.value_ptr.tier == .cold and
