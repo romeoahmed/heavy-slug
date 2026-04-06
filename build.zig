@@ -56,6 +56,43 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = mod })).step);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = exe.root_module })).step);
+
+    // Shader compilation: Slang → SPIR-V
+    const shader_step = b.step("shaders", "Compile Slang shaders to SPIR-V");
+
+    const task_spv = compileSlangShader(b, "slug_task.spv", "shaders/slug_task.slang", "taskMain", "amplification");
+    const mesh_spv = compileSlangShader(b, "slug_mesh.spv", "shaders/slug_mesh.slang", "meshMain", "mesh");
+    const frag_spv = compileSlangShader(b, "slug_fragment.spv", "shaders/slug_fragment.slang", "fragmentMain", "fragment");
+
+    const install_task = b.addInstallFile(task_spv, "shaders/slug_task.spv");
+    const install_mesh = b.addInstallFile(mesh_spv, "shaders/slug_mesh.spv");
+    const install_frag = b.addInstallFile(frag_spv, "shaders/slug_fragment.spv");
+    shader_step.dependOn(&install_task.step);
+    shader_step.dependOn(&install_mesh.step);
+    shader_step.dependOn(&install_frag.step);
+
+    // Make exe depend on shaders so `zig build` compiles everything.
+    exe.step.dependOn(&install_task.step);
+    exe.step.dependOn(&install_mesh.step);
+    exe.step.dependOn(&install_frag.step);
+}
+
+fn compileSlangShader(
+    b: *std.Build,
+    name: []const u8,
+    source: []const u8,
+    entry: []const u8,
+    stage: []const u8,
+) std.Build.LazyPath {
+    const cmd = b.addSystemCommand(&.{"slangc"});
+    cmd.addFileArg(b.path(source));
+    cmd.addArgs(&.{ "-entry", entry });
+    cmd.addArgs(&.{ "-stage", stage });
+    cmd.addArgs(&.{ "-target", "spirv" });
+    cmd.addArgs(&.{ "-profile", "spirv_1_6" });
+    cmd.addArgs(&.{ "-I", "shaders" });
+    cmd.addArgs(&.{"-O2"});
+    return cmd.addOutputFileArg(name);
 }
 
 fn buildFreetype(
