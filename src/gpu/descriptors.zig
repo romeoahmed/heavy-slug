@@ -65,7 +65,7 @@ pub const SlotAllocator = struct {
     /// Initialize with all slots free (indices 0..capacity-1 on the stack).
     pub fn init(allocator: std.mem.Allocator, capacity: u32) !SlotAllocator {
         const stack = try allocator.alloc(u32, capacity);
-        // Fill stack with indices 0..capacity-1 (index 0 at top for first alloc)
+        // Fill stack with indices 0..capacity-1 (index capacity-1 at top; allocated first)
         for (stack, 0..) |*slot, i| {
             slot.* = @intCast(i);
         }
