@@ -13,24 +13,26 @@ StructuredBuffer<GlyphCommand> commands;
 [[vk::push_constant]]
 PushConstants pc;
 
+// Workgroup size constant — must match [numthreads] attribute and glyphIndices array.
+static const uint kGroupSize = 32;
+
 // --- Payload to mesh shader ---
 
 struct TaskPayload
 {
-    uint glyphIndices[32];
+    uint glyphIndices[kGroupSize];
 };
 
 groupshared uint s_survivorCount;
 groupshared TaskPayload s_payload;
 
-// Frustum test: check if clip-space AABB is at least partially visible.
-// Takes the 4 transformed em-box corners in clip space.
-// For 2D text (z=0, w>0 for ortho proj), this simplifies to AABB-vs-NDC.
+// XY frustum test: check if a clip-space AABB is at least partially visible.
+// Assumes orthographic projection (w = 1 for all vertices).
+// Do not use with perspective projection (negative w possible behind near plane).
 bool isVisible(float4 c0, float4 c1, float4 c2, float4 c3)
 {
-    // For ortho projection (2D text), w is constant and positive.
-    // Compute screen-space AABB by dividing by w, then test against [-1,1].
-    // Simpler and more robust than clip-space AABB tests with varying w.
+    // Divide by w to get NDC. For ortho, w=1 so this is a no-op.
+    // Z clip not checked: all glyphs rendered at z=0 (near plane of ortho frustum).
     float2 ndc0 = c0.xy / c0.w;
     float2 ndc1 = c1.xy / c1.w;
     float2 ndc2 = c2.xy / c2.w;
@@ -47,14 +49,14 @@ bool isVisible(float4 c0, float4 c1, float4 c2, float4 c3)
 }
 
 [shader("amplification")]
-[numthreads(32, 1, 1)]
+[numthreads(kGroupSize, 1, 1)]
 void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
 {
     if (gtid == 0)
         s_survivorCount = 0;
     GroupMemoryBarrierWithGroupSync();
 
-    uint glyphIndex = gid * 32 + gtid;
+    uint glyphIndex = gid * kGroupSize + gtid;
     bool alive = false;
 
     if (glyphIndex < pc.glyph_count)

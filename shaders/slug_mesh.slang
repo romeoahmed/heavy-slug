@@ -67,7 +67,8 @@ void meshMain(
 
     // Dilate by half a pixel in em-space to avoid clipping edge fragments.
     // Compute approximate em-per-pixel from the projection + motor scale.
-    // Motor scale factor = s^2 + alpha^2 (always ~1 for normalized motors).
+    // Motor scale: s^2 + alpha^2 = 1 for normalized motors (rotation + translation only).
+    // Must be 1.0 — unnormalized (scaled) motors are not supported.
     float motorScale = cmd.motor.x * cmd.motor.x + cmd.motor.y * cmd.motor.y;
     float2 projScale = float2(abs(pc.proj[0][0]), abs(pc.proj[1][1]));
     float2 emPerPixel = 2.0 / (projScale * motorScale * pc.viewport_dim);
