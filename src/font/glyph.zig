@@ -34,6 +34,7 @@ pub const FontContext = struct {
         errdefer font.destroy();
 
         const gpu_draw = try hb.GpuDraw.create();
+        errdefer gpu_draw.destroy();
 
         return .{
             .ft_face = face,
@@ -53,6 +54,7 @@ pub const FontContext = struct {
     /// The returned EncodedGlyph owns the blob — caller must call .destroy().
     pub fn encodeGlyph(self: *FontContext, glyph_id: u32) !EncodedGlyph {
         self.gpu_draw.drawGlyph(self.hb_font, glyph_id);
+        errdefer self.gpu_draw.reset();
         const blob = try self.gpu_draw.encode();
         const extents = self.gpu_draw.getExtents();
         self.gpu_draw.reset();
