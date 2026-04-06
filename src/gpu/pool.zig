@@ -14,6 +14,7 @@ pub const PoolAllocator = struct {
     capacity: u32,
     alignment: u32,
     cursor: u32,
+    /// Reserved for free-list reuse (`free()`/`reset()`). Not populated by bump-only alloc.
     free_blocks: std.ArrayList(Allocation),
 
     pub fn init(allocator: std.mem.Allocator, capacity: u32, alignment: u32) PoolAllocator {
