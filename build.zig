@@ -64,6 +64,21 @@ pub fn build(b: *std.Build) void {
     const mesh_spv = compileSlangShader(b, "slug_mesh.spv", "shaders/slug_mesh.slang", "meshMain", "mesh");
     const frag_spv = compileSlangShader(b, "slug_fragment.spv", "shaders/slug_fragment.slang", "fragmentMain", "fragment");
 
+    // Embed SPIR-V binaries into a Zig module for @embedFile access.
+    const shader_wf = b.addWriteFiles();
+    _ = shader_wf.addCopyFile(task_spv, "slug_task.spv");
+    _ = shader_wf.addCopyFile(mesh_spv, "slug_mesh.spv");
+    _ = shader_wf.addCopyFile(frag_spv, "slug_fragment.spv");
+    const spv_zig = shader_wf.add("spv.zig",
+        \\pub const task = @embedFile("slug_task.spv");
+        \\pub const mesh = @embedFile("slug_mesh.spv");
+        \\pub const fragment = @embedFile("slug_fragment.spv");
+    );
+    const shader_spv = b.addModule("shader_spv", .{
+        .root_source_file = spv_zig,
+    });
+    mod.addImport("shader_spv", shader_spv);
+
     const install_task = b.addInstallFile(task_spv, "shaders/slug_task.spv");
     const install_mesh = b.addInstallFile(mesh_spv, "shaders/slug_mesh.spv");
     const install_frag = b.addInstallFile(frag_spv, "shaders/slug_fragment.spv");
