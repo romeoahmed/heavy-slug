@@ -78,6 +78,7 @@ pub const Pipeline = struct {
         // --- Dynamic rendering (no VkRenderPass) ---
         const rendering_info = vk.PipelineRenderingCreateInfo{
             .s_type = .pipeline_rendering_create_info,
+            .p_next = null,
             .view_mask = 0,
             .color_attachment_count = 1,
             .p_color_attachment_formats = @ptrCast(&color_format),
@@ -158,7 +159,7 @@ pub const Pipeline = struct {
             .s_type = .graphics_pipeline_create_info,
             .p_next = @ptrCast(&rendering_info),
             .flags = .{},
-            .stage_count = 3,
+            .stage_count = stages.len,
             .p_stages = &stages,
             .p_vertex_input_state = null, // mesh shader — no vertex input
             .p_input_assembly_state = null, // mesh shader — no input assembly
@@ -184,7 +185,6 @@ pub const Pipeline = struct {
             null,
             @ptrCast(&pipeline_handle),
         );
-        errdefer dispatch.destroyPipeline(device, pipeline_handle, null);
 
         return .{
             .device = device,

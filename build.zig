@@ -70,9 +70,9 @@ pub fn build(b: *std.Build) void {
     _ = shader_wf.addCopyFile(mesh_spv, "slug_mesh.spv");
     _ = shader_wf.addCopyFile(frag_spv, "slug_fragment.spv");
     const spv_zig = shader_wf.add("spv.zig",
-        \\pub const task = @embedFile("slug_task.spv");
-        \\pub const mesh = @embedFile("slug_mesh.spv");
-        \\pub const fragment = @embedFile("slug_fragment.spv");
+        \\pub const task: []align(4) const u8 = @alignCast(@embedFile("slug_task.spv"));
+        \\pub const mesh: []align(4) const u8 = @alignCast(@embedFile("slug_mesh.spv"));
+        \\pub const fragment: []align(4) const u8 = @alignCast(@embedFile("slug_fragment.spv"));
     );
     const shader_spv_mod = b.addModule("shader_spv", .{
         .root_source_file = spv_zig,
