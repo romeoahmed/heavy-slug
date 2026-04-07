@@ -10,6 +10,24 @@ const hb = @import("../font/hb.zig");
 const glyph_mod = @import("../font/glyph.zig");
 const pga = @import("../math/pga.zig");
 
+fn emBoxFromExtents(ext: hb.GlyphExtents) cache_mod.EmBox {
+    const x0: f32 = @floatFromInt(ext.x_bearing);
+    const y0: f32 = @floatFromInt(ext.y_bearing);
+    const x1 = x0 + @as(f32, @floatFromInt(ext.width));
+    const y1 = y0 + @as(f32, @floatFromInt(ext.height));
+    return .{
+        .x_min = @min(x0, x1),
+        .y_min = @min(y0, y1),
+        .x_max = @max(x0, x1),
+        .y_max = @max(y0, y1),
+    };
+}
+
+const CachedGlyph = struct {
+    slot: u32,
+    em_box: cache_mod.EmBox,
+};
+
 pub const Error = error{
     NoSuitableMemoryType,
     GlyphCapacityExceeded,
@@ -328,30 +346,20 @@ pub const TextRenderer = struct {
                 .glyph_id = info.codepoint,
             };
 
-            const slot = if (self.glyph_cache.lookup(cache_key)) |entry|
-                entry.slot
-            else
-                try self.ensureGlyphCached(font, cache_key);
-
-            // Encode glyph again to get em-box extents
-            // TODO: store extents in CacheEntry to avoid re-encode on cache hit
-            const encoded = font.entry.ctx.encodeGlyph(info.codepoint) catch
-                return Error.ShapingFailed;
-            defer encoded.destroy();
-
-            const ext = encoded.extents;
-            const x0: f32 = @floatFromInt(ext.x_bearing);
-            const y0: f32 = @floatFromInt(ext.y_bearing);
-            const x1 = x0 + @as(f32, @floatFromInt(ext.width));
-            const y1 = y0 + @as(f32, @floatFromInt(ext.height));
+            const slot: u32, const em_box: cache_mod.EmBox = if (self.glyph_cache.lookup(cache_key)) |entry|
+                .{ entry.slot, entry.em_box }
+            else blk: {
+                const cached = try self.ensureGlyphCached(font, cache_key);
+                break :blk .{ cached.slot, cached.em_box };
+            };
 
             commands[self.glyph_count] = .{
                 .motor = glyph_motor.m,
                 .color = color,
-                .em_x_min = @min(x0, x1),
-                .em_y_min = @min(y0, y1),
-                .em_x_max = @max(x0, x1),
-                .em_y_max = @max(y0, y1),
+                .em_x_min = em_box.x_min,
+                .em_y_min = em_box.y_min,
+                .em_x_max = em_box.x_max,
+                .em_y_max = em_box.y_max,
                 .descriptor_index = slot,
                 .flags = 0,
             };
@@ -364,16 +372,18 @@ pub const TextRenderer = struct {
     }
 
     /// Encode a glyph, upload to pool buffer, allocate descriptor slot,
-    /// and insert into the cold cache. Returns the descriptor slot index.
+    /// and insert into the cold cache. Returns the descriptor slot index and em-box.
     fn ensureGlyphCached(
         self: *TextRenderer,
         font: FontHandle,
         cache_key: cache_mod.CacheKey,
-    ) (Error || error{OutOfMemory})!u32 {
+    ) (Error || error{OutOfMemory})!CachedGlyph {
         // Encode glyph
         const encoded = font.entry.ctx.encodeGlyph(cache_key.glyph_id) catch
             return Error.ShapingFailed;
         defer encoded.destroy();
+
+        const em_box = emBoxFromExtents(encoded.extents);
 
         // Evict if cold cache is full
         if (self.glyph_cache.cold_count >= self.glyph_cache.cold_capacity) {
@@ -410,9 +420,9 @@ pub const TextRenderer = struct {
         );
 
         // Insert into cold cache (HashMap pre-allocated, should not alloc)
-        try self.glyph_cache.insertCold(cache_key, slot, pool_alloc);
+        try self.glyph_cache.insertCold(cache_key, slot, pool_alloc, em_box);
 
-        return slot;
+        return .{ .slot = slot, .em_box = em_box };
     }
 
     /// Record GPU commands into the caller's command buffer.
