@@ -16,19 +16,6 @@ pub const GlyphCommand = extern struct {
     _pad: [2]u32 = .{ 0, 0 }, // offset 56: align to 64 bytes
 };
 
-comptime {
-    std.debug.assert(@sizeOf(GlyphCommand) == 64);
-    std.debug.assert(@offsetOf(GlyphCommand, "motor") == 0);
-    std.debug.assert(@offsetOf(GlyphCommand, "color") == 16);
-    std.debug.assert(@offsetOf(GlyphCommand, "em_x_min") == 32);
-    std.debug.assert(@offsetOf(GlyphCommand, "em_y_min") == 36);
-    std.debug.assert(@offsetOf(GlyphCommand, "em_x_max") == 40);
-    std.debug.assert(@offsetOf(GlyphCommand, "em_y_max") == 44);
-    std.debug.assert(@offsetOf(GlyphCommand, "descriptor_index") == 48);
-    std.debug.assert(@offsetOf(GlyphCommand, "flags") == 52);
-    std.debug.assert(@offsetOf(GlyphCommand, "_pad") == 56);
-}
-
 test "GlyphCommand is 64 bytes with correct field offsets" {
     try std.testing.expectEqual(@as(usize, 64), @sizeOf(GlyphCommand));
     try std.testing.expectEqual(@as(usize, 48), @offsetOf(GlyphCommand, "descriptor_index"));
@@ -42,14 +29,6 @@ pub const PushConstants = extern struct {
     glyph_count: u32,       // offset 72: number of glyphs this frame
     _pad: u32 = 0,          // offset 76: align to 80 bytes
 };
-
-comptime {
-    std.debug.assert(@sizeOf(PushConstants) == 80);
-    std.debug.assert(@offsetOf(PushConstants, "proj") == 0);
-    std.debug.assert(@offsetOf(PushConstants, "viewport_dim") == 64);
-    std.debug.assert(@offsetOf(PushConstants, "glyph_count") == 72);
-    std.debug.assert(@offsetOf(PushConstants, "_pad") == 76);
-}
 
 test "PushConstants is 80 bytes with correct field offsets" {
     try std.testing.expectEqual(@as(usize, 80), @sizeOf(PushConstants));
