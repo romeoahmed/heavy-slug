@@ -238,6 +238,41 @@ pub const TextRenderer = struct {
         };
     }
 
+    /// Load a font from a file path at the given pixel size.
+    /// Returns a FontHandle used in drawText calls.
+    pub fn loadFont(self: *TextRenderer, path: [*:0]const u8, size_px: u32) !FontHandle {
+        const entry = try self.allocator.create(FontEntry);
+        errdefer self.allocator.destroy(entry);
+
+        entry.* = .{
+            .id = self.next_font_id,
+            .ctx = try glyph_mod.FontContext.init(self.ft_library, path, size_px),
+        };
+        errdefer entry.ctx.deinit();
+
+        try self.fonts.put(self.next_font_id, entry);
+        const id = self.next_font_id;
+        self.next_font_id += 1;
+
+        return .{ .id = id, .entry = entry };
+    }
+
+    /// Unload a font and evict all its cached glyphs.
+    pub fn unloadFont(self: *TextRenderer, handle: FontHandle) void {
+        // Evict all cache entries for this font
+        const evicted = self.glyph_cache.removeFont(self.allocator, handle.id) catch &.{};
+        for (evicted) |e| {
+            self.descriptor_table.freeSlot(e.slot);
+            self.pool_alloc.free(e.pool_alloc);
+        }
+        if (evicted.len > 0) self.allocator.free(evicted);
+
+        // Destroy font resources
+        handle.entry.ctx.deinit();
+        self.allocator.destroy(handle.entry);
+        _ = self.fonts.remove(handle.id);
+    }
+
     pub fn deinit(self: *TextRenderer) void {
         // Destroy fonts first (they hold FT/HB resources)
         var font_it = self.fonts.valueIterator();
