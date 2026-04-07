@@ -195,7 +195,7 @@ pub const TextRenderer = struct {
         try pool_alloc.free_blocks.ensureTotalCapacity(allocator, total_cache_capacity);
 
         // 5. Pool buffer (glyph blob storage, GPU reads as storage buffer)
-        var pool_buf = try createMappedBuffer(
+        const pool_buf = try createMappedBuffer(
             device, dispatch, options.pool_buffer_size,
             .{ .storage_buffer_bit = true }, memory_properties,
         );
@@ -204,7 +204,7 @@ pub const TextRenderer = struct {
         // 6. Command buffer (GlyphCommand[] per frame, GPU reads as storage buffer)
         const cmd_buf_size = @as(vk.DeviceSize, options.max_glyphs_per_frame) *
             @sizeOf(descriptors.GlyphCommand);
-        var cmd_buf = try createMappedBuffer(
+        const cmd_buf = try createMappedBuffer(
             device, dispatch, cmd_buf_size,
             .{ .storage_buffer_bit = true }, memory_properties,
         );
