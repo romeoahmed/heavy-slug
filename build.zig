@@ -74,10 +74,10 @@ pub fn build(b: *std.Build) void {
         \\pub const mesh = @embedFile("slug_mesh.spv");
         \\pub const fragment = @embedFile("slug_fragment.spv");
     );
-    const shader_spv = b.addModule("shader_spv", .{
+    const shader_spv_mod = b.addModule("shader_spv", .{
         .root_source_file = spv_zig,
     });
-    mod.addImport("shader_spv", shader_spv);
+    mod.addImport("shader_spv", shader_spv_mod);
 
     const install_task = b.addInstallFile(task_spv, "shaders/slug_task.spv");
     const install_mesh = b.addInstallFile(mesh_spv, "shaders/slug_mesh.spv");
@@ -86,10 +86,6 @@ pub fn build(b: *std.Build) void {
     shader_step.dependOn(&install_mesh.step);
     shader_step.dependOn(&install_frag.step);
 
-    // Make exe depend on shaders so `zig build` compiles everything.
-    exe.step.dependOn(&install_task.step);
-    exe.step.dependOn(&install_mesh.step);
-    exe.step.dependOn(&install_frag.step);
 }
 
 fn compileSlangShader(
