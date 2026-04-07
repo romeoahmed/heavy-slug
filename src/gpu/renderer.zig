@@ -405,6 +405,86 @@ pub const TextRenderer = struct {
         return slot;
     }
 
+    /// Record GPU commands into the caller's command buffer.
+    /// The command buffer must be in a recording state inside a dynamic
+    /// rendering pass. The caller is responsible for starting/ending the
+    /// render pass and submitting the command buffer.
+    ///
+    /// `proj`: column-major 4×4 projection matrix (e.g. orthographic).
+    /// `viewport`: viewport dimensions in pixels [width, height].
+    pub fn flush(
+        self: *TextRenderer,
+        cmd_buf: vk.CommandBuffer,
+        proj: [4][4]f32,
+        viewport: [2]f32,
+    ) void {
+        if (self.glyph_count == 0) return;
+
+        // Update command buffer descriptor (binding 1 → GlyphCommand[] range)
+        self.descriptor_table.updateCommandBuffer(
+            self.command_buffer.buffer,
+            0,
+            @as(vk.DeviceSize, self.glyph_count) * @sizeOf(descriptors.GlyphCommand),
+        );
+
+        // Set dynamic viewport state
+        const vk_viewport = vk.Viewport{
+            .x = 0,
+            .y = 0,
+            .width = viewport[0],
+            .height = viewport[1],
+            .min_depth = 0,
+            .max_depth = 1,
+        };
+        self.dispatch.cmdSetViewport(cmd_buf, 0, 1, @ptrCast(&vk_viewport));
+
+        const vk_scissor = vk.Rect2D{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = .{
+                .width = @intFromFloat(viewport[0]),
+                .height = @intFromFloat(viewport[1]),
+            },
+        };
+        self.dispatch.cmdSetScissor(cmd_buf, 0, 1, @ptrCast(&vk_scissor));
+
+        // Bind pipeline
+        self.dispatch.cmdBindPipeline(cmd_buf, .graphics, self.pip.pipeline);
+
+        // Bind descriptor set
+        self.dispatch.cmdBindDescriptorSets(
+            cmd_buf,
+            .graphics,
+            self.pip.pipeline_layout,
+            0,
+            1,
+            @ptrCast(&self.descriptor_table.set),
+            0,
+            null,
+        );
+
+        // Push constants
+        const push = descriptors.PushConstants{
+            .proj = proj,
+            .viewport_dim = viewport,
+            .glyph_count = self.glyph_count,
+        };
+        self.dispatch.cmdPushConstants(
+            cmd_buf,
+            self.pip.pipeline_layout,
+            .{ .task_shader_bit_ext = true, .mesh_shader_bit_ext = true, .fragment_bit = true },
+            0,
+            @sizeOf(descriptors.PushConstants),
+            @ptrCast(&push),
+        );
+
+        // Dispatch mesh shader workgroups (32 threads per workgroup in task shader)
+        const workgroup_count = (self.glyph_count + 31) / 32;
+        self.dispatch.cmdDrawMeshTasksEXT(cmd_buf, workgroup_count, 1, 1);
+
+        // Advance cache frame for LRU tracking and cold→hot promotion
+        self.glyph_cache.advanceFrame();
+    }
+
     pub fn deinit(self: *TextRenderer) void {
         // Destroy fonts first (they hold FT/HB resources)
         var font_it = self.fonts.valueIterator();
