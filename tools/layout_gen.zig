@@ -29,15 +29,16 @@ pub const StructLayout = struct {
 // Memory management
 // ---------------------------------------------------------------------------
 
+/// Free the name and fields owned by a single StructLayout, but not the struct itself.
+fn freeStructContents(allocator: std.mem.Allocator, s: *const StructLayout) void {
+    allocator.free(s.name);
+    for (s.fields) |f| allocator.free(f.name);
+    allocator.free(s.fields);
+}
+
 /// Free all memory owned by a []StructLayout returned from parseReflection.
 pub fn freeStructs(allocator: std.mem.Allocator, structs: []StructLayout) void {
-    for (structs) |*s| {
-        allocator.free(s.name);
-        for (s.fields) |f| {
-            allocator.free(f.name);
-        }
-        allocator.free(s.fields);
-    }
+    for (structs) |*s| freeStructContents(allocator, s);
     allocator.free(structs);
 }
 
@@ -151,11 +152,7 @@ pub fn parseReflection(allocator: std.mem.Allocator, json_bytes: []const u8) ![]
 
     var result: std.ArrayList(StructLayout) = .empty;
     errdefer {
-        for (result.items) |*s| {
-            allocator.free(s.name);
-            for (s.fields) |f| allocator.free(f.name);
-            allocator.free(s.fields);
-        }
+        for (result.items) |*s| freeStructContents(allocator, s);
         result.deinit(allocator);
     }
 
@@ -200,11 +197,7 @@ pub fn parseReflection(allocator: std.mem.Allocator, json_bytes: []const u8) ![]
             if (!std.mem.eql(u8, inner_kind, "struct")) continue;
 
             const s = try extractStruct(allocator, result_type_obj, null);
-            errdefer {
-                allocator.free(s.name);
-                for (s.fields) |f| allocator.free(f.name);
-                allocator.free(s.fields);
-            }
+            errdefer freeStructContents(allocator, &s);
             try result.append(allocator, s);
         } else if (std.mem.eql(u8, kind_str, "constantBuffer")) {
             // PushConstants from push constant buffer
@@ -242,11 +235,7 @@ pub fn parseReflection(allocator: std.mem.Allocator, json_bytes: []const u8) ![]
             };
 
             const s = try extractStruct(allocator, inner_type_obj, size_override);
-            errdefer {
-                allocator.free(s.name);
-                for (s.fields) |f| allocator.free(f.name);
-                allocator.free(s.fields);
-            }
+            errdefer freeStructContents(allocator, &s);
             try result.append(allocator, s);
         }
     }
@@ -491,7 +480,7 @@ test "emitZig produces GPU layout constants" {
         .{ .name = "glyph_count", .offset = 72, .size = 4 },
     };
     const structs = [_]StructLayout{
-        .{ .name = "GlyphCommand", .size = 64, .fields = &fields_gc },
+        .{ .name = "GlyphCommand", .size = 56, .fields = &fields_gc },
         .{ .name = "PushConstants", .size = 80, .fields = &fields_pc },
     };
 
@@ -505,7 +494,7 @@ test "emitZig produces GPU layout constants" {
     try std.testing.expect(std.mem.indexOf(u8, output, "AUTO-GENERATED") != null);
 
     // GlyphCommand constants
-    try std.testing.expect(std.mem.indexOf(u8, output, "GlyphCommand_size: u32 = 64") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "GlyphCommand_size: u32 = 56") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "GlyphCommand_motor_offset: u32 = 0") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "GlyphCommand_motor_size: u32 = 16") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "GlyphCommand_flags_offset: u32 = 52") != null);
