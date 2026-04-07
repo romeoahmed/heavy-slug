@@ -59,8 +59,7 @@ pub const VulkanContext = struct {
         get_device_proc_addr: vk.PfnGetDeviceProcAddr,
     ) VulkanContext {
         const dispatch = DeviceDispatch.load(device, get_device_proc_addr);
-        var mem_props: vk.PhysicalDeviceMemoryProperties = undefined;
-        instance_dispatch.getPhysicalDeviceMemoryProperties(physical_device, &mem_props);
+        const mem_props = instance_dispatch.getPhysicalDeviceMemoryProperties(physical_device);
         return .{
             .device = device,
             .dispatch = dispatch,
@@ -120,7 +119,7 @@ pub const FeatureError = error{
 /// Validate that the physical device supports all features required by heavy-slug.
 /// Call this before creating the VkDevice to get a clear error if requirements are not met.
 /// The caller is still responsible for enabling these features in VkDeviceCreateInfo.
-pub fn checkDeviceSupport_impl(
+fn checkDeviceSupport_impl(
     physical_device: vk.PhysicalDevice,
     instance_dispatch: InstanceDispatch,
 ) FeatureError!void {
@@ -183,7 +182,7 @@ test "InstanceDispatch type compiles" {
 }
 
 test "checkDeviceSupport function signature compiles" {
-    _ = @TypeOf(checkDeviceSupport_impl);
+    _ = @TypeOf(VulkanContext.checkDeviceSupport);
 }
 
 test "VulkanContext has expected fields" {
