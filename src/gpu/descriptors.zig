@@ -291,8 +291,29 @@ pub const DescriptorTable = struct {
         self.slots.free(slot);
     }
 
-    // TODO(Plan 9): add nullSlot(index: u32) void — writes a null descriptor to binding 0
-    // slot `index` on glyph cache eviction. Safe because binding 0 has PARTIALLY_BOUND.
+    /// Write a null descriptor to binding 0 at `index`, making the slot safe
+    /// to leave unbound. Call before freeSlot() on glyph cache eviction.
+    /// Requires nullDescriptor feature from VK_EXT_robustness2.
+    pub fn nullSlot(self: *DescriptorTable, index: u32) void {
+        std.debug.assert(index < self.slots.capacity);
+        const buf_info = vk.DescriptorBufferInfo{
+            .buffer = .null_handle,
+            .offset = 0,
+            .range = std.math.maxInt(vk.DeviceSize), // VK_WHOLE_SIZE
+        };
+        const write = vk.WriteDescriptorSet{
+            .s_type = .write_descriptor_set,
+            .dst_set = self.set,
+            .dst_binding = 0,
+            .dst_array_element = index,
+            .descriptor_count = 1,
+            .descriptor_type = .storage_buffer,
+            .p_buffer_info = @ptrCast(&buf_info),
+            .p_image_info = null,
+            .p_texel_buffer_view = null,
+        };
+        self.dispatch.updateDescriptorSets(self.device, 1, @ptrCast(&write), 0, null);
+    }
 };
 
 test "DescriptorTable type and field layout compiles" {
