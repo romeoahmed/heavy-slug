@@ -296,9 +296,9 @@ pub const TextRenderer = struct {
         const infos = self.shape_buffer.getGlyphInfos();
         const positions = self.shape_buffer.getGlyphPositions();
 
-        if (self.glyph_count + @as(u32, @intCast(infos.len)) > self.max_glyphs_per_frame) {
+        const new_count = std.math.add(u32, self.glyph_count, @as(u32, @intCast(infos.len))) catch
             return Error.GlyphCapacityExceeded;
-        }
+        if (new_count > self.max_glyphs_per_frame) return Error.GlyphCapacityExceeded;
 
         // Command buffer as a typed slice
         const commands: [*]descriptors.GlyphCommand = @ptrCast(@alignCast(self.command_buffer.mapped));
@@ -381,6 +381,7 @@ pub const TextRenderer = struct {
         // Allocate pool space
         const pool_alloc = self.pool_alloc.alloc(@intCast(encoded.data.len)) orelse
             return Error.PoolExhausted;
+        errdefer self.pool_alloc.free(pool_alloc);
 
         // Copy blob data to mapped pool buffer
         const dst = self.pool_buffer.mapped[pool_alloc.offset..][0..encoded.data.len];
