@@ -93,7 +93,7 @@ See `src/gpu/context.zig`.
 
 **HarfBuzz GPU draw cycle** — must follow exactly: `drawGlyph` → `encode` (→ `Blob`) → `getExtents` → `reset`. Always `reset` after encode, even on error (`errdefer`).
 
-**Glyph cache** — `GlyphCache` maps `(font_id, glyph_id)` → descriptor slot + pool allocation. Hot tier (ASCII + promoted): evicted only on font unload. Cold tier: LRU eviction. Promotion after `promote_frames` consecutive frames. `PoolAllocator` is a bump+freelist sub-allocator aligned to `minStorageBufferOffsetAlignment`.
+**Glyph cache** — `GlyphCache` maps `(font_id, glyph_id)` → descriptor slot + pool allocation. Hot tier (ASCII + promoted): evicted only on font unload. Cold tier: LRU eviction. Promotion after `promote_frames` consecutive frames. `PoolAllocator` is a bump+freelist sub-allocator aligned to `minStorageBufferOffsetAlignment`. On eviction, `DescriptorTable.nullSlot` writes a null descriptor before returning the slot — requires `nullDescriptor` from `VK_EXT_robustness2`.
 
 **Motor math** — `[4]f32` extern struct (GPU ABI). SIMD internally via `@Vector(4,f32)`. Mirrors `shaders/pga.slang` layout: `[s, e12, e01, e02]`.
 
