@@ -266,6 +266,7 @@ pub const TextRenderer = struct {
         // Evict all cache entries for this font
         const evicted = self.glyph_cache.removeFont(self.allocator, handle.id) catch &.{};
         for (evicted) |e| {
+            self.descriptor_table.nullSlot(e.slot);
             self.descriptor_table.freeSlot(e.slot);
             self.pool_alloc.free(e.pool_alloc);
         }
@@ -377,6 +378,7 @@ pub const TextRenderer = struct {
         // Evict if cold cache is full
         if (self.glyph_cache.cold_count >= self.glyph_cache.cold_capacity) {
             if (self.glyph_cache.evictLru()) |evicted| {
+                self.descriptor_table.nullSlot(evicted.slot);
                 self.descriptor_table.freeSlot(evicted.slot);
                 self.pool_alloc.free(evicted.pool_alloc);
             }
