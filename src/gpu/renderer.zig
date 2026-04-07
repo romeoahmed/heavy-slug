@@ -47,7 +47,7 @@ fn findMemoryType(
 ) ?u32 {
     const required_bits: u32 = @bitCast(required);
     for (0..properties.memory_type_count) |i| {
-        if (type_filter & (@as(u32, 1) << @intCast(i)) != 0) {
+        if (type_filter & (@as(u32, 1) << @as(u5, @intCast(i))) != 0) {
             const flags_bits: u32 = @bitCast(properties.memory_types[i].property_flags);
             if (flags_bits & required_bits == required_bits) {
                 return @intCast(i);
@@ -74,7 +74,6 @@ fn createMappedBuffer(
         .p_queue_family_indices = null,
     };
     const buffer = try dispatch.createBuffer(device, &buffer_ci, null);
-    errdefer dispatch.destroyBuffer(device, buffer, null);
 
     const mem_req = dispatch.getBufferMemoryRequirements(device, buffer);
 
@@ -82,15 +81,25 @@ fn createMappedBuffer(
         memory_properties,
         mem_req.memory_type_bits,
         .{ .host_visible_bit = true, .host_coherent_bit = true },
-    ) orelse return Error.NoSuitableMemoryType;
+    ) orelse {
+        dispatch.destroyBuffer(device, buffer, null);
+        return Error.NoSuitableMemoryType;
+    };
 
     const alloc_info = vk.MemoryAllocateInfo{
         .s_type = .memory_allocate_info,
         .allocation_size = mem_req.size,
         .memory_type_index = mem_type_index,
     };
-    const memory = try dispatch.allocateMemory(device, &alloc_info, null);
-    errdefer dispatch.freeMemory(device, memory, null);
+    const memory = try dispatch.allocateMemory(device, &alloc_info, null) catch |err| {
+        dispatch.destroyBuffer(device, buffer, null);
+        return err;
+    };
+    // Buffer and memory both exist; errdefer must destroy buffer before freeing memory.
+    errdefer {
+        dispatch.destroyBuffer(device, buffer, null);
+        dispatch.freeMemory(device, memory, null);
+    }
 
     try dispatch.bindBufferMemory(device, buffer, memory, 0);
 
@@ -99,7 +108,7 @@ fn createMappedBuffer(
     return .{
         .buffer = buffer,
         .memory = memory,
-        .mapped = @ptrCast(mapped_ptr),
+        .mapped = @ptrCast(mapped_ptr.?),
         .size = size,
     };
 }
