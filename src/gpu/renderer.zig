@@ -258,6 +258,16 @@ pub const TextRenderer = struct {
         };
     }
 
+    /// Initialize from a VulkanContext (convenience wrapper).
+    pub fn initFromContext(
+        ctx: gpu_context.VulkanContext,
+        color_format: vk.Format,
+        allocator: std.mem.Allocator,
+        options: InitOptions,
+    ) !TextRenderer {
+        return init(ctx.device, ctx.dispatch, color_format, ctx.memory_properties, allocator, options);
+    }
+
     /// Load a font from a file path at the given pixel size.
     /// Returns a FontHandle used in drawText calls.
     pub fn loadFont(self: *TextRenderer, path: [*:0]const u8, size_px: u32) !FontHandle {
@@ -586,4 +596,9 @@ test "TextRenderer type compiles with expected fields" {
     try std.testing.expect(@hasField(TextRenderer, "fonts"));
     try std.testing.expect(@hasField(TextRenderer, "glyph_count"));
     try std.testing.expect(@hasField(TextRenderer, "shape_buffer"));
+}
+
+test "TextRenderer.initFromContext compiles" {
+    // Type-check only — cannot call without a live Vulkan device
+    _ = @TypeOf(TextRenderer.initFromContext);
 }
