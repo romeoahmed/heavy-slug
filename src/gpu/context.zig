@@ -65,6 +65,36 @@ const HeavySlugDispatch = struct {
 /// all commands in HeavySlugDispatch. Load via DeviceDispatch.load(device, loader).
 pub const DeviceDispatch = vk.DeviceWrapperWithCustomDispatch(HeavySlugDispatch);
 
+pub const FeatureError = error{
+    MeshShaderNotSupported,
+    Robustness2NotSupported,
+};
+
+/// Validate that the physical device supports all features required by heavy-slug.
+/// Call this before creating the VkDevice to get a clear error if requirements are not met.
+/// The caller is still responsible for enabling these features in VkDeviceCreateInfo.
+pub fn checkDeviceSupport(
+    physical_device: vk.PhysicalDevice,
+    instance_dispatch: InstanceDispatch,
+) FeatureError!void {
+    var mesh_features = vk.PhysicalDeviceMeshShaderFeaturesEXT{};
+    var robustness_features = vk.PhysicalDeviceRobustness2FeaturesEXT{
+        .p_next = @ptrCast(&mesh_features),
+    };
+    var features2 = vk.PhysicalDeviceFeatures2{
+        .p_next = @ptrCast(&robustness_features),
+        .features = .{},
+    };
+    instance_dispatch.getPhysicalDeviceFeatures2(physical_device, &features2);
+
+    if (mesh_features.task_shader == .false or mesh_features.mesh_shader == .false) {
+        return FeatureError.MeshShaderNotSupported;
+    }
+    if (robustness_features.null_descriptor == .false) {
+        return FeatureError.Robustness2NotSupported;
+    }
+}
+
 test "vulkan types are available" {
     // Verify binding generation produced usable types
     _ = vk.PhysicalDevice;
@@ -103,4 +133,8 @@ test "InstanceDispatch type compiles" {
         std.debug.assert(@hasField(HeavySlugInstanceDispatch, "vkEnumerateDeviceExtensionProperties"));
         std.debug.assert(@hasField(HeavySlugInstanceDispatch, "vkGetPhysicalDeviceProperties2"));
     }
+}
+
+test "checkDeviceSupport function signature compiles" {
+    _ = @TypeOf(checkDeviceSupport);
 }
