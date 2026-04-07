@@ -52,10 +52,14 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    // Test step — library module + executable module in parallel
+    // Test step — library module + executable module + build tools in parallel
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = mod })).step);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = exe.root_module })).step);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tools/layout_gen.zig"),
+        .target = b.graph.host,
+    }) })).step);
 
     // Shader compilation: Slang → SPIR-V
     const shader_step = b.step("shaders", "Compile Slang shaders to SPIR-V");
