@@ -23,6 +23,53 @@ const HeavySlugInstanceDispatch = struct {
 
 pub const InstanceDispatch = vk.InstanceWrapperWithCustomDispatch(HeavySlugInstanceDispatch);
 
+/// Wraps a caller-provided Vulkan device with a loaded dispatch table
+/// and cached physical device properties.
+///
+/// Usage:
+/// 1. Call `VulkanContext.checkDeviceSupport(physical_device, instance_dispatch)` to validate
+/// 2. Create a VkDevice with all extensions in `VulkanContext.required_device_extensions`
+/// 3. Call `VulkanContext.init(physical_device, device, instance_dispatch, get_device_proc_addr)`
+/// 4. Use `TextRenderer.initFromContext(ctx, ...)` to create a renderer
+pub const VulkanContext = struct {
+    device: vk.Device,
+    dispatch: DeviceDispatch,
+    physical_device: vk.PhysicalDevice,
+    memory_properties: vk.PhysicalDeviceMemoryProperties,
+
+    /// Required device extensions. Enable all of these in VkDeviceCreateInfo.
+    pub const required_device_extensions = required_extensions;
+
+    /// Validate physical device support before creating the VkDevice.
+    /// See top-level checkDeviceSupport_impl for full documentation.
+    pub const checkDeviceSupport = checkDeviceSupport_impl;
+
+    /// Wrap a caller-provided device. Loads the device dispatch table and
+    /// queries physical device memory properties.
+    ///
+    /// - `physical_device`: the VkPhysicalDevice the device was created from.
+    /// - `device`: a VkDevice created with `required_device_extensions` enabled.
+    /// - `instance_dispatch`: an InstanceDispatch loaded for the parent VkInstance.
+    /// - `get_device_proc_addr`: obtained via `vkGetInstanceProcAddr(instance, "vkGetDeviceProcAddr")`
+    ///   or from your Vulkan loader. Used to load the device dispatch table.
+    pub fn init(
+        physical_device: vk.PhysicalDevice,
+        device: vk.Device,
+        instance_dispatch: InstanceDispatch,
+        get_device_proc_addr: vk.PfnGetDeviceProcAddr,
+    ) VulkanContext {
+        const dispatch = DeviceDispatch.load(device, get_device_proc_addr);
+        var mem_props: vk.PhysicalDeviceMemoryProperties = undefined;
+        instance_dispatch.getPhysicalDeviceMemoryProperties(physical_device, &mem_props);
+        return .{
+            .device = device,
+            .dispatch = dispatch,
+            .physical_device = physical_device,
+            .memory_properties = mem_props,
+        };
+    }
+};
+
 /// Filtered device dispatch struct — only the commands heavy-slug uses.
 /// vulkan-zig API: define a struct with the exact vkXxx fields you need,
 /// then pass its type to DeviceWrapperWithCustomDispatch() to get a
@@ -73,7 +120,7 @@ pub const FeatureError = error{
 /// Validate that the physical device supports all features required by heavy-slug.
 /// Call this before creating the VkDevice to get a clear error if requirements are not met.
 /// The caller is still responsible for enabling these features in VkDeviceCreateInfo.
-pub fn checkDeviceSupport(
+pub fn checkDeviceSupport_impl(
     physical_device: vk.PhysicalDevice,
     instance_dispatch: InstanceDispatch,
 ) FeatureError!void {
@@ -136,5 +183,26 @@ test "InstanceDispatch type compiles" {
 }
 
 test "checkDeviceSupport function signature compiles" {
-    _ = @TypeOf(checkDeviceSupport);
+    _ = @TypeOf(checkDeviceSupport_impl);
+}
+
+test "VulkanContext has expected fields" {
+    try std.testing.expect(@hasField(VulkanContext, "device"));
+    try std.testing.expect(@hasField(VulkanContext, "dispatch"));
+    try std.testing.expect(@hasField(VulkanContext, "physical_device"));
+    try std.testing.expect(@hasField(VulkanContext, "memory_properties"));
+}
+
+test "required_device_extensions includes mesh shader and robustness2" {
+    const exts = VulkanContext.required_device_extensions;
+    try std.testing.expect(exts.len >= 2);
+    var has_mesh = false;
+    var has_robustness = false;
+    for (exts) |ext| {
+        const slice = std.mem.span(ext);
+        if (std.mem.eql(u8, slice, "VK_EXT_mesh_shader")) has_mesh = true;
+        if (std.mem.eql(u8, slice, "VK_EXT_robustness2")) has_robustness = true;
+    }
+    try std.testing.expect(has_mesh);
+    try std.testing.expect(has_robustness);
 }
