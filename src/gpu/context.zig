@@ -2,6 +2,7 @@
 //! Full implementation in a later plan — this stub validates
 //! that vulkan-zig bindings are available and key types compile.
 
+const std = @import("std");
 const vk = @import("vulkan");
 
 /// Filtered device dispatch struct — only the commands heavy-slug uses.
@@ -37,6 +38,9 @@ const HeavySlugDispatch = struct {
     vkQueueSubmit2: ?vk.PfnQueueSubmit2 = null,
     vkDeviceWaitIdle: ?vk.PfnDeviceWaitIdle = null,
     vkGetDeviceProcAddr: ?vk.PfnGetDeviceProcAddr = null,
+    vkGetBufferMemoryRequirements: ?vk.PfnGetBufferMemoryRequirements = null,
+    vkCmdSetViewport: ?vk.PfnCmdSetViewport = null,
+    vkCmdSetScissor: ?vk.PfnCmdSetScissor = null,
 };
 
 /// Vulkan device dispatch wrapper — provides named helper methods for
@@ -63,4 +67,12 @@ test "DeviceDispatch type compiles" {
     _ = @hasField(HeavySlugDispatch, "vkDestroyDevice");
     _ = @hasField(HeavySlugDispatch, "vkCreateBuffer");
     _ = @hasField(HeavySlugDispatch, "vkCmdDrawMeshTasksEXT");
+}
+
+test "HeavySlugDispatch has buffer and viewport commands" {
+    comptime {
+        std.debug.assert(@hasField(HeavySlugDispatch, "vkGetBufferMemoryRequirements"));
+        std.debug.assert(@hasField(HeavySlugDispatch, "vkCmdSetViewport"));
+        std.debug.assert(@hasField(HeavySlugDispatch, "vkCmdSetScissor"));
+    }
 }

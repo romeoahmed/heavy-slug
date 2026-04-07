@@ -102,6 +102,12 @@ pub const Buffer = struct {
         if (len == 0) return &.{};
         return @as([*]const GlyphPosition, @ptrCast(ptr))[0..len];
     }
+
+    /// Reset buffer to initial state. Clears all content and properties.
+    /// Used to reuse a single buffer across multiple shaping calls.
+    pub fn reset(self: Buffer) void {
+        c.hb_buffer_reset(self.handle);
+    }
 };
 
 pub const Font = struct {
@@ -238,6 +244,15 @@ pub const GpuDraw = struct {
         c.hb_gpu_draw_reset(self.handle);
     }
 };
+
+test "Buffer.reset clears contents" {
+    const buf = try Buffer.create();
+    defer buf.destroy();
+    buf.addUtf8("hello");
+    try std.testing.expectEqual(@as(u32, 5), buf.getLength());
+    buf.reset();
+    try std.testing.expectEqual(@as(u32, 0), buf.getLength());
+}
 
 test "GpuDraw: encode glyph produces non-empty blob" {
     // Load font
