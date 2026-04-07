@@ -1,7 +1,7 @@
 const std = @import("std");
 const vk = @import("vulkan");
 const gpu_context = @import("context.zig");
-const desc = @import("descriptors.zig");
+const descriptors = @import("descriptors.zig");
 const spv = @import("shader_spv");
 
 pub const Pipeline = struct {
@@ -14,14 +14,11 @@ pub const Pipeline = struct {
 /// Create a VkShaderModule from embedded SPIR-V bytes.
 /// SPIR-V data must be a multiple of 4 bytes (u32-aligned words).
 fn createShaderModule(
-    device: vk.Device,
-    dispatch: gpu_context.DeviceDispatch,
-    bytecode: []const u8,
+    _: vk.Device,
+    _: gpu_context.DeviceDispatch,
+    _: []const u8,
 ) !vk.ShaderModule {
-    _ = device;
-    _ = dispatch;
-    _ = bytecode;
-    unreachable; // implemented in next task
+    @compileError("createShaderModule: implemented in next task");
 }
 
 test "Pipeline type compiles with expected fields" {
@@ -33,7 +30,7 @@ test "Pipeline type compiles with expected fields" {
 }
 
 test "push constant range matches PushConstants size" {
-    try std.testing.expectEqual(@as(usize, 80), @sizeOf(desc.PushConstants));
+    try std.testing.expectEqual(@as(usize, 80), @sizeOf(descriptors.PushConstants));
 }
 
 test "embedded SPIR-V data is non-empty" {
