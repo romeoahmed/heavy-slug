@@ -18,6 +18,7 @@ const HeavySlugInstanceDispatch = struct {
     vkGetPhysicalDeviceMemoryProperties: ?vk.PfnGetPhysicalDeviceMemoryProperties = null,
     vkGetPhysicalDeviceFeatures2: ?vk.PfnGetPhysicalDeviceFeatures2 = null,
     vkEnumerateDeviceExtensionProperties: ?vk.PfnEnumerateDeviceExtensionProperties = null,
+    vkGetPhysicalDeviceProperties2: ?vk.PfnGetPhysicalDeviceProperties2 = null,
 };
 
 pub const InstanceDispatch = vk.InstanceWrapperWithCustomDispatch(HeavySlugInstanceDispatch);
@@ -96,7 +97,10 @@ test "HeavySlugDispatch has buffer and viewport commands" {
 
 test "InstanceDispatch type compiles" {
     _ = InstanceDispatch;
-    _ = @hasField(HeavySlugInstanceDispatch, "vkGetPhysicalDeviceFeatures2");
-    _ = @hasField(HeavySlugInstanceDispatch, "vkGetPhysicalDeviceMemoryProperties");
-    _ = @hasField(HeavySlugInstanceDispatch, "vkEnumerateDeviceExtensionProperties");
+    comptime {
+        std.debug.assert(@hasField(HeavySlugInstanceDispatch, "vkGetPhysicalDeviceFeatures2"));
+        std.debug.assert(@hasField(HeavySlugInstanceDispatch, "vkGetPhysicalDeviceMemoryProperties"));
+        std.debug.assert(@hasField(HeavySlugInstanceDispatch, "vkEnumerateDeviceExtensionProperties"));
+        std.debug.assert(@hasField(HeavySlugInstanceDispatch, "vkGetPhysicalDeviceProperties2"));
+    }
 }
