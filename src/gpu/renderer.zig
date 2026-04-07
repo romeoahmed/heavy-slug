@@ -91,7 +91,7 @@ fn createMappedBuffer(
         .allocation_size = mem_req.size,
         .memory_type_index = mem_type_index,
     };
-    const memory = try dispatch.allocateMemory(device, &alloc_info, null) catch |err| {
+    const memory = dispatch.allocateMemory(device, &alloc_info, null) catch |err| {
         dispatch.destroyBuffer(device, buffer, null);
         return err;
     };
