@@ -237,6 +237,34 @@ pub const TextRenderer = struct {
             .allocator = allocator,
         };
     }
+
+    pub fn deinit(self: *TextRenderer) void {
+        // Destroy fonts first (they hold FT/HB resources)
+        var font_it = self.fonts.valueIterator();
+        while (font_it.next()) |entry_ptr| {
+            entry_ptr.*.ctx.deinit();
+            self.allocator.destroy(entry_ptr.*);
+        }
+        self.fonts.deinit();
+
+        // Destroy reusable shaping buffer
+        self.shape_buffer.destroy();
+
+        // Destroy FreeType library (after all faces are freed)
+        self.ft_library.deinit();
+
+        // Destroy Vulkan buffers (unmap + destroy buffer + free memory)
+        destroyMappedBuffer(self.command_buffer, self.device, self.dispatch);
+        destroyMappedBuffer(self.pool_buffer, self.device, self.dispatch);
+
+        // Destroy subsystems (reverse init order)
+        self.pool_alloc.deinit();
+        self.glyph_cache.deinit();
+        self.pip.deinit();
+        self.descriptor_table.deinit(self.allocator);
+
+        self.* = undefined;
+    }
 };
 
 test "InitOptions has correct defaults" {
