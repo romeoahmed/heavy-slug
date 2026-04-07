@@ -178,7 +178,7 @@ pub const GlyphCache = struct {
     /// returned slice with the same allocator.
     pub fn removeFont(self: *GlyphCache, allocator: std.mem.Allocator, font_id: u32) ![]EvictedEntry {
         // Collect keys to remove (can't remove during iteration)
-        var to_remove: std.ArrayList(CacheKey) = .empty;
+        var to_remove: std.ArrayListUnmanaged(CacheKey) = .empty;
         defer to_remove.deinit(allocator);
 
         var it = self.map.iterator();
@@ -192,6 +192,7 @@ pub const GlyphCache = struct {
 
         const evicted = try allocator.alloc(EvictedEntry, to_remove.items.len);
         for (to_remove.items, 0..) |key, i| {
+            // Safe: key was observed during iteration above and the map is not mutated between passes.
             const removed = self.map.fetchRemove(key).?;
             if (removed.value.tier == .hot) {
                 self.hot_count -= 1;
@@ -397,6 +398,11 @@ test "GlyphCache: removeFont evicts all entries for a font" {
     defer std.testing.allocator.free(evicted);
 
     try std.testing.expectEqual(@as(usize, 2), evicted.len);
+    // Verify the evicted entries contain the correct slots
+    const has_slot_0 = for (evicted) |e| { if (e.slot == 0) break true; } else false;
+    const has_slot_1 = for (evicted) |e| { if (e.slot == 1) break true; } else false;
+    try std.testing.expect(has_slot_0);
+    try std.testing.expect(has_slot_1);
     try std.testing.expectEqual(@as(u32, 1), gc.count()); // only font 2 remains
     try std.testing.expectEqual(@as(u32, 1), gc.hot_count); // font 2's hot entry
     try std.testing.expectEqual(@as(u32, 0), gc.cold_count); // font 1's cold entry removed
@@ -406,6 +412,16 @@ test "GlyphCache: removeFont evicts all entries for a font" {
     // Font 1 entries gone
     try std.testing.expect(gc.lookup(.{ .font_id = 1, .glyph_id = 65 }) == null);
     try std.testing.expect(gc.lookup(.{ .font_id = 1, .glyph_id = 66 }) == null);
+}
+
+test "GlyphCache: removeFont on unknown font_id returns empty slice" {
+    var gc = GlyphCache.init(std.testing.allocator, 4, 8, 3);
+    defer gc.deinit();
+
+    const evicted = try gc.removeFont(std.testing.allocator, 99);
+    defer std.testing.allocator.free(evicted);
+    try std.testing.expectEqual(@as(usize, 0), evicted.len);
+    try std.testing.expectEqual(@as(u32, 0), gc.count());
 }
 
 test "GlyphCache: duplicate lookup in same frame does not double-count" {
