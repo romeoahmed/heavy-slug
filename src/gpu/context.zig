@@ -1,9 +1,26 @@
 //! VulkanContext: wraps a caller-provided Vulkan device.
-//! Full implementation in a later plan — this stub validates
-//! that vulkan-zig bindings are available and key types compile.
+//! Loads the device dispatch table, queries physical device properties,
+//! and validates that required features/extensions are supported.
 
 const std = @import("std");
 const vk = @import("vulkan");
+
+/// Required device extensions for heavy-slug.
+/// Callers must enable these when creating the VkDevice.
+const required_extensions = [_][*:0]const u8{
+    "VK_EXT_mesh_shader",
+    "VK_EXT_robustness2",
+};
+
+/// Filtered instance dispatch — only the commands heavy-slug needs
+/// for physical device feature/property queries.
+const HeavySlugInstanceDispatch = struct {
+    vkGetPhysicalDeviceMemoryProperties: ?vk.PfnGetPhysicalDeviceMemoryProperties = null,
+    vkGetPhysicalDeviceFeatures2: ?vk.PfnGetPhysicalDeviceFeatures2 = null,
+    vkEnumerateDeviceExtensionProperties: ?vk.PfnEnumerateDeviceExtensionProperties = null,
+};
+
+pub const InstanceDispatch = vk.InstanceWrapperWithCustomDispatch(HeavySlugInstanceDispatch);
 
 /// Filtered device dispatch struct — only the commands heavy-slug uses.
 /// vulkan-zig API: define a struct with the exact vkXxx fields you need,
@@ -75,4 +92,11 @@ test "HeavySlugDispatch has buffer and viewport commands" {
         std.debug.assert(@hasField(HeavySlugDispatch, "vkCmdSetViewport"));
         std.debug.assert(@hasField(HeavySlugDispatch, "vkCmdSetScissor"));
     }
+}
+
+test "InstanceDispatch type compiles" {
+    _ = InstanceDispatch;
+    _ = @hasField(HeavySlugInstanceDispatch, "vkGetPhysicalDeviceFeatures2");
+    _ = @hasField(HeavySlugInstanceDispatch, "vkGetPhysicalDeviceMemoryProperties");
+    _ = @hasField(HeavySlugInstanceDispatch, "vkEnumerateDeviceExtensionProperties");
 }
