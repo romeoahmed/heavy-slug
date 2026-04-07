@@ -9,6 +9,7 @@ pub const gpu_context = @import("gpu/context.zig");
 pub const descriptors = @import("gpu/descriptors.zig");
 pub const pool = @import("gpu/pool.zig");
 pub const cache = @import("gpu/cache.zig");
+pub const pipeline = @import("gpu/pipeline.zig");
 
 test {
     _ = ft;
@@ -19,4 +20,5 @@ test {
     _ = descriptors;
     _ = pool;
     _ = cache;
+    _ = pipeline;
 }
