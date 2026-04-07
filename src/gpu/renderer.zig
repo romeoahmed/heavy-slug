@@ -346,21 +346,19 @@ pub const TextRenderer = struct {
                 .glyph_id = info.codepoint,
             };
 
-            const slot: u32, const em_box: cache_mod.EmBox = if (self.glyph_cache.lookup(cache_key)) |entry|
-                .{ entry.slot, entry.em_box }
-            else blk: {
-                const cached = try self.ensureGlyphCached(font, cache_key);
-                break :blk .{ cached.slot, cached.em_box };
-            };
+            const cached_glyph: CachedGlyph = if (self.glyph_cache.lookup(cache_key)) |entry|
+                .{ .slot = entry.slot, .em_box = entry.em_box }
+            else
+                try self.ensureGlyphCached(font, cache_key);
 
             commands[self.glyph_count] = .{
                 .motor = glyph_motor.m,
                 .color = color,
-                .em_x_min = em_box.x_min,
-                .em_y_min = em_box.y_min,
-                .em_x_max = em_box.x_max,
-                .em_y_max = em_box.y_max,
-                .descriptor_index = slot,
+                .em_x_min = cached_glyph.em_box.x_min,
+                .em_y_min = cached_glyph.em_box.y_min,
+                .em_x_max = cached_glyph.em_box.x_max,
+                .em_y_max = cached_glyph.em_box.y_max,
+                .descriptor_index = cached_glyph.slot,
                 .flags = 0,
             };
             self.glyph_count += 1;
