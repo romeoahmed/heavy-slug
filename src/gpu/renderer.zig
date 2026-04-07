@@ -273,6 +273,137 @@ pub const TextRenderer = struct {
         _ = self.fonts.remove(handle.id);
     }
 
+    /// Reset per-frame state. Call once at the start of each frame.
+    pub fn begin(self: *TextRenderer) void {
+        self.glyph_count = 0;
+    }
+
+    /// Shape text and append glyph commands for GPU rendering.
+    /// Call between begin() and flush(). Zero Zig allocations on cache hit.
+    pub fn drawText(
+        self: *TextRenderer,
+        font: FontHandle,
+        text: []const u8,
+        motor: pga.Motor,
+        color: [4]f32,
+    ) (Error || error{OutOfMemory})!void {
+        // Shape text using reusable buffer
+        self.shape_buffer.reset();
+        self.shape_buffer.addUtf8(text);
+        self.shape_buffer.guessSegmentProperties();
+        hb.shape(font.entry.ctx.hb_font, self.shape_buffer);
+
+        const infos = self.shape_buffer.getGlyphInfos();
+        const positions = self.shape_buffer.getGlyphPositions();
+
+        if (self.glyph_count + @as(u32, @intCast(infos.len)) > self.max_glyphs_per_frame) {
+            return Error.GlyphCapacityExceeded;
+        }
+
+        // Command buffer as a typed slice
+        const commands: [*]descriptors.GlyphCommand = @ptrCast(@alignCast(self.command_buffer.mapped));
+
+        var pen_x: f32 = 0;
+        var pen_y: f32 = 0;
+
+        for (infos, positions) |info, pos| {
+            // Per-glyph position (HarfBuzz 26.6 fixed-point → float)
+            const glyph_x = pen_x + @as(f32, @floatFromInt(pos.x_offset)) / 64.0;
+            const glyph_y = pen_y + @as(f32, @floatFromInt(pos.y_offset)) / 64.0;
+
+            // Compose caller's motor with per-glyph translation
+            const glyph_motor = pga.Motor.compose(
+                motor,
+                pga.Motor.fromTranslation(glyph_x, glyph_y),
+            );
+
+            // Cache lookup
+            const cache_key = cache_mod.CacheKey{
+                .font_id = font.id,
+                .glyph_id = info.codepoint,
+            };
+
+            const slot = if (self.glyph_cache.lookup(cache_key)) |entry|
+                entry.slot
+            else
+                try self.ensureGlyphCached(font, cache_key);
+
+            // Encode glyph again to get em-box extents
+            // TODO: store extents in CacheEntry to avoid re-encode on cache hit
+            const encoded = font.entry.ctx.encodeGlyph(info.codepoint) catch
+                return Error.ShapingFailed;
+            defer encoded.destroy();
+
+            const ext = encoded.extents;
+            const x0: f32 = @floatFromInt(ext.x_bearing);
+            const y0: f32 = @floatFromInt(ext.y_bearing);
+            const x1 = x0 + @as(f32, @floatFromInt(ext.width));
+            const y1 = y0 + @as(f32, @floatFromInt(ext.height));
+
+            commands[self.glyph_count] = .{
+                .motor = glyph_motor.m,
+                .color = color,
+                .em_x_min = @min(x0, x1),
+                .em_y_min = @min(y0, y1),
+                .em_x_max = @max(x0, x1),
+                .em_y_max = @max(y0, y1),
+                .descriptor_index = slot,
+                .flags = 0,
+            };
+            self.glyph_count += 1;
+
+            // Advance pen
+            pen_x += @as(f32, @floatFromInt(pos.x_advance)) / 64.0;
+            pen_y += @as(f32, @floatFromInt(pos.y_advance)) / 64.0;
+        }
+    }
+
+    /// Encode a glyph, upload to pool buffer, allocate descriptor slot,
+    /// and insert into the cold cache. Returns the descriptor slot index.
+    fn ensureGlyphCached(
+        self: *TextRenderer,
+        font: FontHandle,
+        cache_key: cache_mod.CacheKey,
+    ) (Error || error{OutOfMemory})!u32 {
+        // Encode glyph
+        const encoded = font.entry.ctx.encodeGlyph(cache_key.glyph_id) catch
+            return Error.ShapingFailed;
+        defer encoded.destroy();
+
+        // Evict if cold cache is full
+        if (self.glyph_cache.cold_count >= self.glyph_cache.cold_capacity) {
+            if (self.glyph_cache.evictLru()) |evicted| {
+                self.descriptor_table.freeSlot(evicted.slot);
+                self.pool_alloc.free(evicted.pool_alloc);
+            }
+        }
+
+        // Allocate pool space
+        const pool_alloc = self.pool_alloc.alloc(@intCast(encoded.data.len)) orelse
+            return Error.PoolExhausted;
+
+        // Copy blob data to mapped pool buffer
+        const dst = self.pool_buffer.mapped[pool_alloc.offset..][0..encoded.data.len];
+        @memcpy(dst, encoded.data);
+
+        // Allocate descriptor slot
+        const slot = self.descriptor_table.allocSlot() orelse
+            return Error.DescriptorSlotExhausted;
+
+        // Update descriptor to point at this glyph's blob in the pool buffer
+        self.descriptor_table.updateSlot(
+            slot,
+            self.pool_buffer.buffer,
+            @as(vk.DeviceSize, pool_alloc.offset),
+            @as(vk.DeviceSize, encoded.data.len),
+        );
+
+        // Insert into cold cache (HashMap pre-allocated, should not alloc)
+        try self.glyph_cache.insertCold(cache_key, slot, pool_alloc);
+
+        return slot;
+    }
+
     pub fn deinit(self: *TextRenderer) void {
         // Destroy fonts first (they hold FT/HB resources)
         var font_it = self.fonts.valueIterator();
