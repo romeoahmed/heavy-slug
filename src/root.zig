@@ -24,5 +24,5 @@ test {
     _ = cache;
     _ = pipeline;
     _ = renderer;
-    _ = @import("gpu/layout.zig");
+    _ = layout;
 }
