@@ -79,6 +79,13 @@ pub fn build(b: *std.Build) void {
     });
     mod.addImport("shader_spv", shader_spv_mod);
 
+    // Layout validation: slangc reflection → generated GPU layout constants
+    const reflection_json = generateReflectionJson(b);
+    const layout_zig = generateLayoutZig(b, reflection_json);
+    mod.addImport("gpu_layout", b.addModule("gpu_layout", .{
+        .root_source_file = layout_zig,
+    }));
+
     const install_task = b.addInstallFile(task_spv, "shaders/slug_task.spv");
     const install_mesh = b.addInstallFile(mesh_spv, "shaders/slug_mesh.spv");
     const install_frag = b.addInstallFile(frag_spv, "shaders/slug_fragment.spv");
@@ -106,6 +113,43 @@ fn compileSlangShader(
     cmd.addArgs(&.{"-O2"});
     cmd.addArg("-o");
     return cmd.addOutputFileArg(name);
+}
+
+fn generateReflectionJson(b: *std.Build) std.Build.LazyPath {
+    // Run slangc on slug_task.slang with -reflection-json flag
+    // slug_task.slang includes slug_common.slang which defines both
+    // GlyphCommand and PushConstants — one shader gives us both structs.
+    const cmd = b.addSystemCommand(&.{"slangc"});
+    cmd.addFileArg(b.path("shaders/slug_task.slang"));
+    cmd.addArgs(&.{ "-entry", "taskMain" });
+    cmd.addArgs(&.{ "-stage", "amplification" });
+    cmd.addArgs(&.{ "-target", "spirv" });
+    cmd.addArgs(&.{ "-profile", "spirv_1_6" });
+    cmd.addArgs(&.{"-matrix-layout-column-major"});
+    cmd.addArgs(&.{ "-I", "shaders" });
+    cmd.addArgs(&.{"-O2"});
+    // slangc requires a SPIR-V output file even when we only want reflection
+    cmd.addArg("-o");
+    _ = cmd.addOutputFileArg("reflection_task.spv");
+    // Reflection JSON output
+    cmd.addArg("-reflection-json");
+    return cmd.addOutputFileArg("reflection.json");
+}
+
+fn generateLayoutZig(
+    b: *std.Build,
+    reflection_json: std.Build.LazyPath,
+) std.Build.LazyPath {
+    const tool = b.addExecutable(.{
+        .name = "layout_gen",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/layout_gen.zig"),
+            .target = b.graph.host,
+        }),
+    });
+    const run = b.addRunArtifact(tool);
+    run.addFileArg(reflection_json);
+    return run.captureStdOut(.{});
 }
 
 fn buildFreetype(
