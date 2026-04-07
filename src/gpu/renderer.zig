@@ -119,6 +119,7 @@ fn destroyMappedBuffer(self: MappedBuffer, device: vk.Device, dispatch: gpu_cont
     dispatch.freeMemory(device, self.memory, null);
 }
 
+/// A handle to a loaded font. Invalidated by `unloadFont` — do not use after unloading.
 pub const FontHandle = struct {
     id: u32,
     entry: *FontEntry,
@@ -228,6 +229,7 @@ pub const TextRenderer = struct {
             .pool_buffer = pool_buf,
             .command_buffer = cmd_buf,
             .ft_library = ft_library,
+            // AutoHashMap.init does not allocate; no errdefer needed
             .fonts = std.AutoHashMap(u32, *FontEntry).init(allocator),
             .next_font_id = 0,
             .glyph_count = 0,
@@ -258,6 +260,8 @@ pub const TextRenderer = struct {
     }
 
     /// Unload a font and evict all its cached glyphs.
+    /// Caller must ensure the GPU has finished consuming any commands that
+    /// reference this font's glyphs before calling this function.
     pub fn unloadFont(self: *TextRenderer, handle: FontHandle) void {
         // Evict all cache entries for this font
         const evicted = self.glyph_cache.removeFont(self.allocator, handle.id) catch &.{};
