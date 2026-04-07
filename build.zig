@@ -149,7 +149,7 @@ fn generateLayoutZig(
     });
     const run = b.addRunArtifact(tool);
     run.addFileArg(reflection_json);
-    return run.captureStdOut(.{});
+    return run.captureStdOut(.{ .basename = "gpu_layout.zig" });
 }
 
 fn buildFreetype(
