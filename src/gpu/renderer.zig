@@ -396,6 +396,10 @@ pub const TextRenderer = struct {
         // Allocate descriptor slot
         const slot = self.descriptor_table.allocSlot() orelse
             return Error.DescriptorSlotExhausted;
+        errdefer {
+            self.descriptor_table.nullSlot(slot);
+            self.descriptor_table.freeSlot(slot);
+        }
 
         // Update descriptor to point at this glyph's blob in the pool buffer
         self.descriptor_table.updateSlot(
