@@ -31,8 +31,6 @@ pub const EvictedEntry = struct {
 ///   consecutive frames of use.
 ///
 /// This is a pure metadata tracker — it does not own Vulkan resources.
-///
-/// TODO(renderer): add `removeFont(font_id)` to evict all entries for a font on unload.
 pub const GlyphCache = struct {
     map: std.AutoHashMap(CacheKey, CacheEntry),
     hot_count: u32,
@@ -172,6 +170,41 @@ pub const GlyphCache = struct {
             .slot = removed.value.slot,
             .pool_alloc = removed.value.pool_alloc,
         };
+    }
+
+    /// Remove all cache entries for the given font_id.
+    /// Returns a caller-owned slice of evicted entries so the caller can
+    /// free descriptor slots and pool allocations. Caller must free the
+    /// returned slice with the same allocator.
+    pub fn removeFont(self: *GlyphCache, allocator: std.mem.Allocator, font_id: u32) ![]EvictedEntry {
+        // Collect keys to remove (can't remove during iteration)
+        var to_remove: std.ArrayList(CacheKey) = .empty;
+        defer to_remove.deinit(allocator);
+
+        var it = self.map.iterator();
+        while (it.next()) |entry| {
+            if (entry.key_ptr.font_id == font_id) {
+                try to_remove.append(allocator, entry.key_ptr.*);
+            }
+        }
+
+        if (to_remove.items.len == 0) return &.{};
+
+        const evicted = try allocator.alloc(EvictedEntry, to_remove.items.len);
+        for (to_remove.items, 0..) |key, i| {
+            const removed = self.map.fetchRemove(key).?;
+            if (removed.value.tier == .hot) {
+                self.hot_count -= 1;
+            } else {
+                self.cold_count -= 1;
+            }
+            evicted[i] = .{
+                .key = key,
+                .slot = removed.value.slot,
+                .pool_alloc = removed.value.pool_alloc,
+            };
+        }
+        return evicted;
     }
 };
 
@@ -347,6 +380,32 @@ test "GlyphCache: promotion skipped when hot tier full" {
     try std.testing.expectEqual(Tier.cold, entry.tier); // stays cold
     try std.testing.expectEqual(@as(u32, 1), cache.hot_count);
     try std.testing.expectEqual(@as(u32, 1), cache.cold_count);
+}
+
+test "GlyphCache: removeFont evicts all entries for a font" {
+    var gc = GlyphCache.init(std.testing.allocator, 4, 8, 3);
+    defer gc.deinit();
+
+    // Insert entries for two fonts
+    try gc.insertHot(.{ .font_id = 1, .glyph_id = 65 }, 0, .{ .offset = 0, .size = 64 });
+    try gc.insertCold(.{ .font_id = 1, .glyph_id = 66 }, 1, .{ .offset = 64, .size = 64 });
+    try gc.insertHot(.{ .font_id = 2, .glyph_id = 65 }, 2, .{ .offset = 128, .size = 64 });
+    try std.testing.expectEqual(@as(u32, 3), gc.count());
+
+    // Remove font 1
+    const evicted = try gc.removeFont(std.testing.allocator, 1);
+    defer std.testing.allocator.free(evicted);
+
+    try std.testing.expectEqual(@as(usize, 2), evicted.len);
+    try std.testing.expectEqual(@as(u32, 1), gc.count()); // only font 2 remains
+    try std.testing.expectEqual(@as(u32, 1), gc.hot_count); // font 2's hot entry
+    try std.testing.expectEqual(@as(u32, 0), gc.cold_count); // font 1's cold entry removed
+
+    // Font 2 entry still accessible
+    try std.testing.expect(gc.lookup(.{ .font_id = 2, .glyph_id = 65 }) != null);
+    // Font 1 entries gone
+    try std.testing.expect(gc.lookup(.{ .font_id = 1, .glyph_id = 65 }) == null);
+    try std.testing.expect(gc.lookup(.{ .font_id = 1, .glyph_id = 66 }) == null);
 }
 
 test "GlyphCache: duplicate lookup in same frame does not double-count" {
