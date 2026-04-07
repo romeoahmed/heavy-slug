@@ -2,6 +2,10 @@ const std = @import("std");
 const vk = @import("vulkan");
 const gpu_context = @import("context.zig");
 
+/// VK_WHOLE_SIZE: sentinel meaning "the rest of the buffer".
+/// Used in null descriptors (requires VK_EXT_robustness2 nullDescriptor).
+const whole_size: vk.DeviceSize = std.math.maxInt(vk.DeviceSize);
+
 /// Per-glyph draw command uploaded to GPU each frame (spec §10.1).
 /// 64 bytes, tightly packed for storage buffer access.
 pub const GlyphCommand = extern struct {
@@ -299,7 +303,7 @@ pub const DescriptorTable = struct {
         const buf_info = vk.DescriptorBufferInfo{
             .buffer = .null_handle,
             .offset = 0,
-            .range = std.math.maxInt(vk.DeviceSize), // VK_WHOLE_SIZE
+            .range = whole_size,
         };
         const write = vk.WriteDescriptorSet{
             .s_type = .write_descriptor_set,
