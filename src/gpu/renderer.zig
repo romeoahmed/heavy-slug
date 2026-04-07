@@ -129,6 +129,116 @@ const FontEntry = struct {
     ctx: glyph_mod.FontContext,
 };
 
+pub const TextRenderer = struct {
+    device: vk.Device,
+    dispatch: gpu_context.DeviceDispatch,
+
+    // Subsystems
+    descriptor_table: descriptors.DescriptorTable,
+    pip: pipeline_mod.Pipeline,
+    glyph_cache: cache_mod.GlyphCache,
+    pool_alloc: pool_mod.PoolAllocator,
+
+    // Vulkan buffers
+    pool_buffer: MappedBuffer,
+    command_buffer: MappedBuffer,
+
+    // Font management
+    ft_library: ft.Library,
+    fonts: std.AutoHashMap(u32, *FontEntry),
+    next_font_id: u32,
+
+    // Per-frame state
+    glyph_count: u32,
+    max_glyphs_per_frame: u32,
+
+    // Reusable HarfBuzz buffer (zero-alloc render loop)
+    shape_buffer: hb.Buffer,
+
+    // Stored for future buffer creation
+    memory_properties: vk.PhysicalDeviceMemoryProperties,
+    allocator: std.mem.Allocator,
+
+    pub fn init(
+        device: vk.Device,
+        dispatch: gpu_context.DeviceDispatch,
+        color_format: vk.Format,
+        memory_properties: vk.PhysicalDeviceMemoryProperties,
+        allocator: std.mem.Allocator,
+        options: InitOptions,
+    ) !TextRenderer {
+        // 1. Descriptor table
+        var desc_table = try descriptors.DescriptorTable.init(
+            device, dispatch, allocator, options.max_glyph_descriptors,
+        );
+        errdefer desc_table.deinit(allocator);
+
+        // 2. Pipeline
+        var pip = try pipeline_mod.Pipeline.init(
+            device, dispatch, desc_table.layout, color_format,
+        );
+        errdefer pip.deinit();
+
+        // 3. Glyph cache (pre-allocate HashMap to avoid render-loop allocations)
+        var glyph_cache = cache_mod.GlyphCache.init(
+            allocator, options.hot_slab_count, options.cold_lru_count, options.promote_frames,
+        );
+        errdefer glyph_cache.deinit();
+        const total_cache_capacity = options.hot_slab_count + options.cold_lru_count;
+        try glyph_cache.map.ensureTotalCapacity(total_cache_capacity);
+
+        // 4. Pool allocator (pre-allocate free list to avoid render-loop allocations)
+        var pool_alloc = pool_mod.PoolAllocator.init(
+            allocator, options.pool_buffer_size, options.min_storage_alignment,
+        );
+        errdefer pool_alloc.deinit();
+        try pool_alloc.free_blocks.ensureTotalCapacity(allocator, total_cache_capacity);
+
+        // 5. Pool buffer (glyph blob storage, GPU reads as storage buffer)
+        var pool_buf = try createMappedBuffer(
+            device, dispatch, options.pool_buffer_size,
+            .{ .storage_buffer_bit = true }, memory_properties,
+        );
+        errdefer destroyMappedBuffer(pool_buf, device, dispatch);
+
+        // 6. Command buffer (GlyphCommand[] per frame, GPU reads as storage buffer)
+        const cmd_buf_size = @as(vk.DeviceSize, options.max_glyphs_per_frame) *
+            @sizeOf(descriptors.GlyphCommand);
+        var cmd_buf = try createMappedBuffer(
+            device, dispatch, cmd_buf_size,
+            .{ .storage_buffer_bit = true }, memory_properties,
+        );
+        errdefer destroyMappedBuffer(cmd_buf, device, dispatch);
+
+        // 7. FreeType library
+        const ft_library = try ft.Library.init();
+        errdefer ft_library.deinit();
+
+        // 8. Reusable shaping buffer
+        const shape_buffer = try hb.Buffer.create();
+        errdefer shape_buffer.destroy();
+
+        return .{
+            .device = device,
+            .dispatch = dispatch,
+            .descriptor_table = desc_table,
+            .pip = pip,
+            .glyph_cache = glyph_cache,
+            .pool_alloc = pool_alloc,
+            .pool_buffer = pool_buf,
+            .command_buffer = cmd_buf,
+            .ft_library = ft_library,
+            .fonts = std.AutoHashMap(u32, *FontEntry).init(allocator),
+            .next_font_id = 0,
+            .glyph_count = 0,
+            .max_glyphs_per_frame = options.max_glyphs_per_frame,
+            .shape_buffer = shape_buffer,
+            .memory_properties = memory_properties,
+            .allocator = allocator,
+        };
+    }
+};
+
 test "InitOptions has correct defaults" {
     const opts = InitOptions{};
     try std.testing.expectEqual(@as(u32, 65_536), opts.max_glyph_descriptors);
@@ -167,4 +277,20 @@ test "findMemoryType selects correct memory type" {
     // Type filter excludes type 2 → null for host-visible + host-coherent
     const filtered = findMemoryType(props, 0b011, .{ .host_visible_bit = true, .host_coherent_bit = true });
     try std.testing.expectEqual(@as(?u32, null), filtered);
+}
+
+test "TextRenderer type compiles with expected fields" {
+    _ = TextRenderer;
+    try std.testing.expect(@hasField(TextRenderer, "device"));
+    try std.testing.expect(@hasField(TextRenderer, "dispatch"));
+    try std.testing.expect(@hasField(TextRenderer, "descriptor_table"));
+    try std.testing.expect(@hasField(TextRenderer, "pip"));
+    try std.testing.expect(@hasField(TextRenderer, "glyph_cache"));
+    try std.testing.expect(@hasField(TextRenderer, "pool_alloc"));
+    try std.testing.expect(@hasField(TextRenderer, "pool_buffer"));
+    try std.testing.expect(@hasField(TextRenderer, "command_buffer"));
+    try std.testing.expect(@hasField(TextRenderer, "ft_library"));
+    try std.testing.expect(@hasField(TextRenderer, "fonts"));
+    try std.testing.expect(@hasField(TextRenderer, "glyph_count"));
+    try std.testing.expect(@hasField(TextRenderer, "shape_buffer"));
 }
