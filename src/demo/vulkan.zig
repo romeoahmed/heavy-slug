@@ -36,6 +36,7 @@ const DemoInstanceDispatch = vk.InstanceWrapperWithCustomDispatch(DemoInstanceTa
 
 /// Device-level functions for the demo (swapchain, command buffers, sync, rendering).
 const DemoDeviceTable = struct {
+    vkDestroyDevice: ?vk.PfnDestroyDevice = null,
     vkDeviceWaitIdle: ?vk.PfnDeviceWaitIdle = null,
     // Swapchain
     vkCreateSwapchainKHR: ?vk.PfnCreateSwapchainKHR = null,
@@ -307,6 +308,8 @@ pub const GraphicsContext = struct {
         }
         if (self.command_pool != .null_handle)
             self.demo_ddisp.destroyCommandPool(self.device, self.command_pool, null);
+
+        self.demo_ddisp.destroyDevice(self.device, null);
 
         self.demo_idisp.destroySurfaceKHR(self.instance, self.surface, null);
         self.demo_idisp.destroyInstance(self.instance, null);
