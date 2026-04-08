@@ -172,7 +172,7 @@ pub const GraphicsContext = struct {
             };
         }
 
-        // Feature chain: robustness2 → mesh shader → Vulkan 1.3 → Vulkan 1.2 → features2
+        // Feature chain (pNext traversal order): features2 → vk12 → vk13 → mesh_shader → robustness2
         // Bool32 enum fields use .true/.false (not vk.TRUE/vk.FALSE)
         var robustness2 = vk.PhysicalDeviceRobustness2FeaturesEXT{
             .null_descriptor = .true,
@@ -269,6 +269,7 @@ pub const GraphicsContext = struct {
         };
 
         // 8. Create sync + command objects
+        errdefer ctx.deinit();
         try ctx.createSyncObjects();
 
         return ctx;
