@@ -305,7 +305,8 @@ pub const GraphicsContext = struct {
 
     pub fn createSwapchain(self: *GraphicsContext, window: glfw.Window) !void {
         const caps = try self.demo_idisp.getPhysicalDeviceSurfaceCapabilitiesKHR(
-            self.physical_device, self.surface,
+            self.physical_device,
+            self.surface,
         );
 
         const fb_size = glfw.getFramebufferSize(window);
@@ -400,12 +401,15 @@ pub const GraphicsContext = struct {
 
         const fi = self.frame_index;
 
-        _ = try self.demo_ddisp.waitForFences(self.device, self.in_flight_fences[fi..fi+1], .true, std.math.maxInt(u64));
+        _ = try self.demo_ddisp.waitForFences(self.device, self.in_flight_fences[fi .. fi + 1], .true, std.math.maxInt(u64));
 
         var image_index: u32 = undefined;
         const acquire_result = self.demo_ddisp.acquireNextImageKHR(
-            self.device, self.swapchain, std.math.maxInt(u64),
-            self.image_available[fi], .null_handle,
+            self.device,
+            self.swapchain,
+            std.math.maxInt(u64),
+            self.image_available[fi],
+            .null_handle,
         ) catch |err| switch (err) {
             error.OutOfDateKHR => return null,
             else => return err,
@@ -413,7 +417,7 @@ pub const GraphicsContext = struct {
         if (acquire_result.result == .suboptimal_khr) return null;
         image_index = acquire_result.image_index;
 
-        try self.demo_ddisp.resetFences(self.device, self.in_flight_fences[fi..fi+1]);
+        try self.demo_ddisp.resetFences(self.device, self.in_flight_fences[fi .. fi + 1]);
 
         const cmd = self.command_buffers[fi];
         try self.demo_ddisp.resetCommandBuffer(cmd, .{});
@@ -422,7 +426,7 @@ pub const GraphicsContext = struct {
         });
 
         // Transition image: undefined → color attachment
-        self.transitionImage(cmd, self.swapchain_images[image_index], .@"undefined", .color_attachment_optimal);
+        self.transitionImage(cmd, self.swapchain_images[image_index], .undefined, .color_attachment_optimal);
 
         // Begin dynamic rendering
         const clear_value = vk.ClearValue{ .color = .{ .float_32 = .{ 0.12, 0.12, 0.15, 1.0 } } };
@@ -430,7 +434,7 @@ pub const GraphicsContext = struct {
             .image_view = self.swapchain_views[image_index],
             .image_layout = .color_attachment_optimal,
             .resolve_mode = .{},
-            .resolve_image_layout = .@"undefined",
+            .resolve_image_layout = .undefined,
             .load_op = .clear,
             .store_op = .store,
             .clear_value = clear_value,

@@ -82,8 +82,8 @@ pub const Pipeline = struct {
             .view_mask = 0,
             .color_attachment_count = 1,
             .p_color_attachment_formats = @ptrCast(&color_format),
-            .depth_attachment_format = .@"undefined",
-            .stencil_attachment_format = .@"undefined",
+            .depth_attachment_format = .undefined,
+            .stencil_attachment_format = .undefined,
         };
 
         // --- Viewport (dynamic state) ---

@@ -128,7 +128,9 @@ fn checkDeviceSupport_impl(
 ) (FeatureError || error{OutOfMemory})!void {
     // --- Extension validation ---
     const available = instance_dispatch.enumerateDeviceExtensionPropertiesAlloc(
-        physical_device, null, allocator,
+        physical_device,
+        null,
+        allocator,
     ) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return FeatureError.ExtensionNotSupported,

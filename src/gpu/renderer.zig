@@ -188,19 +188,28 @@ pub const TextRenderer = struct {
     ) !TextRenderer {
         // 1. Descriptor table
         var desc_table = try descriptors.DescriptorTable.init(
-            device, dispatch, allocator, options.max_glyph_descriptors,
+            device,
+            dispatch,
+            allocator,
+            options.max_glyph_descriptors,
         );
         errdefer desc_table.deinit(allocator);
 
         // 2. Pipeline
         var pip = try pipeline_mod.Pipeline.init(
-            device, dispatch, desc_table.layout, color_format,
+            device,
+            dispatch,
+            desc_table.layout,
+            color_format,
         );
         errdefer pip.deinit();
 
         // 3. Glyph cache (pre-allocate HashMap to avoid render-loop allocations)
         var glyph_cache = cache_mod.GlyphCache.init(
-            allocator, options.hot_slab_count, options.cold_lru_count, options.promote_frames,
+            allocator,
+            options.hot_slab_count,
+            options.cold_lru_count,
+            options.promote_frames,
         );
         errdefer glyph_cache.deinit();
         const total_cache_capacity = options.hot_slab_count + options.cold_lru_count;
@@ -208,15 +217,20 @@ pub const TextRenderer = struct {
 
         // 4. Pool allocator (pre-allocate free list to avoid render-loop allocations)
         var pool_alloc = pool_mod.PoolAllocator.init(
-            allocator, options.pool_buffer_size, options.min_storage_alignment,
+            allocator,
+            options.pool_buffer_size,
+            options.min_storage_alignment,
         );
         errdefer pool_alloc.deinit();
         try pool_alloc.free_blocks.ensureTotalCapacity(allocator, total_cache_capacity);
 
         // 5. Pool buffer (glyph blob storage, GPU reads as storage buffer)
         const pool_buf = try createMappedBuffer(
-            device, dispatch, options.pool_buffer_size,
-            .{ .storage_buffer_bit = true }, memory_properties,
+            device,
+            dispatch,
+            options.pool_buffer_size,
+            .{ .storage_buffer_bit = true },
+            memory_properties,
         );
         errdefer destroyMappedBuffer(pool_buf, device, dispatch);
 
@@ -224,8 +238,11 @@ pub const TextRenderer = struct {
         const cmd_buf_size = @as(vk.DeviceSize, options.max_glyphs_per_frame) *
             @sizeOf(descriptors.GlyphCommand);
         const cmd_buf = try createMappedBuffer(
-            device, dispatch, cmd_buf_size,
-            .{ .storage_buffer_bit = true }, memory_properties,
+            device,
+            dispatch,
+            cmd_buf_size,
+            .{ .storage_buffer_bit = true },
+            memory_properties,
         );
         errdefer destroyMappedBuffer(cmd_buf, device, dispatch);
 

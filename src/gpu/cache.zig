@@ -422,8 +422,12 @@ test "GlyphCache: removeFont evicts all entries for a font" {
 
     try std.testing.expectEqual(@as(usize, 2), evicted.len);
     // Verify the evicted entries contain the correct slots
-    const has_slot_0 = for (evicted) |e| { if (e.slot == 0) break true; } else false;
-    const has_slot_1 = for (evicted) |e| { if (e.slot == 1) break true; } else false;
+    const has_slot_0 = for (evicted) |e| {
+        if (e.slot == 0) break true;
+    } else false;
+    const has_slot_1 = for (evicted) |e| {
+        if (e.slot == 1) break true;
+    } else false;
     try std.testing.expect(has_slot_0);
     try std.testing.expect(has_slot_1);
     try std.testing.expectEqual(@as(u32, 1), gc.count()); // only font 2 remains

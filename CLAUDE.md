@@ -50,6 +50,13 @@ tools/
   layout_gen.zig      — build tool: slangc reflection JSON → GPU layout constants
 ```
 
+**Demo executable** — `src/main.zig` + `src/demo/`:
+- `src/demo/glfw.zig` — GLFW 3.4 wrapper with manual Vulkan externs (avoids vulkan.h conflicts)
+- `src/demo/vulkan.zig` — Demo Vulkan bootstrap: instance, device, swapchain, double-buffered frame sync
+- `src/main.zig` — Interactive showcase: multiple fonts, PGA Motor animations, FPS counter
+
+Run: `zig build run` (requires GPU with `VK_EXT_mesh_shader` support). ESC to exit.
+
 `[Plan N]` = not yet implemented.
 
 ## Dependencies
