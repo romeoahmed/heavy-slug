@@ -38,9 +38,8 @@ pub fn main() !void {
     var last_time = glfw.getTime();
     var frame_count: u32 = 0;
     var fps_timer: f64 = 0;
-    var fps_text: [32]u8 = undefined;
-    var fps_len: usize = 3;
-    @memcpy(fps_text[0..3], "FPS");
+    var fps_buf: [32]u8 = undefined;
+    var fps_len: usize = 0;
 
     while (!glfw.shouldClose(window)) {
         glfw.pollEvents();
@@ -53,11 +52,11 @@ pub fn main() !void {
         frame_count += 1;
         fps_timer += dt;
         if (fps_timer >= 1.0) {
-            if (std.fmt.bufPrint(&fps_text, "{d:.0} FPS", .{@as(f64, @floatFromInt(frame_count)) / fps_timer})) |s| {
+            const fps = @as(f64, @floatFromInt(frame_count)) / fps_timer;
+            if (std.fmt.bufPrint(&fps_buf, "{d:.0} FPS", .{fps})) |s| {
                 fps_len = s.len;
             } else |_| {
-                fps_len = 5;
-                @memcpy(fps_text[0..5], "? FPS");
+                fps_len = 0;
             }
             frame_count = 0;
             fps_timer = 0;
@@ -76,35 +75,37 @@ pub fn main() !void {
 
         text_renderer.begin();
 
-        // === Static header ===
-        try text_renderer.drawText(font_large, "heavy-slug", pga.Motor.fromTranslation(w * 0.5 - 140, h - 60), .{ 1.0, 1.0, 1.0, 1.0 });
-        try text_renderer.drawText(font_medium, "GPU Text Rendering", pga.Motor.fromTranslation(w * 0.5 - 160, h - 110), .{ 0.6, 0.7, 0.9, 1.0 });
+        // --- Title block (top) ---
+        try text_renderer.drawText(font_large, "heavy-slug", pga.Motor.fromTranslation(40, h - 50), .{ 1.0, 1.0, 1.0, 1.0 });
+        try text_renderer.drawText(font_small, "GPU text rendering via Vulkan mesh shaders", pga.Motor.fromTranslation(40, h - 90), .{ 0.6, 0.7, 0.9, 1.0 });
 
-        // === Animated rotating text ===
+        // --- Feature list (left column, static) ---
+        try text_renderer.drawText(font_small, "Slug algorithm: exact quadratic Bezier coverage", pga.Motor.fromTranslation(40, h - 160), .{ 0.8, 0.8, 0.8, 1.0 });
+        try text_renderer.drawText(font_small, "HarfBuzz shaping + FreeType outlines", pga.Motor.fromTranslation(40, h - 190), .{ 0.8, 0.8, 0.8, 1.0 });
+        try text_renderer.drawText(font_small, "Zero-alloc render loop", pga.Motor.fromTranslation(40, h - 220), .{ 0.8, 0.8, 0.8, 1.0 });
+
+        // --- Animated section (center, below features) ---
+        // Color cycling label
+        const r = 0.5 + 0.5 * @sin(t);
+        const g = 0.5 + 0.5 * @sin(t + 2.094);
+        const b = 0.5 + 0.5 * @sin(t + 4.189);
+        try text_renderer.drawText(font_medium, "Color cycling", pga.Motor.fromTranslation(40, h - 300), .{ r, g, b, 1.0 });
+
+        // Bouncing text
+        const bounce_y = h - 370 + 20.0 * @abs(@sin(t * 2.0));
+        try text_renderer.drawText(font_medium, "Bounce!", pga.Motor.fromTranslation(40, bounce_y), .{ 1.0, 0.4, 0.5, 1.0 });
+
+        // Rotating text (right side, well separated)
         const rot_motor = pga.Motor.compose(
-            pga.Motor.fromTranslation(w * 0.5, h * 0.45),
+            pga.Motor.fromTranslation(w * 0.7, h * 0.4),
             pga.Motor.fromRotation(t * 0.5),
         );
         try text_renderer.drawText(font_medium, "Spinning!", rot_motor, .{ 1.0, 0.8, 0.2, 1.0 });
 
-        // === Orbiting text ===
-        const orbit_r: f32 = 120;
-        const orbit_x = w * 0.5 + orbit_r * @cos(t * 1.2);
-        const orbit_y = h * 0.35 + orbit_r * @sin(t * 1.2);
-        try text_renderer.drawText(font_small, "orbiting", pga.Motor.fromTranslation(orbit_x, orbit_y), .{ 0.4, 1.0, 0.6, 1.0 });
-
-        // === Bouncing text ===
-        const bounce_y = h * 0.2 + 30.0 * @abs(@sin(t * 3.0));
-        try text_renderer.drawText(font_medium, "Bounce!", pga.Motor.fromTranslation(60, bounce_y), .{ 1.0, 0.4, 0.5, 1.0 });
-
-        // === Color cycling text ===
-        const r = 0.5 + 0.5 * @sin(t);
-        const g = 0.5 + 0.5 * @sin(t + 2.094);
-        const b = 0.5 + 0.5 * @sin(t + 4.189);
-        try text_renderer.drawText(font_small, "Slug algorithm: exact quadratic Bezier coverage", pga.Motor.fromTranslation(40, 80), .{ r, g, b, 1.0 });
-
-        // === FPS counter (top-right area) ===
-        try text_renderer.drawText(font_small, fps_text[0..fps_len], pga.Motor.fromTranslation(w - 100, h - 30), .{ 0.5, 1.0, 0.5, 1.0 });
+        // --- FPS counter (top-right) ---
+        if (fps_len > 0) {
+            try text_renderer.drawText(font_medium, fps_buf[0..fps_len], pga.Motor.fromTranslation(w - 160, h - 50), .{ 0.3, 1.0, 0.3, 1.0 });
+        }
 
         text_renderer.flush(frame.cmd, proj, viewport);
         try gctx.endFrame(frame);
