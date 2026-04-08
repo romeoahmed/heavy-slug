@@ -104,6 +104,7 @@ pub const GraphicsContext = struct {
     render_finished: [FRAMES_IN_FLIGHT]vk.Semaphore = .{.null_handle} ** FRAMES_IN_FLIGHT,
     in_flight_fences: [FRAMES_IN_FLIGHT]vk.Fence = .{.null_handle} ** FRAMES_IN_FLIGHT,
     frame_index: u32 = 0,
+    clear_color: [4]f32 = .{ 1.0, 1.0, 1.0, 1.0 },
 
     allocator: std.mem.Allocator,
 
@@ -429,7 +430,7 @@ pub const GraphicsContext = struct {
         self.transitionImage(cmd, self.swapchain_images[image_index], .undefined, .color_attachment_optimal);
 
         // Begin dynamic rendering
-        const clear_value = vk.ClearValue{ .color = .{ .float_32 = .{ 0.12, 0.12, 0.15, 1.0 } } };
+        const clear_value = vk.ClearValue{ .color = .{ .float_32 = self.clear_color } };
         const color_attachment = vk.RenderingAttachmentInfo{
             .image_view = self.swapchain_views[image_index],
             .image_layout = .color_attachment_optimal,
