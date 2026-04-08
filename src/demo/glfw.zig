@@ -11,7 +11,7 @@ const c = @cImport({
 
 // --- Manual Vulkan externs (avoids vulkan.h type conflicts) ---
 
-extern fn glfwGetInstanceProcAddress(instance: vk.Instance, procname: [*:0]const u8) ?vk.PfnVoidFunction;
+extern fn glfwGetInstanceProcAddress(instance: vk.Instance, procname: [*:0]const u8) vk.PfnVoidFunction;
 extern fn glfwCreateWindowSurface(instance: vk.Instance, window: *c.GLFWwindow, allocator: ?*const anyopaque, surface: *vk.SurfaceKHR) vk.Result;
 
 // --- Public API ---
@@ -74,7 +74,7 @@ pub fn getRequiredInstanceExtensions() []const [*:0]const u8 {
 }
 
 /// Loader function compatible with vulkan-zig's dispatch .load() methods.
-pub fn getInstanceProcAddress(instance: vk.Instance, name: [*:0]const u8) ?vk.PfnVoidFunction {
+pub fn getInstanceProcAddress(instance: vk.Instance, name: [*:0]const u8) vk.PfnVoidFunction {
     return glfwGetInstanceProcAddress(instance, name);
 }
 
