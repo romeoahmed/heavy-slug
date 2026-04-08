@@ -95,3 +95,41 @@ pub fn getKey(window: Window, key: c_int) bool {
 
 pub const KEY_ESCAPE = c.GLFW_KEY_ESCAPE;
 pub const KEY_SPACE = c.GLFW_KEY_SPACE;
+pub const KEY_EQUAL = c.GLFW_KEY_EQUAL;
+pub const KEY_MINUS = c.GLFW_KEY_MINUS;
+pub const KEY_B = c.GLFW_KEY_B;
+pub const KEY_R = c.GLFW_KEY_R;
+pub const KEY_UP = c.GLFW_KEY_UP;
+pub const KEY_DOWN = c.GLFW_KEY_DOWN;
+pub const KEY_LEFT = c.GLFW_KEY_LEFT;
+pub const KEY_RIGHT = c.GLFW_KEY_RIGHT;
+
+pub const MOUSE_BUTTON_LEFT = c.GLFW_MOUSE_BUTTON_LEFT;
+
+pub fn getMouseButton(window: Window, button: c_int) bool {
+    return c.glfwGetMouseButton(window, button) == c.GLFW_PRESS;
+}
+
+pub fn getCursorPos(window: Window) [2]f64 {
+    var x: f64 = 0;
+    var y: f64 = 0;
+    c.glfwGetCursorPos(window, &x, &y);
+    return .{ x, y };
+}
+
+var scroll_y_accum: f64 = 0;
+
+fn scrollCallback(_: ?*c.GLFWwindow, _: f64, y_offset: f64) callconv(.c) void {
+    scroll_y_accum += y_offset;
+}
+
+pub fn setScrollCallback(window: Window) void {
+    _ = c.glfwSetScrollCallback(window, &scrollCallback);
+}
+
+/// Consume accumulated scroll delta since last call.
+pub fn consumeScrollDelta() f64 {
+    const val = scroll_y_accum;
+    scroll_y_accum = 0;
+    return val;
+}
