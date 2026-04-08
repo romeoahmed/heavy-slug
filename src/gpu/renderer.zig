@@ -464,7 +464,7 @@ pub const TextRenderer = struct {
             .min_depth = 0,
             .max_depth = 1,
         };
-        self.dispatch.cmdSetViewport(cmd_buf, 0, 1, @ptrCast(&vk_viewport));
+        self.dispatch.cmdSetViewport(cmd_buf, 0, &.{vk_viewport});
 
         const vk_scissor = vk.Rect2D{
             .offset = .{ .x = 0, .y = 0 },
@@ -473,7 +473,7 @@ pub const TextRenderer = struct {
                 .height = @intFromFloat(viewport[1]),
             },
         };
-        self.dispatch.cmdSetScissor(cmd_buf, 0, 1, @ptrCast(&vk_scissor));
+        self.dispatch.cmdSetScissor(cmd_buf, 0, &.{vk_scissor});
 
         // Bind pipeline
         self.dispatch.cmdBindPipeline(cmd_buf, .graphics, self.pip.pipeline);
@@ -484,9 +484,7 @@ pub const TextRenderer = struct {
             .graphics,
             self.pip.pipeline_layout,
             0,
-            1,
-            @ptrCast(&self.descriptor_table.set),
-            0,
+            &.{self.descriptor_table.set},
             null,
         );
 
@@ -499,7 +497,7 @@ pub const TextRenderer = struct {
         self.dispatch.cmdPushConstants(
             cmd_buf,
             self.pip.pipeline_layout,
-            .{ .task_shader_bit_ext = true, .mesh_shader_bit_ext = true, .fragment_bit = true },
+            .{ .task_bit_ext = true, .mesh_bit_ext = true, .fragment_bit = true },
             0,
             @sizeOf(descriptors.PushConstants),
             @ptrCast(&push),

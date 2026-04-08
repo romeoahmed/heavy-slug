@@ -156,14 +156,14 @@ pub const DescriptorTable = struct {
                 .binding = 0,
                 .descriptor_type = .storage_buffer,
                 .descriptor_count = max_glyph_descriptors,
-                .stage_flags = .{ .mesh_shader_bit_ext = true, .fragment_bit = true },
+                .stage_flags = .{ .mesh_bit_ext = true, .fragment_bit = true },
                 .p_immutable_samplers = null,
             },
             .{
                 .binding = 1,
                 .descriptor_type = .storage_buffer,
                 .descriptor_count = 1,
-                .stage_flags = .{ .task_shader_bit_ext = true, .mesh_shader_bit_ext = true },
+                .stage_flags = .{ .task_bit_ext = true, .mesh_bit_ext = true },
                 .p_immutable_samplers = null,
             },
         };
@@ -253,10 +253,10 @@ pub const DescriptorTable = struct {
             .descriptor_count = 1,
             .descriptor_type = .storage_buffer,
             .p_buffer_info = @ptrCast(&buf_info),
-            .p_image_info = null,
-            .p_texel_buffer_view = null,
+            .p_image_info = undefined,
+            .p_texel_buffer_view = undefined,
         };
-        self.dispatch.updateDescriptorSets(self.device, 1, @ptrCast(&write), 0, null);
+        self.dispatch.updateDescriptorSets(self.device, &.{write}, null);
     }
 
     /// Update binding 1 to point at the GlyphCommand[] buffer for this frame.
@@ -279,10 +279,10 @@ pub const DescriptorTable = struct {
             .descriptor_count = 1,
             .descriptor_type = .storage_buffer,
             .p_buffer_info = @ptrCast(&buf_info),
-            .p_image_info = null,
-            .p_texel_buffer_view = null,
+            .p_image_info = undefined,
+            .p_texel_buffer_view = undefined,
         };
-        self.dispatch.updateDescriptorSets(self.device, 1, @ptrCast(&write), 0, null);
+        self.dispatch.updateDescriptorSets(self.device, &.{write}, null);
     }
 
     /// Allocate a descriptor slot index from the free-list.
@@ -313,10 +313,10 @@ pub const DescriptorTable = struct {
             .descriptor_count = 1,
             .descriptor_type = .storage_buffer,
             .p_buffer_info = @ptrCast(&buf_info),
-            .p_image_info = null,
-            .p_texel_buffer_view = null,
+            .p_image_info = undefined,
+            .p_texel_buffer_view = undefined,
         };
-        self.dispatch.updateDescriptorSets(self.device, 1, @ptrCast(&write), 0, null);
+        self.dispatch.updateDescriptorSets(self.device, &.{write}, null);
     }
 };
 

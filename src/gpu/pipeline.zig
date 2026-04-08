@@ -19,8 +19,8 @@ pub const Pipeline = struct {
         // --- Pipeline layout ---
         const push_range = vk.PushConstantRange{
             .stage_flags = .{
-                .task_shader_bit_ext = true,
-                .mesh_shader_bit_ext = true,
+                .task_bit_ext = true,
+                .mesh_bit_ext = true,
                 .fragment_bit = true,
             },
             .offset = 0,
@@ -52,7 +52,7 @@ pub const Pipeline = struct {
             .{
                 .s_type = .pipeline_shader_stage_create_info,
                 .flags = .{},
-                .stage = .{ .task_shader_bit_ext = true },
+                .stage = .{ .task_bit_ext = true },
                 .module = task_module,
                 .p_name = "taskMain",
                 .p_specialization_info = null,
@@ -60,7 +60,7 @@ pub const Pipeline = struct {
             .{
                 .s_type = .pipeline_shader_stage_create_info,
                 .flags = .{},
-                .stage = .{ .mesh_shader_bit_ext = true },
+                .stage = .{ .mesh_bit_ext = true },
                 .module = mesh_module,
                 .p_name = "meshMain",
                 .p_specialization_info = null,
@@ -100,12 +100,12 @@ pub const Pipeline = struct {
         const raster_state = vk.PipelineRasterizationStateCreateInfo{
             .s_type = .pipeline_rasterization_state_create_info,
             .flags = .{},
-            .depth_clamp_enable = vk.FALSE,
-            .rasterizer_discard_enable = vk.FALSE,
+            .depth_clamp_enable = .false,
+            .rasterizer_discard_enable = .false,
             .polygon_mode = .fill,
             .cull_mode = .{}, // no culling — quads may flip depending on motor
             .front_face = .counter_clockwise,
-            .depth_bias_enable = vk.FALSE,
+            .depth_bias_enable = .false,
             .depth_bias_constant_factor = 0.0,
             .depth_bias_clamp = 0.0,
             .depth_bias_slope_factor = 0.0,
@@ -117,16 +117,16 @@ pub const Pipeline = struct {
             .s_type = .pipeline_multisample_state_create_info,
             .flags = .{},
             .rasterization_samples = .{ .@"1_bit" = true },
-            .sample_shading_enable = vk.FALSE,
+            .sample_shading_enable = .false,
             .min_sample_shading = 0.0,
             .p_sample_mask = null,
-            .alpha_to_coverage_enable = vk.FALSE,
-            .alpha_to_one_enable = vk.FALSE,
+            .alpha_to_coverage_enable = .false,
+            .alpha_to_one_enable = .false,
         };
 
         // --- Color blend: premultiplied alpha ---
         const blend_attachment = vk.PipelineColorBlendAttachmentState{
-            .blend_enable = vk.TRUE,
+            .blend_enable = .true,
             .src_color_blend_factor = .one,
             .dst_color_blend_factor = .one_minus_src_alpha,
             .color_blend_op = .add,
@@ -138,7 +138,7 @@ pub const Pipeline = struct {
         const blend_state = vk.PipelineColorBlendStateCreateInfo{
             .s_type = .pipeline_color_blend_state_create_info,
             .flags = .{},
-            .logic_op_enable = vk.FALSE,
+            .logic_op_enable = .false,
             .logic_op = .copy,
             .attachment_count = 1,
             .p_attachments = @ptrCast(&blend_attachment),
@@ -177,13 +177,12 @@ pub const Pipeline = struct {
             .base_pipeline_index = -1,
         };
         var pipeline_handle: vk.Pipeline = undefined;
-        try dispatch.createGraphicsPipelines(
+        _ = try dispatch.createGraphicsPipelines(
             device,
             .null_handle, // no pipeline cache
-            1,
-            @ptrCast(&pipeline_ci),
+            @as([]const vk.GraphicsPipelineCreateInfo, &.{pipeline_ci}),
             null,
-            @ptrCast(&pipeline_handle),
+            @as([]vk.Pipeline, (&pipeline_handle)[0..1]),
         );
 
         return .{
