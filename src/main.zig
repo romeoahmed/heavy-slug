@@ -121,14 +121,15 @@ pub fn main() !void {
                 fps_len = 0;
             }
             frame_count = 0;
-            fps_timer = 0;
+            fps_timer -= 1.0;
         }
 
         const w: f32 = @floatFromInt(gctx.swapchain_extent.width);
         const h: f32 = @floatFromInt(gctx.swapchain_extent.height);
 
         // Apply content-fit on the first frame once viewport size is known.
-        if (!view_initialized) {
+        // Guard w>0/h>0: swapchain extent is 0×0 while window is minimized.
+        if (!view_initialized and w > 0 and h > 0) {
             const fit = contentFit(w, h);
             scale = fit.scale;
             pan_x = fit.pan_x;
