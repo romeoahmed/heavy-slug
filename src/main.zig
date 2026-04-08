@@ -78,12 +78,13 @@ pub fn main() !void {
 }
 
 /// Orthographic projection: maps (0,0)..(w,h) to Vulkan clip space.
-/// Origin at top-left, y increases downward (matches Vulkan NDC).
+/// Origin at bottom-left, y increases upward.
+/// Use motor y = h - offset_from_top for positions near the top.
 fn orthoProjection(w: f32, h: f32) [4][4]f32 {
     return .{
         .{ 2.0 / w, 0, 0, 0 },
-        .{ 0, 2.0 / h, 0, 0 },
+        .{ 0, -2.0 / h, 0, 0 },
         .{ 0, 0, 1, 0 },
-        .{ -1, -1, 0, 1 },
+        .{ -1, 1, 0, 1 },
     };
 }
