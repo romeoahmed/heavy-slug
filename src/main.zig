@@ -19,8 +19,18 @@ pub fn main() !void {
     var gctx = try demo_vk.GraphicsContext.init(window, allocator);
     defer gctx.deinit();
 
+    try gctx.createSwapchain(window);
+
     while (!glfw.shouldClose(window)) {
         glfw.pollEvents();
         if (glfw.getKey(window, glfw.KEY_ESCAPE)) break;
+
+        const frame = try gctx.beginFrame() orelse {
+            try gctx.recreateSwapchain(window);
+            continue;
+        };
+
+        // Nothing to draw yet — just the clear color
+        try gctx.endFrame(frame);
     }
 }

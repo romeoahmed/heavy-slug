@@ -296,6 +296,236 @@ pub const GraphicsContext = struct {
         }
     }
 
+    pub const FrameInfo = struct {
+        cmd: vk.CommandBuffer,
+        image_view: vk.ImageView,
+        image: vk.Image,
+        image_index: u32,
+    };
+
+    pub fn createSwapchain(self: *GraphicsContext, window: glfw.Window) !void {
+        const caps = try self.demo_idisp.getPhysicalDeviceSurfaceCapabilitiesKHR(
+            self.physical_device, self.surface,
+        );
+
+        const fb_size = glfw.getFramebufferSize(window);
+        self.swapchain_extent = .{
+            .width = std.math.clamp(fb_size[0], caps.min_image_extent.width, caps.max_image_extent.width),
+            .height = std.math.clamp(fb_size[1], caps.min_image_extent.height, caps.max_image_extent.height),
+        };
+
+        if (self.swapchain_extent.width == 0 or self.swapchain_extent.height == 0) return;
+
+        var image_count = caps.min_image_count + 1;
+        if (caps.max_image_count > 0) image_count = @min(image_count, caps.max_image_count);
+
+        const same_family = self.graphics_family == self.present_family;
+        const families = [_]u32{ self.graphics_family, self.present_family };
+
+        const old_swapchain = self.swapchain;
+        self.swapchain = try self.demo_ddisp.createSwapchainKHR(self.device, &.{
+            .surface = self.surface,
+            .min_image_count = image_count,
+            .image_format = self.surface_format.format,
+            .image_color_space = self.surface_format.color_space,
+            .image_extent = self.swapchain_extent,
+            .image_array_layers = 1,
+            .image_usage = .{ .color_attachment_bit = true },
+            .image_sharing_mode = if (same_family) .exclusive else .concurrent,
+            .queue_family_index_count = if (same_family) 0 else 2,
+            .p_queue_family_indices = if (same_family) null else &families,
+            .pre_transform = caps.current_transform,
+            .composite_alpha = .{ .opaque_bit_khr = true },
+            .present_mode = .fifo_khr,
+            .clipped = .true,
+            .old_swapchain = old_swapchain,
+        }, null);
+
+        if (old_swapchain != .null_handle) {
+            self.destroySwapchainResources();
+            self.demo_ddisp.destroySwapchainKHR(self.device, old_swapchain, null);
+        }
+
+        // Get images
+        var img_count: u32 = 0;
+        _ = try self.demo_ddisp.getSwapchainImagesKHR(self.device, self.swapchain, &img_count, null);
+        self.swapchain_images = try self.allocator.alloc(vk.Image, img_count);
+        _ = try self.demo_ddisp.getSwapchainImagesKHR(self.device, self.swapchain, &img_count, self.swapchain_images.ptr);
+
+        // Create image views
+        self.swapchain_views = try self.allocator.alloc(vk.ImageView, img_count);
+        for (self.swapchain_images, 0..) |img, i| {
+            self.swapchain_views[i] = try self.demo_ddisp.createImageView(self.device, &.{
+                .image = img,
+                .view_type = .@"2d",
+                .format = self.surface_format.format,
+                .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
+                .subresource_range = .{
+                    .aspect_mask = .{ .color_bit = true },
+                    .base_mip_level = 0,
+                    .level_count = 1,
+                    .base_array_layer = 0,
+                    .layer_count = 1,
+                },
+            }, null);
+        }
+    }
+
+    fn destroySwapchainResources(self: *GraphicsContext) void {
+        for (self.swapchain_views) |view| {
+            self.demo_ddisp.destroyImageView(self.device, view, null);
+        }
+        if (self.swapchain_views.len > 0) self.allocator.free(self.swapchain_views);
+        if (self.swapchain_images.len > 0) self.allocator.free(self.swapchain_images);
+        self.swapchain_views = &.{};
+        self.swapchain_images = &.{};
+    }
+
+    pub fn beginFrame(self: *GraphicsContext) !?FrameInfo {
+        const fi = self.frame_index;
+
+        _ = try self.demo_ddisp.waitForFences(self.device, self.in_flight_fences[fi..fi+1], .true, std.math.maxInt(u64));
+
+        var image_index: u32 = undefined;
+        const acquire_result = self.demo_ddisp.acquireNextImageKHR(
+            self.device, self.swapchain, std.math.maxInt(u64),
+            self.image_available[fi], .null_handle,
+        ) catch |err| switch (err) {
+            error.OutOfDateKHR => return null,
+            else => return err,
+        };
+        if (acquire_result.result == .suboptimal_khr) return null;
+        image_index = acquire_result.image_index;
+
+        try self.demo_ddisp.resetFences(self.device, self.in_flight_fences[fi..fi+1]);
+
+        const cmd = self.command_buffers[fi];
+        try self.demo_ddisp.resetCommandBuffer(cmd, .{});
+        try self.demo_ddisp.beginCommandBuffer(cmd, &.{
+            .flags = .{ .one_time_submit_bit = true },
+        });
+
+        // Transition image: undefined → color attachment
+        self.transitionImage(cmd, self.swapchain_images[image_index], .@"undefined", .color_attachment_optimal);
+
+        // Begin dynamic rendering
+        const clear_value = vk.ClearValue{ .color = .{ .float_32 = .{ 0.12, 0.12, 0.15, 1.0 } } };
+        const color_attachment = vk.RenderingAttachmentInfo{
+            .image_view = self.swapchain_views[image_index],
+            .image_layout = .color_attachment_optimal,
+            .resolve_mode = .{},
+            .resolve_image_layout = .@"undefined",
+            .load_op = .clear,
+            .store_op = .store,
+            .clear_value = clear_value,
+        };
+        self.demo_ddisp.cmdBeginRendering(cmd, &vk.RenderingInfo{
+            .render_area = .{
+                .offset = .{ .x = 0, .y = 0 },
+                .extent = self.swapchain_extent,
+            },
+            .layer_count = 1,
+            .view_mask = 0,
+            .color_attachment_count = 1,
+            .p_color_attachments = @ptrCast(&color_attachment),
+        });
+
+        return .{
+            .cmd = cmd,
+            .image_view = self.swapchain_views[image_index],
+            .image = self.swapchain_images[image_index],
+            .image_index = image_index,
+        };
+    }
+
+    pub fn endFrame(self: *GraphicsContext, frame: FrameInfo) !void {
+        const fi = self.frame_index;
+        const cmd = frame.cmd;
+
+        self.demo_ddisp.cmdEndRendering(cmd);
+
+        // Transition: color attachment → present
+        self.transitionImage(cmd, frame.image, .color_attachment_optimal, .present_src_khr);
+
+        try self.demo_ddisp.endCommandBuffer(cmd);
+
+        // Submit with synchronization2
+        const wait_info = vk.SemaphoreSubmitInfo{
+            .semaphore = self.image_available[fi],
+            .stage_mask = .{ .color_attachment_output_bit = true },
+            .value = 0,
+            .device_index = 0,
+        };
+        const signal_info = vk.SemaphoreSubmitInfo{
+            .semaphore = self.render_finished[fi],
+            .stage_mask = .{ .all_commands_bit = true },
+            .value = 0,
+            .device_index = 0,
+        };
+        const cmd_info = vk.CommandBufferSubmitInfo{
+            .command_buffer = cmd,
+            .device_mask = 0,
+        };
+        const submit_info = vk.SubmitInfo2{
+            .wait_semaphore_info_count = 1,
+            .p_wait_semaphore_infos = @ptrCast(&wait_info),
+            .command_buffer_info_count = 1,
+            .p_command_buffer_infos = @ptrCast(&cmd_info),
+            .signal_semaphore_info_count = 1,
+            .p_signal_semaphore_infos = @ptrCast(&signal_info),
+        };
+        try self.demo_ddisp.queueSubmit2(self.graphics_queue, &[_]vk.SubmitInfo2{submit_info}, self.in_flight_fences[fi]);
+
+        _ = self.demo_ddisp.queuePresentKHR(self.present_queue, &vk.PresentInfoKHR{
+            .wait_semaphore_count = 1,
+            .p_wait_semaphores = @ptrCast(&self.render_finished[fi]),
+            .swapchain_count = 1,
+            .p_swapchains = @ptrCast(&self.swapchain),
+            .p_image_indices = @ptrCast(&frame.image_index),
+        }) catch |err| switch (err) {
+            error.OutOfDateKHR => {},
+            else => return err,
+        };
+
+        self.frame_index = (fi + 1) % FRAMES_IN_FLIGHT;
+    }
+
+    fn transitionImage(
+        self: *GraphicsContext,
+        cmd: vk.CommandBuffer,
+        image: vk.Image,
+        old_layout: vk.ImageLayout,
+        new_layout: vk.ImageLayout,
+    ) void {
+        const barrier = vk.ImageMemoryBarrier2{
+            .src_stage_mask = .{ .all_commands_bit = true },
+            .src_access_mask = .{ .memory_write_bit = true },
+            .dst_stage_mask = .{ .all_commands_bit = true },
+            .dst_access_mask = .{ .memory_read_bit = true, .memory_write_bit = true },
+            .old_layout = old_layout,
+            .new_layout = new_layout,
+            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresource_range = .{
+                .aspect_mask = .{ .color_bit = true },
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+        };
+        self.demo_ddisp.cmdPipelineBarrier2(cmd, &.{
+            .image_memory_barrier_count = 1,
+            .p_image_memory_barriers = @ptrCast(&barrier),
+        });
+    }
+
+    pub fn recreateSwapchain(self: *GraphicsContext, window: glfw.Window) !void {
+        try self.demo_ddisp.deviceWaitIdle(self.device);
+        try self.createSwapchain(window);
+    }
+
     pub fn deinit(self: *GraphicsContext) void {
         self.demo_ddisp.deviceWaitIdle(self.device) catch {};
 
@@ -309,6 +539,11 @@ pub const GraphicsContext = struct {
         }
         if (self.command_pool != .null_handle)
             self.demo_ddisp.destroyCommandPool(self.device, self.command_pool, null);
+
+        self.destroySwapchainResources();
+        if (self.swapchain != .null_handle) {
+            self.demo_ddisp.destroySwapchainKHR(self.device, self.swapchain, null);
+        }
 
         self.demo_ddisp.destroyDevice(self.device, null);
 
