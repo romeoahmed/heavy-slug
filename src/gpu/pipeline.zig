@@ -54,7 +54,7 @@ pub const Pipeline = struct {
                 .flags = .{},
                 .stage = .{ .task_bit_ext = true },
                 .module = task_module,
-                .p_name = "taskMain",
+                .p_name = "main",
                 .p_specialization_info = null,
             },
             .{
@@ -62,7 +62,7 @@ pub const Pipeline = struct {
                 .flags = .{},
                 .stage = .{ .mesh_bit_ext = true },
                 .module = mesh_module,
-                .p_name = "meshMain",
+                .p_name = "main",
                 .p_specialization_info = null,
             },
             .{
@@ -70,7 +70,7 @@ pub const Pipeline = struct {
                 .flags = .{},
                 .stage = .{ .fragment_bit = true },
                 .module = frag_module,
-                .p_name = "fragmentMain",
+                .p_name = "main",
                 .p_specialization_info = null,
             },
         };

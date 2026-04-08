@@ -149,7 +149,7 @@ pub const DescriptorTable = struct {
         // -- Create descriptor set layout --
         const binding_flags = [2]vk.DescriptorBindingFlags{
             .{ .partially_bound_bit = true, .update_after_bind_bit = true },
-            .{},
+            .{ .update_after_bind_bit = true },
         };
         const bindings = [2]vk.DescriptorSetLayoutBinding{
             .{

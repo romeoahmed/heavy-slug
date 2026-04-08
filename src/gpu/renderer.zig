@@ -419,6 +419,15 @@ pub const TextRenderer = struct {
             }
         }
 
+        // Empty glyphs (e.g. space): cache with a null descriptor, no pool allocation.
+        if (encoded.data.len == 0) {
+            const slot = self.descriptor_table.allocSlot() orelse
+                return Error.DescriptorSlotExhausted;
+            self.descriptor_table.nullSlot(slot);
+            try self.glyph_cache.insertCold(cache_key, slot, .{ .offset = 0, .size = 0 }, em_box);
+            return .{ .slot = slot, .em_box = em_box };
+        }
+
         // Allocate pool space
         const pool_alloc = self.pool_alloc.alloc(@intCast(encoded.data.len)) orelse
             return Error.PoolExhausted;
