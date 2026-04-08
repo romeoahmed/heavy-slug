@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**heavy-slug** — Zig 0.16.0-dev GPU text renderer using the Slug algorithm (Eric Lengyel) for exact quadratic Bezier coverage via Vulkan `VK_EXT_mesh_shader`. Library: `src/root.zig`. Demo: `src/main.zig`.
+**heavy-slug** — Zig 0.16.0-dev GPU text renderer using the Slug algorithm (Eric Lengyel) for exact quadratic Bezier coverage via Vulkan 1.4 `VK_EXT_mesh_shader`. Shaders compiled from Slang to SPIR-V 1.6. Library: `src/root.zig`. Demo: `src/main.zig`.
 
 ## Commands
 
@@ -53,7 +53,7 @@ tools/
 **Demo executable** — `src/main.zig` + `src/demo/`:
 - `src/demo/glfw.zig` — GLFW 3.4 wrapper with manual Vulkan externs (avoids vulkan.h conflicts)
 - `src/demo/vulkan.zig` — Demo Vulkan bootstrap: instance, device, swapchain, double-buffered frame sync
-- `src/main.zig` — Interactive showcase: multiple fonts, PGA Motor animations, FPS counter
+- `src/main.zig` — Interactive text viewer (hb-gpu-demo style): pan, zoom, dark mode, FPS counter
 
 Run: `zig build run` (requires GPU with `VK_EXT_mesh_shader` support). ESC to exit.
 
@@ -73,6 +73,8 @@ Add/update: `zig fetch --save <url>` — hashes are pinned automatically.
 
 ## Key Patterns
 
+**Vulkan version** — Vulkan 1.4 instance, SPIR-V 1.6 shaders. The demo creates the instance with `vk.API_VERSION_1_4`. Device features use the `PhysicalDeviceVulkan12Features` / `PhysicalDeviceVulkan13Features` pNext chain plus `PhysicalDeviceMeshShaderFeaturesEXT` and `PhysicalDeviceRobustness2FeaturesEXT`.
+
 **Vulkan bindings** — generated at build time from `vk.xml`:
 ```zig
 const registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml");
@@ -89,11 +91,13 @@ const vulkan_zig = b.addModule("vulkan-zig", .{
 // Define struct with ?vk.PfnXxx = null fields, then:
 vk.DeviceWrapperWithCustomDispatch(HeavySlugDispatch)
 ```
-See `src/gpu/context.zig`.
+See `src/gpu/context.zig`. Dispatch struct fields use **C names** (`vkCreateInstance`). Wrapper methods use **camelCase** (`createInstance`).
+
+**Bool32 fields** — vulkan-zig `Bool32` is an enum. Use `.true`/`.false` for struct fields (not `vk.TRUE`/`vk.FALSE`). Use `vk.TRUE` only for comparison contexts like `waitForFences`.
 
 **VulkanContext** — wraps a caller-provided `VkDevice`. Call `VulkanContext.checkDeviceSupport(physical_device, instance_dispatch, allocator)` before device creation to validate mesh shader + robustness2 support. Then `VulkanContext.init(physical_device, device, instance_dispatch, get_device_proc_addr)` loads the dispatch table and queries memory properties. `TextRenderer.initFromContext(ctx, ...)` is the convenience entry point. Required extensions: `VulkanContext.required_device_extensions`.
 
-**C library builds** — `buildFreetype()` / `buildHarfbuzz()` in `build.zig` return `*std.Build.Step.Compile`. `@cImport` needs explicit `mod.addIncludePath()` — `linkLibrary` alone does not propagate headers.
+**C library builds** — `buildFreetype()` / `buildHarfbuzz()` / `buildGlfw()` in `build.zig` return `*std.Build.Step.Compile`. `@cImport` needs explicit `mod.addIncludePath()` — `linkLibrary` alone does not propagate headers.
 
 **Cross-module cImport** — `ft.zig` and `hb.zig` each have independent `@cImport` blocks; Zig treats them as distinct type namespaces. Bridge `FT_Face` across modules via `*anyopaque`: `ft.Face.rawHandle()` returns `@ptrCast(self.handle.?)`, `hb.Font.createFromFtFace` reconstructs with `@ptrCast(@alignCast(ptr))`.
 
@@ -103,11 +107,11 @@ See `src/gpu/context.zig`.
 
 **HarfBuzz GPU draw cycle** — must follow exactly: `drawGlyph` → `encode` (→ `Blob`) → `getExtents` → `reset`. Always `reset` after encode, even on error (`errdefer`).
 
-**Glyph cache** — `GlyphCache` maps `(font_id, glyph_id)` → descriptor slot + pool allocation. Hot tier (ASCII + promoted): evicted only on font unload. Cold tier: LRU eviction. Promotion after `promote_frames` consecutive frames. `PoolAllocator` is a bump+freelist sub-allocator aligned to `minStorageBufferOffsetAlignment`. On eviction, `DescriptorTable.nullSlot` writes a null descriptor before returning the slot — requires `nullDescriptor` from `VK_EXT_robustness2`.
+**Glyph cache** — `GlyphCache` maps `(font_id, glyph_id)` → descriptor slot + pool allocation. Hot tier (ASCII + promoted): evicted only on font unload. Cold tier: LRU eviction. Promotion after `promote_frames` consecutive frames. `PoolAllocator` is a bump+freelist sub-allocator aligned to `minStorageBufferOffsetAlignment`. On eviction, `DescriptorTable.nullSlot` writes a null descriptor before returning the slot — requires `nullDescriptor` from `VK_EXT_robustness2`. Empty glyphs (e.g. space) get a null descriptor with no pool allocation.
 
 **Motor math** — `[4]f32` extern struct (GPU ABI). SIMD internally via `@Vector(4,f32)`. Mirrors `shaders/pga.slang` layout: `[s, e12, e01, e02]`.
 
-**Shader compilation** — `zig build shaders` → `zig-out/shaders/*.spv` via `slangc`. Flags: `-profile spirv_1_6 -matrix-layout-column-major -I shaders`. The `exe` step depends on shaders.
+**Shader compilation** — `zig build shaders` → `zig-out/shaders/*.spv` via `slangc`. Flags: `-profile spirv_1_6 -matrix-layout-column-major -I shaders`. The `exe` step depends on shaders. Slang compiles all entry points to `"main"` in SPIR-V regardless of source-level function name — pipeline code must use `p_name = "main"`.
 
 **Slang matrix layout** — `-matrix-layout-column-major` matches Zig's column-major `[4][4]f32` upload. `float4x4(r0,r1,r2,r3)` constructor fills **rows**. `mul(m, v)` → `OpVectorTimesMatrix(v, m)` in SPIR-V, which correctly computes M×v for column-major data. `m[row][col]` indexing.
 
@@ -121,4 +125,6 @@ See `src/gpu/context.zig`.
 
 - `b.addLibrary(.{ .linkage = .static })` — `b.addStaticLibrary()` was removed
 - `@cImport` needs `mod.addIncludePath()` — `linkLibrary` alone doesn't propagate headers
+- `std.heap.DebugAllocator` — `GeneralPurposeAllocator` was renamed
 - `zig build test` is silent on success
+- Vulkan wrapper functions take slices, not count+pointer pairs (e.g. `waitForFences` takes `[]const Fence`)

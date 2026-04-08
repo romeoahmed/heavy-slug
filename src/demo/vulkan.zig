@@ -118,7 +118,7 @@ pub const GraphicsContext = struct {
             .application_version = 0,
             .p_engine_name = "heavy-slug",
             .engine_version = 0,
-            .api_version = @bitCast(vk.API_VERSION_1_3),
+            .api_version = @bitCast(vk.API_VERSION_1_4),
         };
         const instance = try base.createInstance(&.{
             .p_application_info = &app_info,
