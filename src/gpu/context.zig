@@ -114,15 +114,41 @@ pub const DeviceDispatch = vk.DeviceWrapperWithCustomDispatch(HeavySlugDispatch)
 pub const FeatureError = error{
     MeshShaderNotSupported,
     Robustness2NotSupported,
+    ExtensionNotSupported,
 };
 
-/// Validate that the physical device supports all features required by heavy-slug.
-/// Call this before creating the VkDevice to get a clear error if requirements are not met.
-/// The caller is still responsible for enabling these features in VkDeviceCreateInfo.
+/// Validate that the physical device supports all extensions and features required
+/// by heavy-slug. Call this before creating the VkDevice to get a clear error if
+/// requirements are not met. The caller is still responsible for enabling these
+/// features and extensions in VkDeviceCreateInfo.
 fn checkDeviceSupport_impl(
     physical_device: vk.PhysicalDevice,
     instance_dispatch: InstanceDispatch,
-) FeatureError!void {
+    allocator: std.mem.Allocator,
+) (FeatureError || error{OutOfMemory})!void {
+    // --- Extension validation ---
+    const available = instance_dispatch.enumerateDeviceExtensionPropertiesAlloc(
+        physical_device, null, allocator,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return FeatureError.ExtensionNotSupported,
+    };
+    defer allocator.free(available);
+
+    for (required_extensions) |required| {
+        const req_name = std.mem.span(required);
+        var found = false;
+        for (available) |ext| {
+            const ext_name = std.mem.sliceTo(&ext.extension_name, 0);
+            if (std.mem.eql(u8, ext_name, req_name)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return FeatureError.ExtensionNotSupported;
+    }
+
+    // --- Feature validation ---
     var mesh_features = vk.PhysicalDeviceMeshShaderFeaturesEXT{};
     var robustness_features = vk.PhysicalDeviceRobustness2FeaturesEXT{
         .p_next = @ptrCast(&mesh_features),

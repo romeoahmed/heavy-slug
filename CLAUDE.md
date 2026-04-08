@@ -83,7 +83,7 @@ vk.DeviceWrapperWithCustomDispatch(HeavySlugDispatch)
 ```
 See `src/gpu/context.zig`.
 
-**VulkanContext** — wraps a caller-provided `VkDevice`. Call `VulkanContext.checkDeviceSupport(physical_device, instance_dispatch)` before device creation to validate mesh shader + robustness2 support. Then `VulkanContext.init(physical_device, device, instance_dispatch, get_device_proc_addr)` loads the dispatch table and queries memory properties. `TextRenderer.initFromContext(ctx, ...)` is the convenience entry point. Required extensions: `VulkanContext.required_device_extensions`.
+**VulkanContext** — wraps a caller-provided `VkDevice`. Call `VulkanContext.checkDeviceSupport(physical_device, instance_dispatch, allocator)` before device creation to validate mesh shader + robustness2 support. Then `VulkanContext.init(physical_device, device, instance_dispatch, get_device_proc_addr)` loads the dispatch table and queries memory properties. `TextRenderer.initFromContext(ctx, ...)` is the convenience entry point. Required extensions: `VulkanContext.required_device_extensions`.
 
 **C library builds** — `buildFreetype()` / `buildHarfbuzz()` in `build.zig` return `*std.Build.Step.Compile`. `@cImport` needs explicit `mod.addIncludePath()` — `linkLibrary` alone does not propagate headers.
 
