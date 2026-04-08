@@ -104,6 +104,7 @@ pub const GraphicsContext = struct {
     render_finished: [FRAMES_IN_FLIGHT]vk.Semaphore = .{.null_handle} ** FRAMES_IN_FLIGHT,
     in_flight_fences: [FRAMES_IN_FLIGHT]vk.Fence = .{.null_handle} ** FRAMES_IN_FLIGHT,
     frame_index: u32 = 0,
+    /// Linear RGBA clear color. Vulkan converts to sRGB on write for sRGB swapchain formats.
     clear_color: [4]f32 = .{ 1.0, 1.0, 1.0, 1.0 },
 
     allocator: std.mem.Allocator,

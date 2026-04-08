@@ -117,6 +117,7 @@ pub fn getCursorPos(window: Window) [2]f64 {
     return .{ x, y };
 }
 
+// Single-window demo; one accumulator is sufficient.
 var scroll_y_accum: f64 = 0;
 
 fn scrollCallback(_: ?*c.GLFWwindow, _: f64, y_offset: f64) callconv(.c) void {
