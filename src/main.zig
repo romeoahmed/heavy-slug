@@ -109,6 +109,7 @@ pub fn main() !void {
         text_renderer.flush(frame.cmd, proj, viewport);
         try gctx.endFrame(frame);
     }
+    gctx.demo_ddisp.deviceWaitIdle(gctx.device) catch {};
 }
 
 /// Orthographic projection: maps (0,0)..(w,h) to Vulkan clip space.

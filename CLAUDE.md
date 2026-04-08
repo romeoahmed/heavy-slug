@@ -67,6 +67,7 @@ Run: `zig build run` (requires GPU with `VK_EXT_mesh_shader` support). ESC to ex
 | `vulkan_headers` | KhronosGroup/Vulkan-Headers | `registry/vk.xml` |
 | `freetype_src` | FreeType 2.14.3 | Font rasterization |
 | `harfbuzz_src` | HarfBuzz 14.1.0 | Unicode shaping + HarfBuzz GPU |
+| `glfw_src` | GLFW 3.4 | Window + Vulkan surface (demo only) |
 
 Add/update: `zig fetch --save <url>` — hashes are pinned automatically.
 
