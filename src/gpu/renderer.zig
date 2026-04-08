@@ -362,10 +362,7 @@ pub const TextRenderer = struct {
             const glyph_y = pen_y + @as(f32, @floatFromInt(pos.y_offset)) / 64.0;
 
             // Compose caller's motor with per-glyph translation
-            const glyph_motor = pga.Motor.compose(
-                motor,
-                pga.Motor.fromTranslation(glyph_x, glyph_y),
-            );
+            const glyph_motor = motor.composeTranslation(glyph_x, glyph_y);
 
             // Cache lookup
             const cache_key = cache_mod.CacheKey{

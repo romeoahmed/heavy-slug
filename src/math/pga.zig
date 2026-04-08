@@ -10,12 +10,6 @@ pub const Motor = extern struct {
     /// Identity motor (no rotation, no translation).
     pub const identity = Motor{ .m = .{ 1, 0, 0, 0 } };
 
-    /// Convert storage array to @Vector for SIMD operations.
-    /// Free conversion — same memory layout, no copy.
-    inline fn vec(self: Motor) @Vector(4, f32) {
-        return self.m;
-    }
-
     /// Motor from pure translation (tx, ty).
     /// Encoding: s=1, e12=0, e01=tx/2, e02=ty/2
     pub fn fromTranslation(tx: f32, ty: f32) Motor {
@@ -36,98 +30,98 @@ pub const Motor = extern struct {
     ///   e01' = sA·txB + txA·sB + αA·tyB - tyA·αB
     ///   e02' = sA·tyB + tyA·sB - αA·txB + txA·αB
     pub fn compose(a: Motor, b: Motor) Motor {
-        const av = a.vec();
-        const bv = b.vec();
+        const sa = a.m[0];
+        const aa = a.m[1];
+        const ta = a.m[2];
+        const ua = a.m[3];
+        const sb = b.m[0];
+        const ab = b.m[1];
+        const tb = b.m[2];
+        const ub = b.m[3];
+        return .{ .m = .{
+            sa * sb - aa * ab,
+            sa * ab + aa * sb,
+            sa * tb + ta * sb + aa * ub - ua * ab,
+            sa * ub + ua * sb - aa * tb + ta * ab,
+        } };
+    }
 
-        // Broadcast each scalar component of A across a full vector
-        const sa: @Vector(4, f32) = @splat(av[0]); // [sA, sA, sA, sA]
-        const alpha_a: @Vector(4, f32) = @splat(av[1]); // [αA, αA, αA, αA]
-        const txa: @Vector(4, f32) = @splat(av[2]); // [txA, txA, txA, txA]
-        const tya: @Vector(4, f32) = @splat(av[3]); // [tyA, tyA, tyA, tyA]
-
-        // Swizzle B components for the cross-terms:
-        // bv           = [sB,  αB,  txB, tyB]
-        // b_swap_01    = [αB,  sB,  tyB, txB]  (swap pairs)
-        const b_swap_01: @Vector(4, f32) = @shuffle(f32, bv, undefined, [4]i32{ 1, 0, 3, 2 });
-
-        // Term 1: sa * bv = [sA·sB, sA·αB, sA·txB, sA·tyB]
-        const term1 = sa * bv;
-        // Term 2: alpha_a * b_swap = [αA·αB, αA·sB, αA·tyB, αA·txB]
-        const term2 = alpha_a * b_swap_01;
-        // b_s_a = [sB, sB, sB, αB] — slots 2,3 carry sB and αB for tx/ty cross-terms.
-        // b_a_s = [sB, sB, αB, sB] — slots 2,3 carry αB and sB for ty/tx cross-terms.
-        // Slots 0,1 of both hold sB but are masked to zero by signs_34/signs_34n below.
-        const b_s_a: @Vector(4, f32) = @shuffle(f32, bv, undefined, [4]i32{ 0, 0, 0, 1 });
-        const b_a_s: @Vector(4, f32) = @shuffle(f32, bv, undefined, [4]i32{ 0, 0, 1, 0 });
-        const term3 = txa * b_s_a; // slots 2,3: txA·sB, txA·αB (slots 0,1 masked below)
-        const term4 = tya * b_a_s; // slots 2,3: tyA·αB, tyA·sB (slots 0,1 masked below)
-
-        // Signs for the geometric product formula.
-        // signs_34/signs_34n: zeros in slots 0,1 mask out tx/ty contributions from
-        // s' and e12'; ±1 in slots 2,3 apply the required sign for e01' and e02'.
-
-        // Signs: s' = +sa·sB - αA·αB, α' = +sA·αB + αA·sB
-        //        tx' = +sA·txB + txA·sB + αA·tyB - tyA·αB
-        //        ty' = +sA·tyB + tyA·sB - αA·txB + txA·αB
-        const signs_2 = @Vector(4, f32){ -1, 1, 1, -1 };
-        const signs_34 = @Vector(4, f32){ 0, 0, 1, 1 };
-        const signs_34n = @Vector(4, f32){ 0, 0, -1, 1 };
-
-        const result = term1 + term2 * signs_2 + term3 * signs_34 + term4 * signs_34n;
-
-        return .{ .m = result };
+    /// Compose motor with a pure translation — specialized hot path.
+    /// Equivalent to `compose(self, fromTranslation(tx, ty))` but avoids
+    /// redundant terms (sb=1, ab=0): 6 mul + 4 add vs 12 + 8.
+    pub fn composeTranslation(self: Motor, tx: f32, ty: f32) Motor {
+        const htx = tx * 0.5;
+        const hty = ty * 0.5;
+        return .{ .m = .{
+            self.m[0],
+            self.m[1],
+            self.m[0] * htx + self.m[2] + self.m[1] * hty,
+            self.m[0] * hty + self.m[3] - self.m[1] * htx,
+        } };
     }
 
     /// Expand motor to a column-major 4×4 matrix, pre-multiplied by `proj`.
-    /// Result = proj × motor_mat.
+    /// Result = proj × motor_mat.  Exploits motor matrix sparsity (cols 2,3
+    /// are identity/translation) to avoid a full 4×4 multiply.
     ///
     /// Motor matrix (column-major, [col][row]):
-    ///   col0 = [s²-α²,  2sα,  0, 0]
-    ///   col1 = [-2sα,  s²-α², 0, 0]
+    ///   col0 = [1-2α²,  2sα,  0, 0]
+    ///   col1 = [-2sα,  1-2α², 0, 0]
     ///   col2 = [0,      0,    1, 0]
     ///   col3 = [2(s·tx+α·ty), 2(s·ty-α·tx), 0, 1]
     pub fn toMat(self: Motor, proj: [4][4]f32) [4][4]f32 {
-        const s = self.m[0];
-        const alpha = self.m[1];
-        const tx = self.m[2];
-        const ty = self.m[3];
-
-        const s2_a2 = s * s - alpha * alpha;
-        const two_sa = 2.0 * s * alpha;
-        const dx = 2.0 * (s * tx + alpha * ty);
-        const dy = 2.0 * (s * ty - alpha * tx);
-
-        const motor_mat = [4][4]f32{
-            .{ s2_a2, two_sa, 0, 0 },
-            .{ -two_sa, s2_a2, 0, 0 },
-            .{ 0, 0, 1, 0 },
-            .{ dx, dy, 0, 1 },
+        const a = self.m[1];
+        const c: @Vector(4, f32) = @splat(1.0 - 2.0 * a * a);
+        const sv: @Vector(4, f32) = @splat(2.0 * self.m[0] * a);
+        const dx: @Vector(4, f32) = @splat(2.0 * (self.m[0] * self.m[2] + a * self.m[3]));
+        const dy: @Vector(4, f32) = @splat(2.0 * (self.m[0] * self.m[3] - a * self.m[2]));
+        const p0: @Vector(4, f32) = proj[0];
+        const p1: @Vector(4, f32) = proj[1];
+        return .{
+            p0 * c + p1 * sv,
+            p1 * c - p0 * sv,
+            proj[2],
+            p0 * dx + p1 * dy + @as(@Vector(4, f32), proj[3]),
         };
-
-        return matMul(proj, motor_mat);
     }
 
     /// Apply motor to a 2D point via sandwich product M·p·M̃.
+    /// Uses unit-motor identity: s² + α² = 1 ⟹ s² - α² = 1 - 2α².
     /// For motor [s, α, tx, ty] and point (x, y):
-    ///   x' = (s²-α²)·x - 2sα·y + 2(s·tx + α·ty)
-    ///   y' =  2sα·x + (s²-α²)·y + 2(s·ty - α·tx)
+    ///   x' = (1-2α²)·x - 2sα·y + 2(s·tx + α·ty)
+    ///   y' =  2sα·x + (1-2α²)·y + 2(s·ty - α·tx)
     pub fn apply(self: Motor, p: [2]f32) [2]f32 {
-        const v = self.vec();
-        const s = v[0];
-        const alpha = v[1];
-
-        const s2_a2 = s * s - alpha * alpha;
-        const two_sa = 2.0 * s * alpha;
-
-        const pv: @Vector(2, f32) = p;
-        const rot = @Vector(2, f32){ s2_a2, two_sa } * @as(@Vector(2, f32), @splat(pv[0])) +
-            @Vector(2, f32){ -two_sa, s2_a2 } * @as(@Vector(2, f32), @splat(pv[1]));
-        const trans = @Vector(2, f32){
-            2.0 * (s * v[2] + alpha * v[3]),
-            2.0 * (s * v[3] - alpha * v[2]),
+        const s = self.m[0];
+        const a = self.m[1];
+        const tx = self.m[2];
+        const ty = self.m[3];
+        const z2 = 1.0 - 2.0 * a * a;
+        const zw = 2.0 * s * a;
+        return .{
+            z2 * p[0] - zw * p[1] + 2.0 * (s * tx + a * ty),
+            zw * p[0] + z2 * p[1] + 2.0 * (s * ty - a * tx),
         };
+    }
 
-        return rot + trans;
+    /// Reverse of a unit motor — the inverse transform.
+    /// Negates the bivector components: [s, -e12, -e01, -e02].
+    pub fn reverse(self: Motor) Motor {
+        return .{ .m = .{ self.m[0], -self.m[1], -self.m[2], -self.m[3] } };
+    }
+
+    /// Motor from rotation by `angle` radians about an arbitrary center `(cx, cy)`.
+    pub fn fromRotationAbout(angle: f32, cx: f32, cy: f32) Motor {
+        return compose(
+            fromTranslation(cx, cy),
+            compose(fromRotation(angle), fromTranslation(-cx, -cy)),
+        );
+    }
+
+    /// Renormalize a motor so that s² + e12² = 1.
+    /// Guards against drift after many compositions.
+    pub fn unitize(self: Motor) Motor {
+        const inv = 1.0 / @sqrt(self.m[0] * self.m[0] + self.m[1] * self.m[1]);
+        return .{ .m = .{ self.m[0] * inv, self.m[1] * inv, self.m[2] * inv, self.m[3] * inv } };
     }
 };
 
@@ -153,24 +147,6 @@ pub const Point = extern struct {
 
 comptime {
     std.debug.assert(@sizeOf(Point) == 8);
-}
-
-/// Column-major 4×4 matrix multiply: result = a × b.
-/// Each column of the result is a linear combination of columns of a,
-/// weighted by the corresponding column of b. Uses @Vector(4, f32)
-/// for SIMD column operations.
-fn matMul(a: [4][4]f32, b: [4][4]f32) [4][4]f32 {
-    var result: [4][4]f32 = undefined;
-    inline for (0..4) |col| {
-        const bc: @Vector(4, f32) = b[col];
-        var sum: @Vector(4, f32) = @splat(@as(f32, 0));
-        inline for (0..4) |k| {
-            const ac: @Vector(4, f32) = a[k];
-            sum += ac * @as(@Vector(4, f32), @splat(bc[k]));
-        }
-        result[col] = sum;
-    }
-    return result;
 }
 
 test "Motor identity is unit motor" {
@@ -350,23 +326,17 @@ test "Point.transform matches Motor.apply" {
 }
 
 test "Motor round-trip: reverse recovers original point" {
-    // For a normalized motor, reverse M~ = [s, -e12, -e01, -e02] is the inverse.
-    // This holds for pure rotors and pure translators individually.
-    // Apply the inverse in reverse order: undo rotation, then undo translation.
     const angle: f32 = 1.2;
     const tx: f32 = 7.0;
     const ty: f32 = -3.0;
     const rot = Motor.fromRotation(angle);
     const tr = Motor.fromTranslation(tx, ty);
-    const rot_rev = Motor{ .m = .{ rot.m[0], -rot.m[1], -rot.m[2], -rot.m[3] } };
-    const tr_rev = Motor{ .m = .{ tr.m[0], -tr.m[1], -tr.m[2], -tr.m[3] } };
     const original = [2]f32{ 42.0, -17.0 };
     // Forward: compose(tr, rot) applies rot first, then tr.
     const m = Motor.compose(tr, rot);
     const forward = m.apply(original);
-    // Inverse: undo tr (tr_rev), then undo rot (rot_rev).
-    const after_tr_rev = tr_rev.apply(forward);
-    const back = rot_rev.apply(after_tr_rev);
+    // Inverse: undo tr, then undo rot.
+    const back = rot.reverse().apply(tr.reverse().apply(forward));
     try testing.expectApproxEqAbs(original[0], back[0], 1e-4);
     try testing.expectApproxEqAbs(original[1], back[1], 1e-4);
 }
