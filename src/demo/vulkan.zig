@@ -354,6 +354,14 @@ pub const GraphicsContext = struct {
 
         // Create image views
         self.swapchain_views = try self.allocator.alloc(vk.ImageView, img_count);
+        var views_created: usize = 0;
+        errdefer {
+            for (self.swapchain_views[0..views_created]) |view| {
+                self.demo_ddisp.destroyImageView(self.device, view, null);
+            }
+            self.allocator.free(self.swapchain_views);
+            self.swapchain_views = &.{};
+        }
         for (self.swapchain_images, 0..) |img, i| {
             self.swapchain_views[i] = try self.demo_ddisp.createImageView(self.device, &.{
                 .image = img,
@@ -368,6 +376,7 @@ pub const GraphicsContext = struct {
                     .layer_count = 1,
                 },
             }, null);
+            views_created += 1;
         }
     }
 
