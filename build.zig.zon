@@ -20,6 +20,10 @@
             .url = "git+https://github.com/KhronosGroup/Vulkan-Headers#afe9eb980aa928a66d1c9c06f38c55dd59868720",
             .hash = "N-V-__8AAPwhagKzo63CN9Xp9fZgDF34VxO0bJWvZ8XUcNZA",
         },
+        .glfw_src = .{
+            .url = "https://github.com/glfw/glfw/archive/refs/tags/3.4.tar.gz",
+            .hash = "N-V-__8AAL40TADEbrysYHBl-UIZO4KiG4chP8pLDVDINGH4",
+        },
     },
     .paths = .{
         "build.zig",

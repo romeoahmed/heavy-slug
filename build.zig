@@ -41,6 +41,12 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    // GLFW for demo executable
+    const glfw_dep = b.dependency("glfw_src", .{});
+    const glfw_lib = buildGlfw(b, target, optimize);
+    exe.root_module.linkLibrary(glfw_lib);
+    exe.root_module.addIncludePath(glfw_dep.path("include"));
+
     b.installArtifact(exe);
 
     // Run step
@@ -154,6 +160,100 @@ fn generateLayoutZig(
     const run = b.addRunArtifact(tool);
     run.addFileArg(reflection_json);
     return run.captureStdOut(.{ .basename = "gpu_layout.zig" });
+}
+
+fn buildGlfw(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Step.Compile {
+    const glfw_dep = b.dependency("glfw_src", .{});
+    const vk_headers = b.dependency("vulkan_headers", .{});
+
+    const lib = b.addLibrary(.{
+        .name = "glfw",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+
+    lib.root_module.addIncludePath(glfw_dep.path("include"));
+    lib.root_module.addIncludePath(glfw_dep.path("src"));
+    lib.root_module.addIncludePath(vk_headers.path("include"));
+
+    const os = target.result.os.tag;
+    const platform_flag: []const u8 = switch (os) {
+        .windows => "-D_GLFW_WIN32",
+        .linux => "-D_GLFW_X11",
+        .macos => "-D_GLFW_COCOA",
+        else => @panic("unsupported OS for GLFW"),
+    };
+
+    lib.root_module.addCSourceFiles(.{
+        .root = glfw_dep.path(""),
+        .files = &.{
+            "src/context.c",
+            "src/init.c",
+            "src/input.c",
+            "src/monitor.c",
+            "src/platform.c",
+            "src/vulkan.c",
+            "src/window.c",
+            "src/egl_context.c",
+            "src/osmesa_context.c",
+            "src/null_init.c",
+            "src/null_joystick.c",
+            "src/null_monitor.c",
+            "src/null_window.c",
+        },
+        .flags = &.{platform_flag},
+    });
+
+    switch (os) {
+        .windows => {
+            lib.root_module.addCSourceFiles(.{
+                .root = glfw_dep.path(""),
+                .files = &.{
+                    "src/win32_init.c",
+                    "src/win32_joystick.c",
+                    "src/win32_module.c",
+                    "src/win32_monitor.c",
+                    "src/win32_thread.c",
+                    "src/win32_time.c",
+                    "src/win32_window.c",
+                    "src/wgl_context.c",
+                },
+                .flags = &.{platform_flag},
+            });
+            lib.root_module.linkSystemLibrary("gdi32", .{});
+            lib.root_module.linkSystemLibrary("user32", .{});
+            lib.root_module.linkSystemLibrary("shell32", .{});
+        },
+        .linux => {
+            lib.root_module.addCSourceFiles(.{
+                .root = glfw_dep.path(""),
+                .files = &.{
+                    "src/x11_init.c",
+                    "src/x11_monitor.c",
+                    "src/x11_window.c",
+                    "src/xkb_unicode.c",
+                    "src/posix_module.c",
+                    "src/posix_poll.c",
+                    "src/posix_thread.c",
+                    "src/posix_time.c",
+                    "src/glx_context.c",
+                    "src/linux_joystick.c",
+                },
+                .flags = &.{platform_flag},
+            });
+        },
+        else => {},
+    }
+
+    return lib;
 }
 
 fn buildFreetype(
