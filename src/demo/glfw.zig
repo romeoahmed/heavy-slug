@@ -63,9 +63,13 @@ pub fn getFramebufferSize(window: Window) [2]u32 {
     return .{ @intCast(w), @intCast(h) };
 }
 
+/// Returns the Vulkan instance extensions required by GLFW.
+/// The returned slice points to GLFW-managed static memory — valid until
+/// `terminate()` is called. Do not free the slice or the string pointers.
 pub fn getRequiredInstanceExtensions() []const [*:0]const u8 {
     var count: u32 = 0;
     const exts = c.glfwGetRequiredInstanceExtensions(&count) orelse return &.{};
+    // GLFW guarantees all returned extension names are null-terminated C strings.
     return @ptrCast(exts[0..count]);
 }
 
