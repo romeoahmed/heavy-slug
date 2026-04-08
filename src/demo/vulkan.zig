@@ -350,6 +350,10 @@ pub const GraphicsContext = struct {
         var img_count: u32 = 0;
         _ = try self.demo_ddisp.getSwapchainImagesKHR(self.device, self.swapchain, &img_count, null);
         self.swapchain_images = try self.allocator.alloc(vk.Image, img_count);
+        errdefer {
+            self.allocator.free(self.swapchain_images);
+            self.swapchain_images = &.{};
+        }
         _ = try self.demo_ddisp.getSwapchainImagesKHR(self.device, self.swapchain, &img_count, self.swapchain_images.ptr);
 
         // Create image views
@@ -391,6 +395,9 @@ pub const GraphicsContext = struct {
     }
 
     pub fn beginFrame(self: *GraphicsContext) !?FrameInfo {
+        // Guard: swapchain is not yet created (e.g. window minimized during recreation)
+        if (self.swapchain == .null_handle) return null;
+
         const fi = self.frame_index;
 
         _ = try self.demo_ddisp.waitForFences(self.device, self.in_flight_fences[fi..fi+1], .true, std.math.maxInt(u64));
