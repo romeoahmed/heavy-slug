@@ -186,3 +186,35 @@ test "integration: removeFont reclaims all pool and cache resources" {
     } else false;
     try std.testing.expect(recycled_matches);
 }
+
+test "integration: motor positions shaped glyphs monotonically" {
+    const ft_lib = try ft.Library.init();
+    defer ft_lib.deinit();
+
+    var ctx = try glyph.FontContext.init(ft_lib, test_font_path, 24);
+    defer ctx.deinit();
+
+    const buf = try ctx.shapeText("Hello World", null, null);
+    defer buf.destroy();
+
+    const positions = buf.getGlyphPositions();
+
+    // Position glyphs using motors (mirrors renderer's drawText logic)
+    const base = pga.Motor.fromTranslation(100.0, 200.0);
+    var pen_x: f32 = 0;
+    var prev_x: f32 = -std.math.inf(f32);
+
+    for (positions) |pos| {
+        const gx = pen_x + @as(f32, @floatFromInt(pos.x_offset));
+        const gy: f32 = @floatFromInt(pos.y_offset);
+        const glyph_motor = base.composeTranslation(gx, gy);
+
+        const origin = glyph_motor.apply(.{ 0, 0 });
+
+        // Each glyph should be to the right of the previous (LTR)
+        try std.testing.expect(origin[0] > prev_x);
+        prev_x = origin[0];
+
+        pen_x += @as(f32, @floatFromInt(pos.x_advance));
+    }
+}
