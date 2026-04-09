@@ -347,6 +347,9 @@ pub const TextRenderer = struct {
         motor: pga.Motor,
         color: [4]f32,
     ) (Error || error{OutOfMemory})!void {
+        // Validate font handle — guards against use-after-unloadFont().
+        if (!self.fonts.contains(font.id)) return Error.ShapingFailed;
+
         // Shape text using reusable buffer
         self.shape_buffer.reset();
         self.shape_buffer.addUtf8(text);
