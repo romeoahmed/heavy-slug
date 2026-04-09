@@ -335,6 +335,7 @@ pub const TextRenderer = struct {
     pub fn begin(self: *TextRenderer) void {
         self.glyph_count = 0;
         self.flush_base = 0;
+        self.glyph_cache.advanceFrame();
     }
 
     /// Shape text and append glyph commands for GPU rendering.
@@ -536,9 +537,6 @@ pub const TextRenderer = struct {
 
         // Advance flush base for the next pass within this frame
         self.flush_base = self.glyph_count;
-
-        // Advance cache frame for LRU tracking and cold→hot promotion
-        self.glyph_cache.advanceFrame();
     }
 
     pub fn deinit(self: *TextRenderer) void {
