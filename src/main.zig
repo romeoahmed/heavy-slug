@@ -267,6 +267,7 @@ pub fn main() !void {
             dragged = false;
             drag_angle_delta = 0;
             drag_dt = 0;
+            last_drag_time = now;
         }
 
         // Right button hold: rotate by dragging.
