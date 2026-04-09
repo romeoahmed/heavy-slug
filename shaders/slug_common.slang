@@ -1,6 +1,6 @@
 // shaders/slug_common.slang
 // Shared types and blob reader for heavy-slug shaders.
-// Mirrors src/gpu/descriptors.zig struct layouts exactly.
+// CPU structs in descriptors.zig are generated from this file's reflection data.
 
 import pga;
 
