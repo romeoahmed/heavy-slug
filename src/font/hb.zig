@@ -9,8 +9,8 @@ const c = @cImport({
 const ft = @import("ft.zig");
 
 pub const Error = error{
-    BufferCreateFailed,
-    AllocationFailed,
+    HarfBuzzBufferCreateFailed,
+    HarfBuzzAllocationFailed,
 };
 
 /// Zig-native wrapper for hb_direction_t.
@@ -48,10 +48,10 @@ pub const Buffer = struct {
     pub const GlyphPosition = c.hb_glyph_position_t;
 
     pub fn create() Error!Buffer {
-        const buf = c.hb_buffer_create() orelse return error.BufferCreateFailed;
+        const buf = c.hb_buffer_create() orelse return error.HarfBuzzBufferCreateFailed;
         if (c.hb_buffer_allocation_successful(buf) == 0) {
             c.hb_buffer_destroy(buf);
-            return error.AllocationFailed;
+            return error.HarfBuzzAllocationFailed;
         }
         return .{ .handle = buf };
     }
@@ -118,7 +118,7 @@ pub const Font = struct {
     /// so the caller must keep the FT_Face alive for the lifetime of this Font.
     pub fn createFromFtFace(ft_face_raw: *anyopaque) !Font {
         const ft_face: c.FT_Face = @ptrCast(@alignCast(ft_face_raw));
-        const hb_font = c.hb_ft_font_create_referenced(ft_face) orelse return error.AllocationFailed;
+        const hb_font = c.hb_ft_font_create_referenced(ft_face) orelse return error.HarfBuzzAllocationFailed;
         return .{ .handle = hb_font };
     }
 
@@ -213,7 +213,7 @@ pub const GpuDraw = struct {
     handle: *c.hb_gpu_draw_t,
 
     pub fn create() !GpuDraw {
-        const draw = c.hb_gpu_draw_create_or_fail() orelse return error.AllocationFailed;
+        const draw = c.hb_gpu_draw_create_or_fail() orelse return error.HarfBuzzAllocationFailed;
         return .{ .handle = draw };
     }
 
@@ -228,7 +228,7 @@ pub const GpuDraw = struct {
 
     /// Encode the accumulated drawing into a Slug-format blob.
     pub fn encode(self: GpuDraw) !Blob {
-        const blob = c.hb_gpu_draw_encode(self.handle) orelse return error.AllocationFailed;
+        const blob = c.hb_gpu_draw_encode(self.handle) orelse return error.HarfBuzzAllocationFailed;
         return .{ .handle = blob };
     }
 
