@@ -43,7 +43,7 @@ const line_height: f32 = 32;
 const margin: f32 = 40;
 const content_width: f32 = 1100;
 const content_height: f32 = @as(f32, @floatFromInt(lorem_lines.len)) * line_height + 2 * margin;
-const content_cx: f32 = margin + content_width / 2;
+const content_cx: f32 = content_width / 2;
 const content_cy: f32 = content_height / 2;
 
 /// Compute scale + pan that centers the text block at 90% of viewport.
