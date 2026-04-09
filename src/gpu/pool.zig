@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const log = std.log.scoped(.pool);
+
 /// A sub-allocation within the pool: byte offset and size.
 pub const Allocation = struct {
     offset: u32,
@@ -70,7 +72,10 @@ pub const PoolAllocator = struct {
         self.free_blocks.append(self.allocator, .{
             .offset = allocation.offset,
             .size = aligned_size,
-        }) catch return; // silently drop if free-list append OOMs (pool space leaked, not corrupted)
+        }) catch {
+            log.warn("free-list append OOM: leaked {d} bytes at offset {d}", .{ aligned_size, allocation.offset });
+            return;
+        };
     }
 
     /// Reset the pool to empty. All prior allocations become invalid.
