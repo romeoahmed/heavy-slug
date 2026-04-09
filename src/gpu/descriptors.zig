@@ -126,11 +126,12 @@ pub const DescriptorTable = struct {
     slots: SlotAllocator,
 
     pub fn init(
-        device: vk.Device,
-        dispatch: gpu_context.DeviceDispatch,
+        ctx: gpu_context.VulkanContext,
         allocator: std.mem.Allocator,
         slot_capacity: u32,
     ) !DescriptorTable {
+        const device = ctx.device;
+        const dispatch = ctx.dispatch;
         std.debug.assert(slot_capacity > 0);
         std.debug.assert(slot_capacity <= max_glyph_descriptors);
         // -- Create descriptor set layout --

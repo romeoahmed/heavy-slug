@@ -46,8 +46,14 @@ const content_height: f32 = @as(f32, @floatFromInt(lorem_lines.len)) * line_heig
 const content_cx: f32 = content_width / 2;
 const content_cy: f32 = content_height / 2;
 
+const ViewState = struct {
+    scale: f32,
+    pan_x: f32,
+    pan_y: f32,
+};
+
 /// Compute scale + pan that centers the text block at 90% of viewport.
-fn contentFit(vw: f32, vh: f32) struct { scale: f32, pan_x: f32, pan_y: f32 } {
+fn contentFit(vw: f32, vh: f32) ViewState {
     const s = 0.9 * @min(vw / content_width, vh / content_height);
     return .{
         .scale = s,
@@ -57,12 +63,12 @@ fn contentFit(vw: f32, vh: f32) struct { scale: f32, pan_x: f32, pan_y: f32 } {
 }
 
 /// Orthographic projection with pan and zoom baked in.
-fn viewProjection(w: f32, h: f32, scale: f32, pan_x: f32, pan_y: f32) [4][4]f32 {
+fn viewProjection(w: f32, h: f32, view: ViewState) [4][4]f32 {
     return .{
-        .{ 2.0 * scale / w, 0, 0, 0 },
-        .{ 0, -2.0 * scale / h, 0, 0 },
+        .{ 2.0 * view.scale / w, 0, 0, 0 },
+        .{ 0, -2.0 * view.scale / h, 0, 0 },
         .{ 0, 0, 1, 0 },
-        .{ -1.0 + 2.0 * scale * pan_x / w, 1.0 + 2.0 * scale * pan_y / h, 0, 1 },
+        .{ -1.0 + 2.0 * view.scale * view.pan_x / w, 1.0 + 2.0 * view.scale * view.pan_y / h, 0, 1 },
     };
 }
 
@@ -93,7 +99,7 @@ pub fn main() !void {
     defer gctx.deinit();
     try gctx.createSwapchain(window);
 
-    var text_renderer = try renderer_mod.TextRenderer.initFromContext(
+    var text_renderer = try renderer_mod.TextRenderer.init(
         gctx.vulkan_ctx,
         gctx.surface_format.format,
         allocator,
@@ -105,9 +111,7 @@ pub fn main() !void {
     const font_ui = try text_renderer.loadFont("assets/Inter-Regular.otf", 24);
 
     // --- View state ---
-    var scale: f32 = 1.0;
-    var pan_x: f32 = 0;
-    var pan_y: f32 = 0;
+    var view = ViewState{ .scale = 1.0, .pan_x = 0, .pan_y = 0 };
     var view_initialized = false;
     var dark_mode = false;
     var b_was_pressed = false;
@@ -167,10 +171,7 @@ pub fn main() !void {
 
         // Content-fit on first frame.
         if (!view_initialized and w > 0 and h > 0) {
-            const fit = contentFit(w, h);
-            scale = fit.scale;
-            pan_x = fit.pan_x;
-            pan_y = fit.pan_y;
+            view = contentFit(w, h);
             view_initialized = true;
         }
 
@@ -190,10 +191,7 @@ pub fn main() !void {
         {
             const pressed = glfw.getKey(window, glfw.KEY_R);
             if (pressed and !r_was_pressed) {
-                const fit = contentFit(w, h);
-                scale = fit.scale;
-                pan_x = fit.pan_x;
-                pan_y = fit.pan_y;
+                view = contentFit(w, h);
                 rotation_angle = 0;
                 animate = false;
             }
@@ -208,15 +206,15 @@ pub fn main() !void {
         }
 
         // Arrow key pan.
-        const pan_speed: f32 = 400 / scale;
-        if (glfw.getKey(window, glfw.KEY_UP)) pan_y += pan_speed * dt;
-        if (glfw.getKey(window, glfw.KEY_DOWN)) pan_y -= pan_speed * dt;
-        if (glfw.getKey(window, glfw.KEY_LEFT)) pan_x += pan_speed * dt;
-        if (glfw.getKey(window, glfw.KEY_RIGHT)) pan_x -= pan_speed * dt;
+        const pan_speed: f32 = 400 / view.scale;
+        if (glfw.getKey(window, glfw.KEY_UP)) view.pan_y += pan_speed * dt;
+        if (glfw.getKey(window, glfw.KEY_DOWN)) view.pan_y -= pan_speed * dt;
+        if (glfw.getKey(window, glfw.KEY_LEFT)) view.pan_x += pan_speed * dt;
+        if (glfw.getKey(window, glfw.KEY_RIGHT)) view.pan_x -= pan_speed * dt;
 
         // +/- keyboard zoom.
-        if (glfw.getKey(window, glfw.KEY_EQUAL)) scale *= 1.0 + 2.0 * dt;
-        if (glfw.getKey(window, glfw.KEY_MINUS)) scale *= 1.0 - 2.0 * dt;
+        if (glfw.getKey(window, glfw.KEY_EQUAL)) view.scale *= 1.0 + 2.0 * dt;
+        if (glfw.getKey(window, glfw.KEY_MINUS)) view.scale *= 1.0 - 2.0 * dt;
 
         // Scroll zoom — around cursor position.
         const scroll = glfw.consumeScrollDelta();
@@ -224,14 +222,14 @@ pub fn main() !void {
             const cur = glfw.getCursorPos(window);
             const sx: f32 = @floatCast(cur[0]);
             const sy: f32 = @floatCast(cur[1]);
-            const old_scale = scale;
+            const old_scale = view.scale;
             const factor: f32 = @floatCast(std.math.pow(f64, 1.1, scroll));
-            scale *= factor;
+            view.scale *= factor;
             // Adjust pan so the world point under the cursor stays fixed.
-            const inv_new = 1.0 / scale;
+            const inv_new = 1.0 / view.scale;
             const inv_old = 1.0 / old_scale;
-            pan_x += sx * (inv_new - inv_old);
-            pan_y += (sy - h) * (inv_new - inv_old);
+            view.pan_x += sx * (inv_new - inv_old);
+            view.pan_y += (sy - h) * (inv_new - inv_old);
         }
 
         // --- Mouse ---
@@ -255,8 +253,8 @@ pub fn main() !void {
                 if (total_dx * total_dx + total_dy * total_dy > 25) dragged = true;
             }
             if (dragged) {
-                pan_x += @as(f32, @floatCast(dx)) / scale;
-                pan_y += @as(f32, @floatCast(dy)) / scale;
+                view.pan_x += @as(f32, @floatCast(dx)) / view.scale;
+                view.pan_y += @as(f32, @floatCast(dy)) / view.scale;
             }
         }
 
@@ -330,7 +328,7 @@ pub fn main() !void {
         // Rotation baked into the projection via Motor.toMat() so all glyphs
         // rotate as one rigid block. The mesh shader's dilation uses column
         // vector lengths to handle the non-diagonal projection correctly.
-        const vp = viewProjection(w, h, scale, pan_x, pan_y);
+        const vp = viewProjection(w, h, view);
         const rot_motor = pga.Motor.fromRotationAbout(rotation_angle, content_cx, content_cy);
         const proj = rot_motor.toMat(vp);
 

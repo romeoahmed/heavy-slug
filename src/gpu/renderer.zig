@@ -87,12 +87,12 @@ fn findMemoryType(
 }
 
 fn createMappedBuffer(
-    device: vk.Device,
-    dispatch: gpu_context.DeviceDispatch,
+    ctx: gpu_context.VulkanContext,
     size: vk.DeviceSize,
     usage: vk.BufferUsageFlags,
-    memory_properties: vk.PhysicalDeviceMemoryProperties,
 ) !MappedBuffer {
+    const device = ctx.device;
+    const dispatch = ctx.dispatch;
     const buffer_ci = vk.BufferCreateInfo{
         .s_type = .buffer_create_info,
         .flags = .{},
@@ -107,7 +107,7 @@ fn createMappedBuffer(
     const mem_req = dispatch.getBufferMemoryRequirements(device, buffer);
 
     const mem_type_index = findMemoryType(
-        memory_properties,
+        ctx.memory_properties,
         mem_req.memory_type_bits,
         .{ .host_visible_bit = true, .host_coherent_bit = true },
     ) orelse {
@@ -197,17 +197,16 @@ pub const TextRenderer = struct {
     allocator: std.mem.Allocator,
 
     pub fn init(
-        device: vk.Device,
-        dispatch: gpu_context.DeviceDispatch,
+        ctx: gpu_context.VulkanContext,
         color_format: vk.Format,
-        memory_properties: vk.PhysicalDeviceMemoryProperties,
         allocator: std.mem.Allocator,
         options: InitOptions,
     ) !TextRenderer {
+        const device = ctx.device;
+        const dispatch = ctx.dispatch;
         // 1. Descriptor table
         var desc_table = try descriptors.DescriptorTable.init(
-            device,
-            dispatch,
+            ctx,
             allocator,
             options.max_glyph_descriptors,
         );
@@ -215,8 +214,7 @@ pub const TextRenderer = struct {
 
         // 2. Pipeline
         var pip = try pipeline_mod.Pipeline.init(
-            device,
-            dispatch,
+            ctx,
             desc_table.layout,
             color_format,
         );
@@ -244,11 +242,9 @@ pub const TextRenderer = struct {
 
         // 5. Pool buffer (glyph blob storage, GPU reads as storage buffer)
         const pool_buf = try createMappedBuffer(
-            device,
-            dispatch,
+            ctx,
             options.pool_buffer_size,
             .{ .storage_buffer_bit = true },
-            memory_properties,
         );
         errdefer destroyMappedBuffer(pool_buf, device, dispatch);
 
@@ -256,11 +252,9 @@ pub const TextRenderer = struct {
         const cmd_buf_size = @as(vk.DeviceSize, options.max_glyphs_per_frame) *
             @sizeOf(descriptors.GlyphCommand);
         const cmd_buf = try createMappedBuffer(
-            device,
-            dispatch,
+            ctx,
             cmd_buf_size,
             .{ .storage_buffer_bit = true },
-            memory_properties,
         );
         errdefer destroyMappedBuffer(cmd_buf, device, dispatch);
 
@@ -293,19 +287,9 @@ pub const TextRenderer = struct {
             .flush_base = 0,
             .max_glyphs_per_frame = options.max_glyphs_per_frame,
             .shape_buffer = shape_buffer,
-            .memory_properties = memory_properties,
+            .memory_properties = ctx.memory_properties,
             .allocator = allocator,
         };
-    }
-
-    /// Initialize from a VulkanContext (convenience wrapper).
-    pub fn initFromContext(
-        ctx: gpu_context.VulkanContext,
-        color_format: vk.Format,
-        allocator: std.mem.Allocator,
-        options: InitOptions,
-    ) !TextRenderer {
-        return init(ctx.device, ctx.dispatch, color_format, ctx.memory_properties, allocator, options);
     }
 
     /// Load a font from a file path at the given pixel size.
@@ -662,7 +646,7 @@ test "TextRenderer type compiles with expected fields" {
     try std.testing.expect(@hasField(TextRenderer, "shape_buffer"));
 }
 
-test "TextRenderer.initFromContext compiles" {
+test "TextRenderer.init compiles" {
     // Type-check only — cannot call without a live Vulkan device
-    _ = @TypeOf(TextRenderer.initFromContext);
+    _ = @TypeOf(TextRenderer.init);
 }

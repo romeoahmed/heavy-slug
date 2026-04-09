@@ -11,11 +11,12 @@ pub const Pipeline = struct {
     pipeline: vk.Pipeline,
 
     pub fn init(
-        device: vk.Device,
-        dispatch: gpu_context.DeviceDispatch,
+        ctx: gpu_context.VulkanContext,
         descriptor_set_layout: vk.DescriptorSetLayout,
         color_format: vk.Format,
     ) !Pipeline {
+        const device = ctx.device;
+        const dispatch = ctx.dispatch;
         // --- Pipeline layout ---
         const push_range = vk.PushConstantRange{
             .stage_flags = .{

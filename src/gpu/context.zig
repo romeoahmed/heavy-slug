@@ -30,7 +30,7 @@ pub const InstanceDispatch = vk.InstanceWrapperWithCustomDispatch(HeavySlugInsta
 /// 1. Call `VulkanContext.checkDeviceSupport(physical_device, instance_dispatch)` to validate
 /// 2. Create a VkDevice with all extensions in `VulkanContext.required_device_extensions`
 /// 3. Call `VulkanContext.init(physical_device, device, instance_dispatch, get_device_proc_addr)`
-/// 4. Use `TextRenderer.initFromContext(ctx, ...)` to create a renderer
+/// 4. Use `TextRenderer.init(ctx, ...)` to create a renderer
 pub const VulkanContext = struct {
     device: vk.Device,
     dispatch: DeviceDispatch,
