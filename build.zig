@@ -185,10 +185,10 @@ fn buildGlfw(
     lib.root_module.addIncludePath(vk_headers.path("include"));
 
     const os = target.result.os.tag;
-    const platform_flag: []const u8 = switch (os) {
-        .windows => "-D_GLFW_WIN32",
-        .linux => "-D_GLFW_X11",
-        .macos => "-D_GLFW_COCOA",
+    const platform_flags: []const []const u8 = switch (os) {
+        .windows => &.{"-D_GLFW_WIN32"},
+        .linux => &.{ "-D_GLFW_WAYLAND", "-DHAVE_MEMFD_CREATE" },
+        .macos => &.{"-D_GLFW_COCOA"},
         else => @panic("unsupported OS for GLFW"),
     };
 
@@ -209,7 +209,7 @@ fn buildGlfw(
             "src/null_monitor.c",
             "src/null_window.c",
         },
-        .flags = &.{platform_flag},
+        .flags = platform_flags,
     });
 
     switch (os) {
@@ -226,29 +226,36 @@ fn buildGlfw(
                     "src/win32_window.c",
                     "src/wgl_context.c",
                 },
-                .flags = &.{platform_flag},
+                .flags = platform_flags,
             });
             lib.root_module.linkSystemLibrary("gdi32", .{});
             lib.root_module.linkSystemLibrary("user32", .{});
             lib.root_module.linkSystemLibrary("shell32", .{});
         },
         .linux => {
+            // Generate Wayland protocol headers via wayland-scanner
+            const wl_protos = generateWaylandProtocols(b, glfw_dep);
+            lib.root_module.addIncludePath(wl_protos);
+
             lib.root_module.addCSourceFiles(.{
                 .root = glfw_dep.path(""),
                 .files = &.{
-                    "src/x11_init.c",
-                    "src/x11_monitor.c",
-                    "src/x11_window.c",
+                    "src/wl_init.c",
+                    "src/wl_monitor.c",
+                    "src/wl_window.c",
                     "src/xkb_unicode.c",
                     "src/posix_module.c",
                     "src/posix_poll.c",
                     "src/posix_thread.c",
                     "src/posix_time.c",
-                    "src/glx_context.c",
                     "src/linux_joystick.c",
                 },
-                .flags = &.{platform_flag},
+                .flags = platform_flags,
             });
+            lib.root_module.linkSystemLibrary("wayland-client", .{});
+            lib.root_module.linkSystemLibrary("wayland-cursor", .{});
+            lib.root_module.linkSystemLibrary("wayland-egl", .{});
+            lib.root_module.linkSystemLibrary("xkbcommon", .{});
         },
         else => {},
     }
@@ -353,4 +360,45 @@ fn buildHarfbuzz(
     });
 
     return lib;
+}
+
+fn generateWaylandProtocols(
+    b: *std.Build,
+    glfw_dep: *std.Build.Dependency,
+) std.Build.LazyPath {
+    const protocol_xmls = [_][]const u8{
+        "wayland.xml",
+        "viewporter.xml",
+        "xdg-shell.xml",
+        "idle-inhibit-unstable-v1.xml",
+        "pointer-constraints-unstable-v1.xml",
+        "relative-pointer-unstable-v1.xml",
+        "fractional-scale-v1.xml",
+        "xdg-activation-v1.xml",
+        "xdg-decoration-unstable-v1.xml",
+    };
+
+    const wf = b.addWriteFiles();
+
+    for (protocol_xmls) |xml| {
+        // Strip .xml suffix to get the protocol name
+        const name = xml[0 .. xml.len - 4];
+
+        // Generate client-protocol.h (client-header)
+        const header_cmd = b.addSystemCommand(&.{"wayland-scanner"});
+        header_cmd.addArg("client-header");
+        header_cmd.addFileArg(glfw_dep.path(b.fmt("deps/wayland/{s}", .{xml})));
+        const header = header_cmd.addOutputFileArg(b.fmt("{s}-client-protocol.h", .{name}));
+
+        // Generate client-protocol-code.h (private-code)
+        const code_cmd = b.addSystemCommand(&.{"wayland-scanner"});
+        code_cmd.addArg("private-code");
+        code_cmd.addFileArg(glfw_dep.path(b.fmt("deps/wayland/{s}", .{xml})));
+        const code = code_cmd.addOutputFileArg(b.fmt("{s}-client-protocol-code.h", .{name}));
+
+        _ = wf.addCopyFile(header, b.fmt("{s}-client-protocol.h", .{name}));
+        _ = wf.addCopyFile(code, b.fmt("{s}-client-protocol-code.h", .{name}));
+    }
+
+    return wf.getDirectory();
 }
