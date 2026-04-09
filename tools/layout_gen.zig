@@ -1,8 +1,8 @@
 /// tools/layout_gen.zig
 ///
 /// Reads a slangc -reflection-json output, extracts GlyphCommand and
-/// PushConstants struct field offsets/sizes, and emits a Zig source file
-/// with pub constants for CPU/GPU layout validation.
+/// PushConstants struct definitions, and emits a Zig source file with
+/// `extern struct` types for direct use on the CPU side.
 ///
 /// Usage:
 ///   zig run tools/layout_gen.zig -- <reflection.json>
@@ -13,10 +13,31 @@ const std = @import("std");
 // Data types
 // ---------------------------------------------------------------------------
 
+pub const ScalarType = enum {
+    float32,
+    uint32,
+    int32,
+
+    fn zigName(self: ScalarType) []const u8 {
+        return switch (self) {
+            .float32 => "f32",
+            .uint32 => "u32",
+            .int32 => "i32",
+        };
+    }
+};
+
+pub const FieldType = union(enum) {
+    scalar: ScalarType,
+    vector: struct { count: u32, element: ScalarType },
+    matrix: struct { rows: u32, cols: u32, element: ScalarType },
+};
+
 pub const FieldLayout = struct {
     name: []const u8,
     offset: u32,
     size: u32,
+    field_type: FieldType,
 };
 
 pub const StructLayout = struct {
@@ -29,37 +50,95 @@ pub const StructLayout = struct {
 // Memory management
 // ---------------------------------------------------------------------------
 
-/// Free the name and fields owned by a single StructLayout, but not the struct itself.
 fn freeStructContents(allocator: std.mem.Allocator, s: *const StructLayout) void {
     allocator.free(s.name);
     for (s.fields) |f| allocator.free(f.name);
     allocator.free(s.fields);
 }
 
-/// Free all memory owned by a []StructLayout returned from parseReflection.
 pub fn freeStructs(allocator: std.mem.Allocator, structs: []StructLayout) void {
     for (structs) |*s| freeStructContents(allocator, s);
     allocator.free(structs);
 }
 
 // ---------------------------------------------------------------------------
-// Parsing
+// Type parsing
 // ---------------------------------------------------------------------------
 
-/// Extract a StructLayout from a JSON struct-kind object.
-/// `obj` must be a .object with "name" and "fields" keys.
-/// `size_override` provides the total struct size when known externally
-/// (e.g. from elementVarLayout.binding.size for push-constant buffers).
+fn parseScalarType(str: []const u8) !ScalarType {
+    if (std.mem.eql(u8, str, "float32")) return .float32;
+    if (std.mem.eql(u8, str, "uint32")) return .uint32;
+    if (std.mem.eql(u8, str, "int32")) return .int32;
+    return error.UnsupportedScalarType;
+}
+
+fn getJsonString(obj: std.json.ObjectMap, key: []const u8) ![]const u8 {
+    const val = obj.get(key) orelse return error.MissingKey;
+    return switch (val) {
+        .string => |s| s,
+        else => error.NotString,
+    };
+}
+
+fn getJsonInt(obj: std.json.ObjectMap, key: []const u8) !u32 {
+    const val = obj.get(key) orelse return error.MissingKey;
+    return switch (val) {
+        .integer => |i| @intCast(i),
+        else => error.NotInteger,
+    };
+}
+
+fn getJsonObject(obj: std.json.ObjectMap, key: []const u8) !std.json.ObjectMap {
+    const val = obj.get(key) orelse return error.MissingKey;
+    return switch (val) {
+        .object => |o| o,
+        else => error.NotObject,
+    };
+}
+
+fn parseFieldType(type_obj: std.json.ObjectMap) !FieldType {
+    const kind = try getJsonString(type_obj, "kind");
+
+    if (std.mem.eql(u8, kind, "scalar")) {
+        const scalar_type = try getJsonString(type_obj, "scalarType");
+        return .{ .scalar = try parseScalarType(scalar_type) };
+    }
+
+    if (std.mem.eql(u8, kind, "vector")) {
+        const count = try getJsonInt(type_obj, "elementCount");
+        const elem_type_obj = try getJsonObject(type_obj, "elementType");
+        const scalar_type = try getJsonString(elem_type_obj, "scalarType");
+        return .{ .vector = .{
+            .count = count,
+            .element = try parseScalarType(scalar_type),
+        } };
+    }
+
+    if (std.mem.eql(u8, kind, "matrix")) {
+        const rows = try getJsonInt(type_obj, "rowCount");
+        const cols = try getJsonInt(type_obj, "columnCount");
+        const elem_type_obj = try getJsonObject(type_obj, "elementType");
+        const scalar_type = try getJsonString(elem_type_obj, "scalarType");
+        return .{ .matrix = .{
+            .rows = rows,
+            .cols = cols,
+            .element = try parseScalarType(scalar_type),
+        } };
+    }
+
+    return error.UnsupportedTypeKind;
+}
+
+// ---------------------------------------------------------------------------
+// Struct extraction
+// ---------------------------------------------------------------------------
+
 fn extractStruct(
     allocator: std.mem.Allocator,
     obj: std.json.ObjectMap,
     size_override: ?u32,
 ) !StructLayout {
-    const name_val = obj.get("name") orelse return error.MissingName;
-    const name_str = switch (name_val) {
-        .string => |s| s,
-        else => return error.NameNotString,
-    };
+    const name_str = try getJsonString(obj, "name");
 
     const fields_val = obj.get("fields") orelse return error.MissingFields;
     const fields_arr = switch (fields_val) {
@@ -81,33 +160,13 @@ fn extractStruct(
             else => return error.FieldNotObject,
         };
 
-        const fname_val = field_obj.get("name") orelse return error.FieldMissingName;
-        const fname_str = switch (fname_val) {
-            .string => |s| s,
-            else => return error.FieldNameNotString,
-        };
+        const fname_str = try getJsonString(field_obj, "name");
+        const fbinding_obj = try getJsonObject(field_obj, "binding");
+        const offset = try getJsonInt(fbinding_obj, "offset");
+        const size = try getJsonInt(fbinding_obj, "size");
 
-        // binding: { "kind": "uniform", "offset": N, "size": N, ... }
-        const fbinding_val = field_obj.get("binding") orelse return error.FieldMissingBinding;
-        const fbinding_obj = switch (fbinding_val) {
-            .object => |o| o,
-            else => return error.FieldBindingNotObject,
-        };
-
-        const offset = blk: {
-            const v = fbinding_obj.get("offset") orelse return error.FieldMissingOffset;
-            break :blk switch (v) {
-                .integer => |i| @as(u32, @intCast(i)),
-                else => return error.FieldOffsetNotInteger,
-            };
-        };
-        const size = blk: {
-            const v = fbinding_obj.get("size") orelse return error.FieldMissingSize;
-            break :blk switch (v) {
-                .integer => |i| @as(u32, @intCast(i)),
-                else => return error.FieldSizeNotInteger,
-            };
-        };
+        const ftype_obj = try getJsonObject(field_obj, "type");
+        const field_type = try parseFieldType(ftype_obj);
 
         const end = offset + size;
         if (end > computed_size) computed_size = end;
@@ -119,8 +178,16 @@ fn extractStruct(
             .name = name_owned,
             .offset = offset,
             .size = size,
+            .field_type = field_type,
         });
     }
+
+    // Sort by offset for correct padding detection
+    std.mem.sort(FieldLayout, field_list.items, {}, struct {
+        fn f(_: void, a: FieldLayout, b: FieldLayout) bool {
+            return a.offset < b.offset;
+        }
+    }.f);
 
     const total_size = size_override orelse computed_size;
     const name_owned = try allocator.dupe(u8, name_str);
@@ -133,8 +200,8 @@ fn extractStruct(
     };
 }
 
-/// Parse a slangc reflection JSON blob and return owned StructLayout slices
-/// for GlyphCommand and PushConstants. Caller frees via freeStructs().
+/// Parse a slangc reflection JSON blob and return owned StructLayout slices.
+/// Caller frees via freeStructs().
 pub fn parseReflection(allocator: std.mem.Allocator, json_bytes: []const u8) ![]StructLayout {
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_bytes, .{});
     defer parsed.deinit();
@@ -162,38 +229,16 @@ pub fn parseReflection(allocator: std.mem.Allocator, json_bytes: []const u8) ![]
             else => continue,
         };
 
-        const type_val = param_obj.get("type") orelse continue;
-        const type_obj = switch (type_val) {
-            .object => |o| o,
-            else => continue,
-        };
-
-        const kind_val = type_obj.get("kind") orelse continue;
-        const kind_str = switch (kind_val) {
-            .string => |s| s,
-            else => continue,
-        };
+        const type_obj = getJsonObject(param_obj, "type") catch continue;
+        const kind_str = getJsonString(type_obj, "kind") catch continue;
 
         if (std.mem.eql(u8, kind_str, "resource")) {
             // GlyphCommand from StructuredBuffer<GlyphCommand>
-            const base_shape_val = type_obj.get("baseShape") orelse continue;
-            const base_shape = switch (base_shape_val) {
-                .string => |s| s,
-                else => continue,
-            };
+            const base_shape = getJsonString(type_obj, "baseShape") catch continue;
             if (!std.mem.eql(u8, base_shape, "structuredBuffer")) continue;
 
-            const result_type_val = type_obj.get("resultType") orelse continue;
-            const result_type_obj = switch (result_type_val) {
-                .object => |o| o,
-                else => continue,
-            };
-
-            const inner_kind_val = result_type_obj.get("kind") orelse continue;
-            const inner_kind = switch (inner_kind_val) {
-                .string => |s| s,
-                else => continue,
-            };
+            const result_type_obj = getJsonObject(type_obj, "resultType") catch continue;
+            const inner_kind = getJsonString(result_type_obj, "kind") catch continue;
             if (!std.mem.eql(u8, inner_kind, "struct")) continue;
 
             const s = try extractStruct(allocator, result_type_obj, null);
@@ -201,38 +246,14 @@ pub fn parseReflection(allocator: std.mem.Allocator, json_bytes: []const u8) ![]
             try result.append(allocator, s);
         } else if (std.mem.eql(u8, kind_str, "constantBuffer")) {
             // PushConstants from push constant buffer
-            const elem_layout_val = type_obj.get("elementVarLayout") orelse continue;
-            const elem_layout_obj = switch (elem_layout_val) {
-                .object => |o| o,
-                else => continue,
-            };
-
-            const inner_type_val = elem_layout_obj.get("type") orelse continue;
-            const inner_type_obj = switch (inner_type_val) {
-                .object => |o| o,
-                else => continue,
-            };
-
-            const inner_kind_val = inner_type_obj.get("kind") orelse continue;
-            const inner_kind = switch (inner_kind_val) {
-                .string => |s| s,
-                else => continue,
-            };
+            const elem_layout_obj = getJsonObject(type_obj, "elementVarLayout") catch continue;
+            const inner_type_obj = getJsonObject(elem_layout_obj, "type") catch continue;
+            const inner_kind = getJsonString(inner_type_obj, "kind") catch continue;
             if (!std.mem.eql(u8, inner_kind, "struct")) continue;
 
-            // Total size comes from elementVarLayout.binding.size
-            const elem_binding_val = elem_layout_obj.get("binding") orelse continue;
-            const elem_binding_obj = switch (elem_binding_val) {
-                .object => |o| o,
-                else => continue,
-            };
-            const size_override: ?u32 = blk: {
-                const sv = elem_binding_obj.get("size") orelse break :blk null;
-                break :blk switch (sv) {
-                    .integer => |i| @as(u32, @intCast(i)),
-                    else => null,
-                };
-            };
+            // Total size from elementVarLayout.binding.size
+            const elem_binding_obj = getJsonObject(elem_layout_obj, "binding") catch continue;
+            const size_override: ?u32 = getJsonInt(elem_binding_obj, "size") catch null;
 
             const s = try extractStruct(allocator, inner_type_obj, size_override);
             errdefer freeStructContents(allocator, &s);
@@ -247,8 +268,22 @@ pub fn parseReflection(allocator: std.mem.Allocator, json_bytes: []const u8) ![]
 // Code generation
 // ---------------------------------------------------------------------------
 
-/// Emit a Zig source file of pub constants to `writer`.
-/// `writer` must be a `*std.Io.Writer` (from File.writer or Allocating.writer).
+fn writeZigType(writer: *std.Io.Writer, ft: FieldType) !void {
+    switch (ft) {
+        .scalar => |s| try writer.writeAll(s.zigName()),
+        .vector => |v| try writer.print("[{d}]{s}", .{ v.count, v.element.zigName() }),
+        .matrix => |m| try writer.print("[{d}][{d}]{s}", .{ m.cols, m.rows, m.element.zigName() }),
+    }
+}
+
+fn writeDefault(writer: *std.Io.Writer, ft: FieldType) !void {
+    switch (ft) {
+        .scalar => try writer.writeAll(" = 0"),
+        .vector => |v| try writer.print(" = .{{0}} ** {d}", .{v.count}),
+        .matrix => |m| try writer.print(" = .{{.{{0}} ** {d}}} ** {d}", .{ m.rows, m.cols }),
+    }
+}
+
 pub fn emitZig(writer: *std.Io.Writer, structs: []const StructLayout) !void {
     try writer.writeAll(
         \\// AUTO-GENERATED by tools/layout_gen.zig — DO NOT EDIT.
@@ -257,11 +292,39 @@ pub fn emitZig(writer: *std.Io.Writer, structs: []const StructLayout) !void {
     );
 
     for (structs) |s| {
-        try writer.print("\npub const {s}_size: u32 = {};\n", .{ s.name, s.size });
+        try writer.print("\npub const {s} = extern struct {{\n", .{s.name});
+
+        var cursor: u32 = 0;
+        var pad_index: u32 = 0;
+
         for (s.fields) |f| {
-            try writer.print("pub const {s}_{s}_offset: u32 = {};\n", .{ s.name, f.name, f.offset });
-            try writer.print("pub const {s}_{s}_size: u32 = {};\n", .{ s.name, f.name, f.size });
+            // Insert gap padding if needed
+            if (f.offset > cursor) {
+                const gap = f.offset - cursor;
+                try writer.print("    _gap{d}: [{d}]u8 = .{{0}} ** {d},\n", .{ pad_index, gap, gap });
+                pad_index += 1;
+            }
+
+            // Field declaration
+            try writer.print("    {s}: ", .{f.name});
+            try writeZigType(writer, f.field_type);
+
+            // Fields starting with '_' get zero defaults
+            if (f.name.len > 0 and f.name[0] == '_') {
+                try writeDefault(writer, f.field_type);
+            }
+
+            try writer.writeAll(",\n");
+            cursor = f.offset + f.size;
         }
+
+        // Tail padding if struct size exceeds last field end
+        if (s.size > cursor) {
+            const gap = s.size - cursor;
+            try writer.print("    _tail{d}: [{d}]u8 = .{{0}} ** {d},\n", .{ pad_index, gap, gap });
+        }
+
+        try writer.writeAll("};\n");
     }
 }
 
@@ -311,7 +374,7 @@ pub fn main(init: std.process.Init) !void {
 // Tests
 // ---------------------------------------------------------------------------
 
-test "parseReflection extracts GlyphCommand fields" {
+test "parseReflection extracts GlyphCommand with field types" {
     const json =
         \\{
         \\  "parameters": [
@@ -327,12 +390,12 @@ test "parseReflection extracts GlyphCommand fields" {
         \\          "fields": [
         \\            {
         \\              "name": "motor",
-        \\              "type": {"kind": "vector"},
+        \\              "type": {"kind": "vector", "elementCount": 4, "elementType": {"kind": "scalar", "scalarType": "float32"}},
         \\              "binding": {"kind": "uniform", "offset": 0, "size": 16, "elementStride": 4}
         \\            },
         \\            {
         \\              "name": "flags",
-        \\              "type": {"kind": "scalar"},
+        \\              "type": {"kind": "scalar", "scalarType": "uint32"},
         \\              "binding": {"kind": "uniform", "offset": 52, "size": 4, "elementStride": 0}
         \\            }
         \\          ]
@@ -349,22 +412,22 @@ test "parseReflection extracts GlyphCommand fields" {
 
     try std.testing.expectEqual(@as(usize, 1), structs.len);
     try std.testing.expectEqualStrings("GlyphCommand", structs[0].name);
-    // size is computed as max(offset+size) across fields: max(0+16, 52+4) = 56
     try std.testing.expectEqual(@as(u32, 56), structs[0].size);
     try std.testing.expectEqual(@as(usize, 2), structs[0].fields.len);
 
-    // first field: motor
+    // motor: [4]f32
     try std.testing.expectEqualStrings("motor", structs[0].fields[0].name);
     try std.testing.expectEqual(@as(u32, 0), structs[0].fields[0].offset);
     try std.testing.expectEqual(@as(u32, 16), structs[0].fields[0].size);
+    try std.testing.expectEqual(FieldType{ .vector = .{ .count = 4, .element = .float32 } }, structs[0].fields[0].field_type);
 
-    // second field: flags
+    // flags: u32
     try std.testing.expectEqualStrings("flags", structs[0].fields[1].name);
     try std.testing.expectEqual(@as(u32, 52), structs[0].fields[1].offset);
-    try std.testing.expectEqual(@as(u32, 4), structs[0].fields[1].size);
+    try std.testing.expectEqual(FieldType{ .scalar = .uint32 }, structs[0].fields[1].field_type);
 }
 
-test "parseReflection extracts PushConstants from constantBuffer" {
+test "parseReflection extracts PushConstants with matrix type" {
     const json =
         \\{
         \\  "parameters": [
@@ -380,12 +443,12 @@ test "parseReflection extracts PushConstants from constantBuffer" {
         \\            "fields": [
         \\              {
         \\                "name": "proj",
-        \\                "type": {"kind": "matrix"},
+        \\                "type": {"kind": "matrix", "rowCount": 4, "columnCount": 4, "elementType": {"kind": "scalar", "scalarType": "float32"}},
         \\                "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
         \\              },
         \\              {
         \\                "name": "glyph_count",
-        \\                "type": {"kind": "scalar"},
+        \\                "type": {"kind": "scalar", "scalarType": "uint32"},
         \\                "binding": {"kind": "uniform", "offset": 72, "size": 4, "elementStride": 0}
         \\              }
         \\            ]
@@ -404,16 +467,13 @@ test "parseReflection extracts PushConstants from constantBuffer" {
 
     try std.testing.expectEqual(@as(usize, 1), structs.len);
     try std.testing.expectEqualStrings("PushConstants", structs[0].name);
-    // size comes from elementVarLayout.binding.size = 80
     try std.testing.expectEqual(@as(u32, 80), structs[0].size);
-    try std.testing.expectEqual(@as(usize, 2), structs[0].fields.len);
 
-    try std.testing.expectEqualStrings("proj", structs[0].fields[0].name);
-    try std.testing.expectEqual(@as(u32, 0), structs[0].fields[0].offset);
-    try std.testing.expectEqual(@as(u32, 64), structs[0].fields[0].size);
+    // proj: [4][4]f32
+    try std.testing.expectEqual(FieldType{ .matrix = .{ .rows = 4, .cols = 4, .element = .float32 } }, structs[0].fields[0].field_type);
 }
 
-test "parseReflection extracts both structs from combined JSON" {
+test "parseReflection extracts both structs" {
     const json =
         \\{
         \\  "parameters": [
@@ -429,7 +489,7 @@ test "parseReflection extracts both structs from combined JSON" {
         \\          "fields": [
         \\            {
         \\              "name": "motor",
-        \\              "type": {"kind": "vector"},
+        \\              "type": {"kind": "vector", "elementCount": 4, "elementType": {"kind": "scalar", "scalarType": "float32"}},
         \\              "binding": {"kind": "uniform", "offset": 0, "size": 16, "elementStride": 4}
         \\            }
         \\          ]
@@ -448,7 +508,7 @@ test "parseReflection extracts both structs from combined JSON" {
         \\            "fields": [
         \\              {
         \\                "name": "proj",
-        \\                "type": {"kind": "matrix"},
+        \\                "type": {"kind": "matrix", "rowCount": 4, "columnCount": 4, "elementType": {"kind": "scalar", "scalarType": "float32"}},
         \\                "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
         \\              }
         \\            ]
@@ -470,17 +530,18 @@ test "parseReflection extracts both structs from combined JSON" {
     try std.testing.expectEqualStrings("PushConstants", structs[1].name);
 }
 
-test "emitZig produces GPU layout constants" {
+test "emitZig produces extern struct definitions" {
     const fields_gc = [_]FieldLayout{
-        .{ .name = "motor", .offset = 0, .size = 16 },
-        .{ .name = "flags", .offset = 52, .size = 4 },
+        .{ .name = "motor", .offset = 0, .size = 16, .field_type = .{ .vector = .{ .count = 4, .element = .float32 } } },
+        .{ .name = "flags", .offset = 52, .size = 4, .field_type = .{ .scalar = .uint32 } },
+        .{ .name = "_pad", .offset = 56, .size = 8, .field_type = .{ .vector = .{ .count = 2, .element = .uint32 } } },
     };
     const fields_pc = [_]FieldLayout{
-        .{ .name = "proj", .offset = 0, .size = 64 },
-        .{ .name = "glyph_count", .offset = 72, .size = 4 },
+        .{ .name = "proj", .offset = 0, .size = 64, .field_type = .{ .matrix = .{ .rows = 4, .cols = 4, .element = .float32 } } },
+        .{ .name = "glyph_count", .offset = 72, .size = 4, .field_type = .{ .scalar = .uint32 } },
     };
     const structs = [_]StructLayout{
-        .{ .name = "GlyphCommand", .size = 56, .fields = &fields_gc },
+        .{ .name = "GlyphCommand", .size = 64, .fields = &fields_gc },
         .{ .name = "PushConstants", .size = 80, .fields = &fields_pc },
     };
 
@@ -490,29 +551,30 @@ test "emitZig produces GPU layout constants" {
     const output = try aw.toOwnedSlice();
     defer std.testing.allocator.free(output);
 
-    // Header comment
+    // Header
     try std.testing.expect(std.mem.indexOf(u8, output, "AUTO-GENERATED") != null);
 
-    // GlyphCommand constants
-    try std.testing.expect(std.mem.indexOf(u8, output, "GlyphCommand_size: u32 = 56") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "GlyphCommand_motor_offset: u32 = 0") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "GlyphCommand_motor_size: u32 = 16") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "GlyphCommand_flags_offset: u32 = 52") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "GlyphCommand_flags_size: u32 = 4") != null);
+    // GlyphCommand extern struct
+    try std.testing.expect(std.mem.indexOf(u8, output, "pub const GlyphCommand = extern struct {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "motor: [4]f32,") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "flags: u32,") != null);
+    // _pad gets a zero default
+    try std.testing.expect(std.mem.indexOf(u8, output, "_pad: [2]u32 = .{0} ** 2,") != null);
 
-    // PushConstants constants
-    try std.testing.expect(std.mem.indexOf(u8, output, "PushConstants_size: u32 = 80") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "PushConstants_proj_offset: u32 = 0") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "PushConstants_proj_size: u32 = 64") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "PushConstants_glyph_count_offset: u32 = 72") != null);
+    // PushConstants extern struct
+    try std.testing.expect(std.mem.indexOf(u8, output, "pub const PushConstants = extern struct {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "proj: [4][4]f32,") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "glyph_count: u32,") != null);
 }
 
-test "emitZig output has pub const declarations" {
+test "emitZig inserts gap padding" {
+    // Field at offset 0 size 4, next at offset 8 size 4 → 4-byte gap
     const fields = [_]FieldLayout{
-        .{ .name = "color", .offset = 16, .size = 16 },
+        .{ .name = "a", .offset = 0, .size = 4, .field_type = .{ .scalar = .uint32 } },
+        .{ .name = "b", .offset = 8, .size = 4, .field_type = .{ .scalar = .uint32 } },
     };
     const structs = [_]StructLayout{
-        .{ .name = "GlyphCommand", .size = 64, .fields = &fields },
+        .{ .name = "Test", .size = 16, .fields = &fields },
     };
 
     var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
@@ -521,9 +583,10 @@ test "emitZig output has pub const declarations" {
     const output = try aw.toOwnedSlice();
     defer std.testing.allocator.free(output);
 
-    try std.testing.expect(std.mem.indexOf(u8, output, "pub const") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "GlyphCommand_color_offset: u32 = 16") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "GlyphCommand_color_size: u32 = 16") != null);
+    // Gap padding between a (end=4) and b (offset=8)
+    try std.testing.expect(std.mem.indexOf(u8, output, "_gap0: [4]u8 = .{0} ** 4,") != null);
+    // Tail padding after b (end=12) to struct size 16
+    try std.testing.expect(std.mem.indexOf(u8, output, "_tail") != null);
 }
 
 test "parseReflection: empty parameters produces empty slice" {
@@ -541,7 +604,6 @@ test "parseReflection: empty parameters produces empty slice" {
 }
 
 test "freeStructs handles empty slice" {
-    // Must not crash or leak — allocate via allocator so leak detection works
     const empty = try std.testing.allocator.alloc(StructLayout, 0);
     freeStructs(std.testing.allocator, empty);
 }

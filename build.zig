@@ -96,11 +96,11 @@ pub fn build(b: *std.Build) void {
     });
     mod.addImport("shader_spv", shader_spv_mod);
 
-    // Layout validation: slangc reflection → generated GPU layout constants
+    // GPU struct generation: slangc reflection → extern struct definitions
     const reflection_json = generateReflectionJson(b);
-    const layout_zig = generateLayoutZig(b, reflection_json);
-    mod.addImport("gpu_layout", b.addModule("gpu_layout", .{
-        .root_source_file = layout_zig,
+    const gpu_structs_zig = generateGpuStructs(b, reflection_json);
+    mod.addImport("gpu_structs", b.addModule("gpu_structs", .{
+        .root_source_file = gpu_structs_zig,
     }));
 
     const install_task = b.addInstallFile(task_spv, "shaders/slug_task.spv");
@@ -153,7 +153,7 @@ fn generateReflectionJson(b: *std.Build) std.Build.LazyPath {
     return cmd.addOutputFileArg("reflection.json");
 }
 
-fn generateLayoutZig(
+fn generateGpuStructs(
     b: *std.Build,
     reflection_json: std.Build.LazyPath,
 ) std.Build.LazyPath {
@@ -166,7 +166,7 @@ fn generateLayoutZig(
     });
     const run = b.addRunArtifact(tool);
     run.addFileArg(reflection_json);
-    return run.captureStdOut(.{ .basename = "gpu_layout.zig" });
+    return run.captureStdOut(.{ .basename = "gpu_structs.zig" });
 }
 
 fn buildGlfw(
