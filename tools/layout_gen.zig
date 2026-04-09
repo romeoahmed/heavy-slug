@@ -4,6 +4,10 @@
 /// PushConstants struct definitions, and emits a Zig source file with
 /// `extern struct` types for direct use on the CPU side.
 ///
+/// Convention: Slang fields with names starting with `_` (e.g. `_pad`)
+/// get zero default values in the generated Zig struct, so callers don't
+/// need to set padding fields explicitly.
+///
 /// Usage:
 ///   zig run tools/layout_gen.zig -- <reflection.json>
 ///   zig test tools/layout_gen.zig
@@ -565,6 +569,24 @@ test "emitZig produces extern struct definitions" {
     try std.testing.expect(std.mem.indexOf(u8, output, "pub const PushConstants = extern struct {") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "proj: [4][4]f32,") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "glyph_count: u32,") != null);
+}
+
+test "emitZig: non-square matrix emits [cols][rows] (column-major)" {
+    const fields = [_]FieldLayout{
+        .{ .name = "m", .offset = 0, .size = 48, .field_type = .{ .matrix = .{ .rows = 3, .cols = 4, .element = .float32 } } },
+    };
+    const structs = [_]StructLayout{
+        .{ .name = "Test", .size = 48, .fields = &fields },
+    };
+
+    var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try emitZig(&aw.writer, &structs);
+    const output = try aw.toOwnedSlice();
+    defer std.testing.allocator.free(output);
+
+    // Column-major: [cols][rows], so float3x4 → [4][3]f32
+    try std.testing.expect(std.mem.indexOf(u8, output, "m: [4][3]f32,") != null);
 }
 
 test "emitZig inserts gap padding" {

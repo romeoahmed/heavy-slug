@@ -37,7 +37,6 @@ src/
     cache.zig         — GlyphCache: hot/cold two-tier LRU over descriptor slots
     pipeline.zig      — Mesh+fragment pipeline, embedded SPIR-V, dynamic rendering
     renderer.zig      — TextRenderer: init/deinit, loadFont, begin/drawText/flush
-    layout.zig        — comptime validation: CPU structs vs GPU reflection
   math/
     pga.zig           — Cl(2,0,1) Motor/Point, @Vector(4,f32) SIMD internals
 shaders/
@@ -47,7 +46,7 @@ shaders/
   slug_mesh.slang     — Mesh shader: dilated quad per glyph
   slug_fragment.slang — Fragment shader: Slug band lookup + coverage
 tools/
-  layout_gen.zig      — build tool: slangc reflection JSON → GPU layout constants
+  layout_gen.zig      — build tool: slangc reflection JSON → extern struct definitions
 ```
 
 **Demo executable** — `src/main.zig` + `src/demo/`:
@@ -117,7 +116,7 @@ See `src/gpu/context.zig`. Dispatch struct fields use **C names** (`vkCreateInst
 
 **Test discovery** — `src/root.zig` must `_ = @import(...)` each module in its `test` block for nested tests to run.
 
-**Layout validation** — `zig build` runs `slangc -reflection-json` on `slug_task.slang`, then compiles and runs `tools/layout_gen.zig` to emit GPU struct layout constants as a Zig module. `src/gpu/layout.zig` imports these constants and validates they match `descriptors.zig` at comptime via `@compileError`. Any Slang struct change that breaks the CPU/GPU ABI contract fails the build with a clear error message.
+**GPU struct generation** — `zig build` runs `slangc -reflection-json` on `slug_task.slang`, then compiles and runs `tools/layout_gen.zig` to generate `extern struct` definitions (Slang→Zig type mapping: scalar, vector, matrix) as the `gpu_structs` module. `descriptors.zig` imports and re-exports these types. The shader is the single source of truth — changing a Slang struct automatically updates the CPU-side types. Fields prefixed with `_` get zero defaults so callers don't need to set padding.
 
 **Test assets** — `assets/Inter-Regular.otf` (relative to project root). Do not hardcode system font paths.
 
