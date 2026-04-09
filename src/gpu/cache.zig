@@ -23,6 +23,19 @@ pub const CacheEntry = struct {
     last_frame: u32,
     consecutive_frames: u8,
     em_box: EmBox,
+    lru_idx: u32 = LRU_NONE, // index into GlyphCache.lru_nodes; LRU_NONE for hot entries
+};
+
+// --- LRU doubly-linked list (index-based) ---
+
+const LRU_SENTINEL_HEAD: u32 = 0; // MRU end
+const LRU_SENTINEL_TAIL: u32 = 1; // LRU end
+const LRU_NONE: u32 = std.math.maxInt(u32);
+
+const LruNode = struct {
+    key: CacheKey,
+    prev: u32,
+    next: u32,
 };
 
 /// Returned when an entry is evicted from the cache.
@@ -48,6 +61,9 @@ pub const GlyphCache = struct {
     cold_capacity: u32,
     current_frame: u32,
     promote_frames: u8,
+    allocator: std.mem.Allocator,
+    lru_nodes: []LruNode,
+    lru_free_head: u32,
 
     /// Wrapping frame age: how many frames ago was `frame` relative to `current`.
     /// Handles u32 overflow correctly via wrapping subtraction.
@@ -55,13 +71,65 @@ pub const GlyphCache = struct {
         return current -% frame;
     }
 
+    // --- LRU list helpers (O(1) each) ---
+
+    fn lruAlloc(self: *GlyphCache) u32 {
+        const idx = self.lru_free_head;
+        std.debug.assert(idx != LRU_NONE);
+        self.lru_free_head = self.lru_nodes[idx].next;
+        return idx;
+    }
+
+    fn lruFree(self: *GlyphCache, idx: u32) void {
+        self.lru_nodes[idx] = .{ .key = undefined, .prev = LRU_NONE, .next = self.lru_free_head };
+        self.lru_free_head = idx;
+    }
+
+    fn lruUnlink(self: *GlyphCache, idx: u32) void {
+        const node = self.lru_nodes[idx];
+        self.lru_nodes[node.prev].next = node.next;
+        self.lru_nodes[node.next].prev = node.prev;
+    }
+
+    fn lruLinkAfter(self: *GlyphCache, after: u32, idx: u32) void {
+        const old_next = self.lru_nodes[after].next;
+        self.lru_nodes[idx].prev = after;
+        self.lru_nodes[idx].next = old_next;
+        self.lru_nodes[after].next = idx;
+        self.lru_nodes[old_next].prev = idx;
+    }
+
+    fn lruTouch(self: *GlyphCache, idx: u32) void {
+        self.lruUnlink(idx);
+        self.lruLinkAfter(LRU_SENTINEL_HEAD, idx);
+    }
+
     pub fn init(
         allocator: std.mem.Allocator,
         hot_capacity: u32,
         cold_capacity: u32,
         promote_frames: u8,
-    ) GlyphCache {
+    ) !GlyphCache {
+        const node_count = cold_capacity + 2; // 2 sentinels + cold_capacity user nodes
+        const lru_nodes = try allocator.alloc(LruNode, node_count);
+
+        // Sentinels: HEAD <-> TAIL
+        lru_nodes[LRU_SENTINEL_HEAD] = .{ .key = undefined, .prev = LRU_NONE, .next = LRU_SENTINEL_TAIL };
+        lru_nodes[LRU_SENTINEL_TAIL] = .{ .key = undefined, .prev = LRU_SENTINEL_HEAD, .next = LRU_NONE };
+
+        // Build free list from indices 2..node_count-1
+        var free_head: u32 = LRU_NONE;
+        if (cold_capacity > 0) {
+            var i: u32 = node_count - 1;
+            while (i >= 2) : (i -= 1) {
+                lru_nodes[i] = .{ .key = undefined, .prev = LRU_NONE, .next = free_head };
+                free_head = i;
+                if (i == 2) break;
+            }
+        }
+
         return .{
+            .allocator = allocator,
             .map = std.AutoHashMap(CacheKey, CacheEntry).init(allocator),
             .hot_count = 0,
             .cold_count = 0,
@@ -69,10 +137,13 @@ pub const GlyphCache = struct {
             .cold_capacity = cold_capacity,
             .current_frame = 0,
             .promote_frames = promote_frames,
+            .lru_nodes = lru_nodes,
+            .lru_free_head = free_head,
         };
     }
 
     pub fn deinit(self: *GlyphCache) void {
+        self.allocator.free(self.lru_nodes);
         self.map.deinit();
         self.* = undefined;
     }
@@ -114,6 +185,15 @@ pub const GlyphCache = struct {
     ) !void {
         std.debug.assert(self.cold_count < self.cold_capacity);
         std.debug.assert(!self.map.contains(key));
+
+        const lru_idx = self.lruAlloc();
+        self.lru_nodes[lru_idx].key = key;
+        self.lruLinkAfter(LRU_SENTINEL_HEAD, lru_idx);
+        errdefer {
+            self.lruUnlink(lru_idx);
+            self.lruFree(lru_idx);
+        }
+
         try self.map.put(key, .{
             .slot = slot,
             .pool_alloc = pool_alloc,
@@ -121,6 +201,7 @@ pub const GlyphCache = struct {
             .last_frame = self.current_frame,
             .consecutive_frames = 1,
             .em_box = em_box,
+            .lru_idx = lru_idx,
         });
         self.cold_count += 1;
     }
@@ -138,6 +219,10 @@ pub const GlyphCache = struct {
             entry.consecutive_frames = 1; // gap in usage — reset streak
         }
         entry.last_frame = self.current_frame;
+        // Move cold entry to MRU position in LRU list
+        if (entry.tier == .cold) {
+            self.lruTouch(entry.lru_idx);
+        }
         return entry;
     }
 
@@ -154,6 +239,9 @@ pub const GlyphCache = struct {
             if (entry.value_ptr.tier == .cold and
                 entry.value_ptr.consecutive_frames >= self.promote_frames)
             {
+                self.lruUnlink(entry.value_ptr.lru_idx);
+                self.lruFree(entry.value_ptr.lru_idx);
+                entry.value_ptr.lru_idx = LRU_NONE;
                 entry.value_ptr.tier = .hot;
                 entry.value_ptr.consecutive_frames = 0;
                 self.hot_count += 1;
@@ -163,27 +251,20 @@ pub const GlyphCache = struct {
         }
     }
 
-    /// Evict the least-recently-used cold entry. Returns the evicted entry's
-    /// key, slot, and pool allocation so the caller can free Vulkan resources.
-    /// Returns null if there are no cold entries.
+    /// Evict the least-recently-used cold entry. O(1) via DLL tail pop.
+    /// Returns the evicted entry's key, slot, and pool allocation so the
+    /// caller can free Vulkan resources. Returns null if no cold entries.
     pub fn evictLru(self: *GlyphCache) ?EvictedEntry {
         if (self.cold_count == 0) return null;
 
-        var oldest_key: ?CacheKey = null;
-        var oldest_age: u32 = 0;
+        // The LRU entry is immediately before the TAIL sentinel
+        const lru_idx = self.lru_nodes[LRU_SENTINEL_TAIL].prev;
+        std.debug.assert(lru_idx != LRU_SENTINEL_HEAD);
 
-        var it = self.map.iterator();
-        while (it.next()) |entry| {
-            if (entry.value_ptr.tier == .cold) {
-                const age = frameAge(self.current_frame, entry.value_ptr.last_frame);
-                if (age > oldest_age) {
-                    oldest_age = age;
-                    oldest_key = entry.key_ptr.*;
-                }
-            }
-        }
+        const key = self.lru_nodes[lru_idx].key;
+        self.lruUnlink(lru_idx);
+        self.lruFree(lru_idx);
 
-        const key = oldest_key orelse return null;
         const removed = self.map.fetchRemove(key) orelse unreachable;
         self.cold_count -= 1;
 
@@ -219,6 +300,8 @@ pub const GlyphCache = struct {
             if (removed.value.tier == .hot) {
                 self.hot_count -= 1;
             } else {
+                self.lruUnlink(removed.value.lru_idx);
+                self.lruFree(removed.value.lru_idx);
                 self.cold_count -= 1;
             }
             evicted[i] = .{
@@ -232,13 +315,13 @@ pub const GlyphCache = struct {
 };
 
 test "GlyphCache: init and deinit" {
-    var cache = GlyphCache.init(std.testing.allocator, 4, 8, 3);
+    var cache = try GlyphCache.init(std.testing.allocator, 4, 8, 3);
     defer cache.deinit();
     try std.testing.expectEqual(@as(u32, 0), cache.count());
 }
 
 test "GlyphCache: insert hot and lookup" {
-    var cache = GlyphCache.init(std.testing.allocator, 4, 8, 3);
+    var cache = try GlyphCache.init(std.testing.allocator, 4, 8, 3);
     defer cache.deinit();
 
     const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
@@ -251,7 +334,7 @@ test "GlyphCache: insert hot and lookup" {
 }
 
 test "GlyphCache: insert cold and lookup" {
-    var cache = GlyphCache.init(std.testing.allocator, 4, 8, 3);
+    var cache = try GlyphCache.init(std.testing.allocator, 4, 8, 3);
     defer cache.deinit();
 
     const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
@@ -264,7 +347,7 @@ test "GlyphCache: insert cold and lookup" {
 }
 
 test "GlyphCache: lookup miss returns null" {
-    var cache = GlyphCache.init(std.testing.allocator, 4, 8, 3);
+    var cache = try GlyphCache.init(std.testing.allocator, 4, 8, 3);
     defer cache.deinit();
 
     try std.testing.expectEqual(
@@ -274,7 +357,7 @@ test "GlyphCache: lookup miss returns null" {
 }
 
 test "GlyphCache: count tracks hot and cold" {
-    var cache = GlyphCache.init(std.testing.allocator, 4, 8, 3);
+    var cache = try GlyphCache.init(std.testing.allocator, 4, 8, 3);
     defer cache.deinit();
 
     const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
@@ -287,7 +370,7 @@ test "GlyphCache: count tracks hot and cold" {
 }
 
 test "GlyphCache: evict LRU cold entry" {
-    var cache = GlyphCache.init(std.testing.allocator, 4, 2, 3);
+    var cache = try GlyphCache.init(std.testing.allocator, 4, 2, 3);
     defer cache.deinit();
 
     const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
@@ -306,7 +389,7 @@ test "GlyphCache: evict LRU cold entry" {
 }
 
 test "GlyphCache: evict returns null when no cold entries" {
-    var cache = GlyphCache.init(std.testing.allocator, 4, 8, 3);
+    var cache = try GlyphCache.init(std.testing.allocator, 4, 8, 3);
     defer cache.deinit();
 
     const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
@@ -317,7 +400,7 @@ test "GlyphCache: evict returns null when no cold entries" {
 }
 
 test "GlyphCache: evict prefers least recently used" {
-    var cache = GlyphCache.init(std.testing.allocator, 4, 4, 3);
+    var cache = try GlyphCache.init(std.testing.allocator, 4, 4, 3);
     defer cache.deinit();
 
     const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
@@ -333,13 +416,13 @@ test "GlyphCache: evict prefers least recently used" {
     cache.current_frame = 5;
     _ = cache.lookup(key_a);
 
-    // key_b and key_c still at frame 0; evict should pick one of them
+    // key_b and key_c are untouched; B was inserted before C so B is LRU
     const evicted = cache.evictLru().?;
-    try std.testing.expect(evicted.key.glyph_id == 2 or evicted.key.glyph_id == 3);
+    try std.testing.expectEqual(key_b, evicted.key);
 }
 
 test "GlyphCache: consecutive frame tracking" {
-    var cache = GlyphCache.init(std.testing.allocator, 4, 8, 3);
+    var cache = try GlyphCache.init(std.testing.allocator, 4, 8, 3);
     defer cache.deinit();
 
     const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
@@ -368,7 +451,7 @@ test "GlyphCache: consecutive frame tracking" {
 }
 
 test "GlyphCache: cold promoted to hot after consecutive frames" {
-    var cache = GlyphCache.init(std.testing.allocator, 4, 8, 3); // promote after 3 frames
+    var cache = try GlyphCache.init(std.testing.allocator, 4, 8, 3); // promote after 3 frames
     defer cache.deinit();
 
     const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
@@ -391,7 +474,7 @@ test "GlyphCache: cold promoted to hot after consecutive frames" {
 }
 
 test "GlyphCache: promotion skipped when hot tier full" {
-    var cache = GlyphCache.init(std.testing.allocator, 1, 8, 2); // hot capacity = 1
+    var cache = try GlyphCache.init(std.testing.allocator, 1, 8, 2); // hot capacity = 1
     defer cache.deinit();
 
     const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
@@ -415,7 +498,7 @@ test "GlyphCache: promotion skipped when hot tier full" {
 }
 
 test "GlyphCache: removeFont evicts all entries for a font" {
-    var gc = GlyphCache.init(std.testing.allocator, 4, 8, 3);
+    var gc = try GlyphCache.init(std.testing.allocator, 4, 8, 3);
     defer gc.deinit();
 
     const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
@@ -451,7 +534,7 @@ test "GlyphCache: removeFont evicts all entries for a font" {
 }
 
 test "GlyphCache: removeFont on unknown font_id returns empty slice" {
-    var gc = GlyphCache.init(std.testing.allocator, 4, 8, 3);
+    var gc = try GlyphCache.init(std.testing.allocator, 4, 8, 3);
     defer gc.deinit();
 
     const evicted = try gc.removeFont(std.testing.allocator, 99);
@@ -461,7 +544,7 @@ test "GlyphCache: removeFont on unknown font_id returns empty slice" {
 }
 
 test "GlyphCache: duplicate lookup in same frame does not double-count" {
-    var cache = GlyphCache.init(std.testing.allocator, 4, 8, 3);
+    var cache = try GlyphCache.init(std.testing.allocator, 4, 8, 3);
     defer cache.deinit();
 
     const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
@@ -495,7 +578,7 @@ test "GlyphCache: frame counter overflow does not break LRU" {
     // Wrapping subtraction must be used so older frames still sort correctly.
     const allocator = std.testing.allocator;
     // Minimal cache: 4 hot slots, 4 cold slots, promote after 3 frames
-    var cache = GlyphCache.init(allocator, 4, 4, 3);
+    var cache = try GlyphCache.init(allocator, 4, 4, 3);
     defer cache.deinit();
 
     // We'll use dummy EmBox and pool allocation values
@@ -517,4 +600,67 @@ test "GlyphCache: frame counter overflow does not break LRU" {
     // With correct wrapping, its age = 0 -% (maxInt-2) = 3 (wrapping sub), which is > key_new's age of 0.
     const evicted = cache.evictLru().?;
     try std.testing.expectEqual(key_old, evicted.key);
+}
+
+test "GlyphCache: eviction order matches access recency" {
+    var cache = try GlyphCache.init(std.testing.allocator, 0, 4, 3);
+    defer cache.deinit();
+
+    const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
+    // Insert A, B, C, D
+    try cache.insertCold(.{ .font_id = 1, .glyph_id = 1 }, 0, .{ .offset = 0, .size = 64 }, dummy_box);
+    try cache.insertCold(.{ .font_id = 1, .glyph_id = 2 }, 1, .{ .offset = 64, .size = 64 }, dummy_box);
+    try cache.insertCold(.{ .font_id = 1, .glyph_id = 3 }, 2, .{ .offset = 128, .size = 64 }, dummy_box);
+    try cache.insertCold(.{ .font_id = 1, .glyph_id = 4 }, 3, .{ .offset = 192, .size = 64 }, dummy_box);
+
+    // Evict all — should come out in insertion order (FIFO when no accesses)
+    try std.testing.expectEqual(@as(u32, 1), cache.evictLru().?.key.glyph_id);
+    try std.testing.expectEqual(@as(u32, 2), cache.evictLru().?.key.glyph_id);
+    try std.testing.expectEqual(@as(u32, 3), cache.evictLru().?.key.glyph_id);
+    try std.testing.expectEqual(@as(u32, 4), cache.evictLru().?.key.glyph_id);
+    try std.testing.expectEqual(@as(?EvictedEntry, null), cache.evictLru());
+}
+
+test "GlyphCache: access moves entry to MRU end" {
+    var cache = try GlyphCache.init(std.testing.allocator, 0, 3, 3);
+    defer cache.deinit();
+
+    const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
+    const key_a = CacheKey{ .font_id = 1, .glyph_id = 1 };
+    const key_b = CacheKey{ .font_id = 1, .glyph_id = 2 };
+    const key_c = CacheKey{ .font_id = 1, .glyph_id = 3 };
+
+    try cache.insertCold(key_a, 0, .{ .offset = 0, .size = 64 }, dummy_box);
+    try cache.insertCold(key_b, 1, .{ .offset = 64, .size = 64 }, dummy_box);
+    try cache.insertCold(key_c, 2, .{ .offset = 128, .size = 64 }, dummy_box);
+
+    // Touch A — moves to MRU
+    _ = cache.lookup(key_a);
+
+    // Evict: B (LRU), then C, then A (MRU)
+    try std.testing.expectEqual(key_b, cache.evictLru().?.key);
+    try std.testing.expectEqual(key_c, cache.evictLru().?.key);
+    try std.testing.expectEqual(key_a, cache.evictLru().?.key);
+}
+
+test "GlyphCache: promoted entry not returned by evictLru" {
+    var cache = try GlyphCache.init(std.testing.allocator, 4, 4, 2);
+    defer cache.deinit();
+
+    const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
+    const key_a = CacheKey{ .font_id = 1, .glyph_id = 1 };
+    const key_b = CacheKey{ .font_id = 1, .glyph_id = 2 };
+
+    try cache.insertCold(key_a, 0, .{ .offset = 0, .size = 64 }, dummy_box);
+    try cache.insertCold(key_b, 1, .{ .offset = 64, .size = 64 }, dummy_box);
+
+    // Use key_a for 2 consecutive frames to trigger promotion
+    cache.advanceFrame();
+    _ = cache.lookup(key_a);
+    cache.advanceFrame(); // promotes key_a to hot
+
+    // key_a is now hot; evicting should return key_b only
+    const evicted = cache.evictLru().?;
+    try std.testing.expectEqual(key_b, evicted.key);
+    try std.testing.expectEqual(@as(?EvictedEntry, null), cache.evictLru());
 }

@@ -223,7 +223,7 @@ pub const TextRenderer = struct {
         errdefer pip.deinit();
 
         // 3. Glyph cache (pre-allocate HashMap to avoid render-loop allocations)
-        var glyph_cache = cache_mod.GlyphCache.init(
+        var glyph_cache = try cache_mod.GlyphCache.init(
             allocator,
             options.hot_slab_count,
             options.cold_lru_count,
