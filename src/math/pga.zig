@@ -23,12 +23,23 @@ pub const Motor = extern struct {
         return .{ .m = .{ @cos(half), @sin(half), 0, 0 } };
     }
 
-    /// Compose two motors (geometric product): result applies `b` first, then `a`.
-    /// For motors A=[sA, αA, txA, tyA] and B=[sB, αB, txB, tyB]:
-    ///   s'   = sA·sB - αA·αB
+    /// Compose two motors: result applies `b` first, then `a`.
+    /// Consistent with apply()/toMat() CCW convention.
+    ///
+    /// Derived from the functional composition constraint:
+    ///   compose(a, b).apply(p) == a.apply(b.apply(p))
+    ///
+    /// The world translation of the composed motor is T_M = R_a·T_b + T_a,
+    /// where R_a is the full rotation matrix of a.  Because this encoding
+    /// stores translation in the half-angle–rotated frame, the correct scalar
+    /// formula requires the full rotation terms c1 = 1−2αA² and sw1 = 2·sA·αA:
+    ///
+    ///   s'   = sA·sB − αA·αB
     ///   e12' = sA·αB + αA·sB
-    ///   e01' = sA·txB + txA·sB + αA·tyB - tyA·αB
-    ///   e02' = sA·tyB + tyA·sB - αA·txB + txA·αB
+    ///   xsum = c1·(sB·txB+αB·tyB) + sw1·(αB·txB−sB·tyB) + sA·txA+αA·tyA
+    ///   ysum = sw1·(sB·txB+αB·tyB) + c1·(−αB·txB+sB·tyB) − αA·txA+sA·tyA
+    ///   e01' = s'·xsum − e12'·ysum
+    ///   e02' = e12'·xsum + s'·ysum
     pub fn compose(a: Motor, b: Motor) Motor {
         const sa = a.m[0];
         const aa = a.m[1];
@@ -38,25 +49,39 @@ pub const Motor = extern struct {
         const ab = b.m[1];
         const tb = b.m[2];
         const ub = b.m[3];
+        const sc = sa * sb - aa * ab;
+        const ac = sa * ab + aa * sb;
+        const c1 = 1.0 - 2.0 * aa * aa;
+        const sw1 = 2.0 * sa * aa;
+        const xsum = c1 * (sb * tb + ab * ub) + sw1 * (ab * tb - sb * ub) + sa * ta + aa * ua;
+        const ysum = sw1 * (sb * tb + ab * ub) + c1 * (-ab * tb + sb * ub) - aa * ta + sa * ua;
         return .{ .m = .{
-            sa * sb - aa * ab,
-            sa * ab + aa * sb,
-            sa * tb + ta * sb + aa * ub - ua * ab,
-            sa * ub + ua * sb - aa * tb + ta * ab,
+            sc,
+            ac,
+            sc * xsum - ac * ysum,
+            ac * xsum + sc * ysum,
         } };
     }
 
     /// Compose motor with a pure translation — specialized hot path.
     /// Equivalent to `compose(self, fromTranslation(tx, ty))` but avoids
-    /// redundant terms (sb=1, ab=0): 6 mul + 4 add vs 12 + 8.
+    /// redundant terms (sb=1, ab=0).
+    ///
+    /// With sb=1, ab=0 the compose formula reduces to rotation of [htx,hty]
+    /// by 3·(θ/2) and adding the existing translation:
+    ///   c3 = s·(1−4α²),  s3 = α·(3−4α²)   (triple-half-angle: cos/sin of 3θ/2)
+    ///   e01' = c3·htx − s3·hty + txA
+    ///   e02' = s3·htx + c3·hty + tyA
     pub fn composeTranslation(self: Motor, tx: f32, ty: f32) Motor {
         const htx = tx * 0.5;
         const hty = ty * 0.5;
+        const c3 = self.m[0] * (1.0 - 4.0 * self.m[1] * self.m[1]);
+        const s3 = self.m[1] * (3.0 - 4.0 * self.m[1] * self.m[1]);
         return .{ .m = .{
             self.m[0],
             self.m[1],
-            self.m[0] * htx + self.m[2] + self.m[1] * hty,
-            self.m[0] * hty + self.m[3] - self.m[1] * htx,
+            c3 * htx - s3 * hty + self.m[2],
+            s3 * htx + c3 * hty + self.m[3],
         } };
     }
 
@@ -110,22 +135,12 @@ pub const Motor = extern struct {
     }
 
     /// Motor from rotation by `angle` radians about an arbitrary center `(cx, cy)`.
-    /// Derived directly from the constraint apply(cx, cy) = (cx, cy).
-    /// Does NOT use compose(), which follows the PGA CW convention that is
-    /// inconsistent with apply()/toMat()'s CCW convention for mixed
-    /// rotation+translation motors.
+    /// Equivalent to translate(cx,cy) ∘ rotate(angle) ∘ translate(-cx,-cy).
     pub fn fromRotationAbout(angle: f32, cx: f32, cy: f32) Motor {
-        const half = angle * 0.5;
-        const s = @cos(half);
-        const a = @sin(half);
-        const cos_a = 1.0 - 2.0 * a * a; // cos(angle)
-        const sin_a = 2.0 * s * a; // sin(angle)
-        return .{ .m = .{
-            s,
-            a,
-            a * (sin_a * cx + cos_a * cy),
-            a * (-cos_a * cx + sin_a * cy),
-        } };
+        const t_neg = Motor.fromTranslation(-cx, -cy);
+        const rot = Motor.fromRotation(angle);
+        const t_pos = Motor.fromTranslation(cx, cy);
+        return Motor.compose(t_pos, Motor.compose(rot, t_neg));
     }
 
     /// Renormalize a motor so that s² + e12² = 1.
@@ -392,4 +407,22 @@ test "Motor.fromRotationAbout: toMat matches apply" {
         try testing.expectApproxEqAbs(applied[0], mat_x, 1e-4);
         try testing.expectApproxEqAbs(applied[1], mat_y, 1e-4);
     }
+}
+
+test "Motor.compose: rotation+translation matches sequential apply" {
+    // compose(a, b).apply(p) must equal a.apply(b.apply(p)).
+    // a must have nonzero rotation (aa != 0) to exercise the c1/sw1 cross-terms
+    // that distinguish the correct formula from the old buggy one.
+    const rot_a = Motor.fromRotationAbout(std.math.pi / 3.0, 1.0, 2.0);
+    const rot_b = Motor.fromRotation(std.math.pi / 6.0);
+    const tr_b = Motor.fromTranslation(3.0, -1.0);
+    const motor_b = Motor.compose(tr_b, rot_b);
+    const composed = Motor.compose(rot_a, motor_b);
+
+    const p = [2]f32{ 2.0, 1.0 };
+    const step1 = motor_b.apply(p);
+    const step2 = rot_a.apply(step1);
+    const result = composed.apply(p);
+    try testing.expectApproxEqAbs(step2[0], result[0], 1e-5);
+    try testing.expectApproxEqAbs(step2[1], result[1], 1e-5);
 }
