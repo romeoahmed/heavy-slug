@@ -144,3 +144,45 @@ test "integration: cold-to-hot promotion preserves pool allocation" {
     try std.testing.expectEqual(alloc.offset, entry.pool_alloc.offset);
     try std.testing.expectEqual(alloc.size, entry.pool_alloc.size);
 }
+
+test "integration: removeFont reclaims all pool and cache resources" {
+    var pa = pool.PoolAllocator.init(std.testing.allocator, 4096, 256);
+    defer pa.deinit();
+
+    var gc = try cache.GlyphCache.init(std.testing.allocator, 4, 8, 3);
+    defer gc.deinit();
+
+    const dummy_box = cache.EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
+
+    // Font 1: one hot + two cold entries
+    const alloc_1a = pa.alloc(128).?;
+    try gc.insertHot(.{ .font_id = 1, .glyph_id = 65 }, 0, alloc_1a, dummy_box);
+    const alloc_1b = pa.alloc(128).?;
+    try gc.insertCold(.{ .font_id = 1, .glyph_id = 66 }, 1, alloc_1b, dummy_box);
+    const alloc_1c = pa.alloc(128).?;
+    try gc.insertCold(.{ .font_id = 1, .glyph_id = 67 }, 2, alloc_1c, dummy_box);
+
+    // Font 2: one cold entry
+    const alloc_2 = pa.alloc(128).?;
+    try gc.insertCold(.{ .font_id = 2, .glyph_id = 65 }, 3, alloc_2, dummy_box);
+
+    try std.testing.expectEqual(@as(u32, 4), gc.count());
+
+    // Remove font 1 -- returns 3 evicted entries
+    const evicted = try gc.removeFont(std.testing.allocator, 1);
+    defer std.testing.allocator.free(evicted);
+
+    try std.testing.expectEqual(@as(usize, 3), evicted.len);
+    for (evicted) |e| pa.free(e.pool_alloc);
+
+    // Only font 2 remains
+    try std.testing.expectEqual(@as(u32, 1), gc.count());
+    try std.testing.expect(gc.lookup(.{ .font_id = 2, .glyph_id = 65 }) != null);
+
+    // Pool space from font 1 is reusable
+    const recycled = pa.alloc(128).?;
+    const recycled_matches = for (evicted) |e| {
+        if (recycled.offset == e.pool_alloc.offset) break true;
+    } else false;
+    try std.testing.expect(recycled_matches);
+}
