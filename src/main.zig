@@ -248,7 +248,7 @@ pub fn main() !void {
             }
             if (dragged) {
                 pan_x += @as(f32, @floatCast(dx)) / scale;
-                pan_y -= @as(f32, @floatCast(dy)) / scale;
+                pan_y += @as(f32, @floatCast(dy)) / scale;
             }
         }
 
@@ -319,20 +319,20 @@ pub fn main() !void {
         const fg: [4]f32 = if (dark_mode) .{ 1, 1, 1, 1 } else .{ 0, 0, 0, 1 };
 
         // Pass 1: Lorem ipsum with pan/zoom/rotation.
-        // Rotation is baked into the projection via Motor.toMat():
-        //   proj_final = viewProjection x motor_matrix
-        // This rotates the entire scene in world space around the content center.
+        // Rotation is composed into per-glyph motors (not the projection).
+        // The projection must stay axis-aligned because the mesh shader reads
+        // only proj[0][0] and proj[1][1] for pixel-size dilation.
         const vp = viewProjection(w, h, scale, pan_x, pan_y);
         const rot_motor = pga.Motor.fromRotationAbout(rotation_angle, content_cx, content_cy);
-        const proj = rot_motor.toMat(vp);
 
         text_renderer.begin();
         for (lorem_lines, 0..) |line, i| {
             if (line.len == 0) continue;
             const y = content_height - margin - @as(f32, @floatFromInt(i)) * line_height;
-            try text_renderer.drawText(font, line, pga.Motor.fromTranslation(margin, y), fg);
+            const line_motor = pga.Motor.compose(rot_motor, pga.Motor.fromTranslation(margin, y));
+            try text_renderer.drawText(font, line, line_motor, fg);
         }
-        text_renderer.flush(frame.cmd, proj, viewport);
+        text_renderer.flush(frame.cmd, vp, viewport);
 
         // Pass 2: FPS overlay — fixed screen position, no pan/zoom.
         if (fps_len > 0) {
