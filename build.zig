@@ -46,6 +46,13 @@ pub fn build(b: *std.Build) void {
     const glfw_lib = buildGlfw(b, target, optimize);
     exe.root_module.linkLibrary(glfw_lib);
     exe.root_module.addIncludePath(glfw_dep.path("include"));
+    // Wayland system libraries must be linked on the exe, not the static lib
+    if (target.result.os.tag == .linux) {
+        exe.root_module.linkSystemLibrary("wayland-client", .{});
+        exe.root_module.linkSystemLibrary("wayland-cursor", .{});
+        exe.root_module.linkSystemLibrary("wayland-egl", .{});
+        exe.root_module.linkSystemLibrary("xkbcommon", .{});
+    }
 
     b.installArtifact(exe);
 
@@ -252,10 +259,9 @@ fn buildGlfw(
                 },
                 .flags = platform_flags,
             });
-            lib.root_module.linkSystemLibrary("wayland-client", .{});
-            lib.root_module.linkSystemLibrary("wayland-cursor", .{});
-            lib.root_module.linkSystemLibrary("wayland-egl", .{});
-            lib.root_module.linkSystemLibrary("xkbcommon", .{});
+            // System libraries (wayland-client, wayland-cursor, wayland-egl,
+            // xkbcommon) must be linked by the consuming executable, not here,
+            // to avoid packing .so files into the static archive.
         },
         else => {},
     }
