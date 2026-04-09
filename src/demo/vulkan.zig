@@ -524,11 +524,29 @@ pub const GraphicsContext = struct {
         old_layout: vk.ImageLayout,
         new_layout: vk.ImageLayout,
     ) void {
+        // Choose stage/access masks based on the specific transition.
+        const src_stage: vk.PipelineStageFlags2 = if (old_layout == .undefined)
+            .{ .top_of_pipe_bit = true }
+        else
+            .{ .color_attachment_output_bit = true };
+        const src_access: vk.AccessFlags2 = if (old_layout == .undefined)
+            .{}
+        else
+            .{ .color_attachment_write_bit = true };
+        const dst_stage: vk.PipelineStageFlags2 = if (new_layout == .color_attachment_optimal)
+            .{ .color_attachment_output_bit = true }
+        else
+            .{ .bottom_of_pipe_bit = true };
+        const dst_access: vk.AccessFlags2 = if (new_layout == .color_attachment_optimal)
+            .{ .color_attachment_write_bit = true }
+        else
+            .{};
+
         const barrier = vk.ImageMemoryBarrier2{
-            .src_stage_mask = .{ .all_commands_bit = true },
-            .src_access_mask = .{ .memory_write_bit = true },
-            .dst_stage_mask = .{ .all_commands_bit = true },
-            .dst_access_mask = .{ .memory_read_bit = true, .memory_write_bit = true },
+            .src_stage_mask = src_stage,
+            .src_access_mask = src_access,
+            .dst_stage_mask = dst_stage,
+            .dst_access_mask = dst_access,
             .old_layout = old_layout,
             .new_layout = new_layout,
             .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
