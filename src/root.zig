@@ -218,3 +218,23 @@ test "integration: motor positions shaped glyphs monotonically" {
         pen_x += @as(f32, @floatFromInt(pos.x_advance));
     }
 }
+
+test "integration: composeTranslation matches compose(fromTranslation)" {
+    // Non-trivial motor: rotation + translation (like a rotated text block)
+    const motor = pga.Motor.compose(
+        pga.Motor.fromTranslation(50.0, 30.0),
+        pga.Motor.fromRotation(std.math.pi / 6.0),
+    );
+
+    // Test with several glyph-like advance values
+    const advances = [_]f32{ 640, 1280, 1920 };
+    const test_point = [2]f32{ 10.0, 5.0 };
+
+    for (advances) |tx| {
+        const via_specialized = motor.composeTranslation(tx, 0).apply(test_point);
+        const via_general = pga.Motor.compose(motor, pga.Motor.fromTranslation(tx, 0)).apply(test_point);
+
+        try std.testing.expectApproxEqAbs(via_general[0], via_specialized[0], 1e-2);
+        try std.testing.expectApproxEqAbs(via_general[1], via_specialized[1], 1e-2);
+    }
+}
