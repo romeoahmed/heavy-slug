@@ -363,16 +363,26 @@ pub const TextRenderer = struct {
         // Command buffer as a typed slice
         const commands: [*]descriptors.GlyphCommand = @ptrCast(@alignCast(self.command_buffer.mapped));
 
+        // Convert caller's pixel-space motor to em-space (26.6 fixed-point).
+        // Em-box extents and blob curve data are in 26.6 units from HarfBuzz;
+        // motor translations must match so motor.apply(em_corner) is consistent.
+        const em_motor = pga.Motor{ .m = .{
+            motor.m[0],
+            motor.m[1],
+            motor.m[2] * 64.0,
+            motor.m[3] * 64.0,
+        } };
+
+        // HarfBuzz positions are in 26.6 fixed-point; keep them as-is to match em-space.
         var pen_x: f32 = 0;
         var pen_y: f32 = 0;
 
         for (infos, positions) |info, pos| {
-            // Per-glyph position (HarfBuzz 26.6 fixed-point → float)
-            const glyph_x = pen_x + @as(f32, @floatFromInt(pos.x_offset)) / 64.0;
-            const glyph_y = pen_y + @as(f32, @floatFromInt(pos.y_offset)) / 64.0;
+            const glyph_x = pen_x + @as(f32, @floatFromInt(pos.x_offset));
+            const glyph_y = pen_y + @as(f32, @floatFromInt(pos.y_offset));
 
-            // Compose caller's motor with per-glyph translation
-            const glyph_motor = motor.composeTranslation(glyph_x, glyph_y);
+            // Compose caller's motor with per-glyph translation (both in 26.6)
+            const glyph_motor = em_motor.composeTranslation(glyph_x, glyph_y);
 
             // Cache lookup
             const cache_key = cache_mod.CacheKey{
@@ -397,9 +407,9 @@ pub const TextRenderer = struct {
             };
             self.glyph_count += 1;
 
-            // Advance pen
-            pen_x += @as(f32, @floatFromInt(pos.x_advance)) / 64.0;
-            pen_y += @as(f32, @floatFromInt(pos.y_advance)) / 64.0;
+            // Advance pen (26.6 units)
+            pen_x += @as(f32, @floatFromInt(pos.x_advance));
+            pen_y += @as(f32, @floatFromInt(pos.y_advance));
         }
     }
 
@@ -515,9 +525,18 @@ pub const TextRenderer = struct {
             null,
         );
 
+        // Scale projection from pixel-space to 26.6 em-space.
+        // Motor translations and em-box extents are in 26.6 units (64x pixels).
+        // Dividing columns 0 and 1 by 64 maps 26.6 world coords to clip space.
+        var proj_em = proj;
+        for (0..4) |j| {
+            proj_em[0][j] /= 64.0;
+            proj_em[1][j] /= 64.0;
+        }
+
         // Push constants
         const push = descriptors.PushConstants{
-            .proj = proj,
+            .proj = proj_em,
             .viewport_dim = viewport,
             .glyph_count = pass_count,
             .glyph_base = self.flush_base,
