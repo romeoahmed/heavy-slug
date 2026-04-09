@@ -91,13 +91,11 @@ pub const GraphicsContext = struct {
     vulkan_ctx: gpu_context.VulkanContext,
     surface_format: vk.SurfaceFormatKHR,
 
-    // Swapchain (filled in Task 4)
     swapchain: vk.SwapchainKHR = .null_handle,
     swapchain_images: []vk.Image = &.{},
     swapchain_views: []vk.ImageView = &.{},
     swapchain_extent: vk.Extent2D = .{ .width = 0, .height = 0 },
 
-    // Per-frame sync (filled in Task 4)
     command_pool: vk.CommandPool = .null_handle,
     command_buffers: [FRAMES_IN_FLIGHT]vk.CommandBuffer = .{.null_handle} ** FRAMES_IN_FLIGHT,
     image_available: [FRAMES_IN_FLIGHT]vk.Semaphore = .{.null_handle} ** FRAMES_IN_FLIGHT,

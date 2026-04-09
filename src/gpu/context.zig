@@ -41,8 +41,56 @@ pub const VulkanContext = struct {
     pub const required_device_extensions = required_extensions;
 
     /// Validate physical device support before creating the VkDevice.
-    /// See top-level checkDeviceSupport_impl for full documentation.
-    pub const checkDeviceSupport = checkDeviceSupport_impl;
+    /// Call before device creation to get a clear error if requirements are not met.
+    /// The caller is still responsible for enabling these features and extensions in
+    /// VkDeviceCreateInfo.
+    pub fn checkDeviceSupport(
+        physical_device: vk.PhysicalDevice,
+        instance_dispatch: InstanceDispatch,
+        allocator: std.mem.Allocator,
+    ) (FeatureError || error{OutOfMemory})!void {
+        // --- Extension validation ---
+        const available = instance_dispatch.enumerateDeviceExtensionPropertiesAlloc(
+            physical_device,
+            null,
+            allocator,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return FeatureError.ExtensionNotSupported,
+        };
+        defer allocator.free(available);
+
+        for (required_extensions) |required| {
+            const req_name = std.mem.span(required);
+            var found = false;
+            for (available) |ext| {
+                const ext_name = std.mem.sliceTo(&ext.extension_name, 0);
+                if (std.mem.eql(u8, ext_name, req_name)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return FeatureError.ExtensionNotSupported;
+        }
+
+        // --- Feature validation ---
+        var mesh_features = vk.PhysicalDeviceMeshShaderFeaturesEXT{};
+        var robustness_features = vk.PhysicalDeviceRobustness2FeaturesEXT{
+            .p_next = @ptrCast(&mesh_features),
+        };
+        var features2 = vk.PhysicalDeviceFeatures2{
+            .p_next = @ptrCast(&robustness_features),
+            .features = .{},
+        };
+        instance_dispatch.getPhysicalDeviceFeatures2(physical_device, &features2);
+
+        if (mesh_features.task_shader == .false or mesh_features.mesh_shader == .false) {
+            return FeatureError.MeshShaderNotSupported;
+        }
+        if (robustness_features.null_descriptor == .false) {
+            return FeatureError.Robustness2NotSupported;
+        }
+    }
 
     /// Wrap a caller-provided device. Loads the device dispatch table and
     /// queries physical device memory properties.
@@ -117,58 +165,6 @@ pub const FeatureError = error{
     ExtensionNotSupported,
 };
 
-/// Validate that the physical device supports all extensions and features required
-/// by heavy-slug. Call this before creating the VkDevice to get a clear error if
-/// requirements are not met. The caller is still responsible for enabling these
-/// features and extensions in VkDeviceCreateInfo.
-fn checkDeviceSupport_impl(
-    physical_device: vk.PhysicalDevice,
-    instance_dispatch: InstanceDispatch,
-    allocator: std.mem.Allocator,
-) (FeatureError || error{OutOfMemory})!void {
-    // --- Extension validation ---
-    const available = instance_dispatch.enumerateDeviceExtensionPropertiesAlloc(
-        physical_device,
-        null,
-        allocator,
-    ) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return FeatureError.ExtensionNotSupported,
-    };
-    defer allocator.free(available);
-
-    for (required_extensions) |required| {
-        const req_name = std.mem.span(required);
-        var found = false;
-        for (available) |ext| {
-            const ext_name = std.mem.sliceTo(&ext.extension_name, 0);
-            if (std.mem.eql(u8, ext_name, req_name)) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) return FeatureError.ExtensionNotSupported;
-    }
-
-    // --- Feature validation ---
-    var mesh_features = vk.PhysicalDeviceMeshShaderFeaturesEXT{};
-    var robustness_features = vk.PhysicalDeviceRobustness2FeaturesEXT{
-        .p_next = @ptrCast(&mesh_features),
-    };
-    var features2 = vk.PhysicalDeviceFeatures2{
-        .p_next = @ptrCast(&robustness_features),
-        .features = .{},
-    };
-    instance_dispatch.getPhysicalDeviceFeatures2(physical_device, &features2);
-
-    if (mesh_features.task_shader == .false or mesh_features.mesh_shader == .false) {
-        return FeatureError.MeshShaderNotSupported;
-    }
-    if (robustness_features.null_descriptor == .false) {
-        return FeatureError.Robustness2NotSupported;
-    }
-}
-
 test "vulkan types are available" {
     // Verify binding generation produced usable types
     _ = vk.PhysicalDevice;
@@ -184,11 +180,7 @@ test "vulkan types are available" {
 }
 
 test "DeviceDispatch type compiles" {
-    // Verify the filtered dispatch wrapper type is valid
     _ = DeviceDispatch;
-    _ = @hasField(HeavySlugDispatch, "vkDestroyDevice");
-    _ = @hasField(HeavySlugDispatch, "vkCreateBuffer");
-    _ = @hasField(HeavySlugDispatch, "vkCmdDrawMeshTasksEXT");
 }
 
 test "HeavySlugDispatch has buffer and viewport commands" {
