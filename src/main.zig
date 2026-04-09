@@ -217,13 +217,21 @@ pub fn main() !void {
         // +/- keyboard zoom.
         if (glfw.getKey(window, glfw.KEY_EQUAL)) scale *= 1.0 + 2.0 * dt;
         if (glfw.getKey(window, glfw.KEY_MINUS)) scale *= 1.0 - 2.0 * dt;
-        scale = std.math.clamp(scale, 0.1, 20.0);
 
-        // Scroll zoom.
+        // Scroll zoom — around cursor position.
         const scroll = glfw.consumeScrollDelta();
         if (scroll != 0) {
+            const cur = glfw.getCursorPos(window);
+            const sx: f32 = @floatCast(cur[0]);
+            const sy: f32 = @floatCast(cur[1]);
+            const old_scale = scale;
             const factor: f32 = @floatCast(std.math.pow(f64, 1.1, scroll));
-            scale = std.math.clamp(scale * factor, 0.1, 20.0);
+            scale *= factor;
+            // Adjust pan so the world point under the cursor stays fixed.
+            const inv_new = 1.0 / scale;
+            const inv_old = 1.0 / old_scale;
+            pan_x += sx * (inv_new - inv_old);
+            pan_y += (sy - h) * (inv_new - inv_old);
         }
 
         // --- Mouse ---
@@ -319,20 +327,20 @@ pub fn main() !void {
         const fg: [4]f32 = if (dark_mode) .{ 1, 1, 1, 1 } else .{ 0, 0, 0, 1 };
 
         // Pass 1: Lorem ipsum with pan/zoom/rotation.
-        // Rotation is composed into per-glyph motors (not the projection).
-        // The projection must stay axis-aligned because the mesh shader reads
-        // only proj[0][0] and proj[1][1] for pixel-size dilation.
+        // Rotation baked into the projection via Motor.toMat() so all glyphs
+        // rotate as one rigid block. The mesh shader's dilation uses column
+        // vector lengths to handle the non-diagonal projection correctly.
         const vp = viewProjection(w, h, scale, pan_x, pan_y);
         const rot_motor = pga.Motor.fromRotationAbout(rotation_angle, content_cx, content_cy);
+        const proj = rot_motor.toMat(vp);
 
         text_renderer.begin();
         for (lorem_lines, 0..) |line, i| {
             if (line.len == 0) continue;
             const y = content_height - margin - @as(f32, @floatFromInt(i)) * line_height;
-            const line_motor = pga.Motor.compose(rot_motor, pga.Motor.fromTranslation(margin, y));
-            try text_renderer.drawText(font, line, line_motor, fg);
+            try text_renderer.drawText(font, line, pga.Motor.fromTranslation(margin, y), fg);
         }
-        text_renderer.flush(frame.cmd, vp, viewport);
+        text_renderer.flush(frame.cmd, proj, viewport);
 
         // Pass 2: FPS overlay — fixed screen position, no pan/zoom.
         if (fps_len > 0) {
