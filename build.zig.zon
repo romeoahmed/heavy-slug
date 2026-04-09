@@ -2,7 +2,7 @@
     .name = .heavy_slug,
     .version = "0.0.0",
     .fingerprint = 0x8b00ed40afcead90,
-    .minimum_zig_version = "0.16.0-dev.3091+557caecaa",
+    .minimum_zig_version = "0.16.0-dev.3133+5ec8e45f3",
     .dependencies = .{
         .freetype_src = .{
             .url = "https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.gz",
