@@ -37,12 +37,23 @@ pub const Error = error{
 };
 
 pub const InitOptions = struct {
+    /// Maximum bindless glyph descriptors. 64K covers all Unicode BMP
+    /// glyphs at one font size; increase for multi-font workloads.
     max_glyph_descriptors: u32 = 65_536,
+    /// Maximum glyphs per frame across all drawText+flush passes.
+    /// 16K covers ~6 full screens of dense English text at 24px.
     max_glyphs_per_frame: u32 = 16_384,
+    /// Hot cache capacity: frequently used glyphs (ASCII, punctuation).
+    /// 4K covers ASCII + common Latin/CJK subsets per font.
     hot_slab_count: u32 = 4_096,
+    /// Cold LRU cache capacity: infrequently used glyphs.
+    /// 8K provides headroom for CJK character coverage.
     cold_lru_count: u32 = 8_192,
+    /// Consecutive frames of use before promoting cold → hot.
     promote_frames: u8 = 3,
-    pool_buffer_size: u32 = 32 * 1024 * 1024, // 32 MB
+    /// Pool buffer size for glyph blob storage. 32 MB supports ~100K
+    /// cached glyphs at typical blob sizes (200-400 bytes each).
+    pool_buffer_size: u32 = 32 * 1024 * 1024,
     /// Must match device's minStorageBufferOffsetAlignment. 256 is
     /// conservatively correct for all conformant Vulkan implementations.
     min_storage_alignment: u32 = 256,
@@ -148,6 +159,12 @@ const FontEntry = struct {
     ctx: glyph_mod.FontContext,
 };
 
+/// GPU text renderer using the Slug algorithm for exact glyph coverage.
+///
+/// **Thread safety:** Not thread-safe. All calls (begin, drawText, flush,
+/// loadFont, unloadFont) must be made from a single thread or externally
+/// synchronized. The renderer mutates shared state (glyph cache, pool
+/// allocator, command buffer) without synchronization.
 pub const TextRenderer = struct {
     device: vk.Device,
     dispatch: gpu_context.DeviceDispatch,

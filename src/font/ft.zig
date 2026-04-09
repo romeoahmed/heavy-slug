@@ -5,7 +5,7 @@ const c = @cImport({
 });
 
 pub const Error = error{
-    InitFailed,
+    FreeTypeInitFailed,
 };
 
 pub const Library = struct {
@@ -13,7 +13,7 @@ pub const Library = struct {
 
     pub fn init() Error!Library {
         var lib: c.FT_Library = null;
-        if (c.FT_Init_FreeType(&lib) != 0) return error.InitFailed;
+        if (c.FT_Init_FreeType(&lib) != 0) return error.FreeTypeInitFailed;
         return .{ .handle = lib };
     }
 
@@ -36,7 +36,7 @@ pub const Face = struct {
     /// Load a font face from a file path.
     pub fn init(lib: Library, path: [*:0]const u8) Error!Face {
         var face: c.FT_Face = null;
-        if (c.FT_New_Face(lib.handle, path, 0, &face) != 0) return error.InitFailed;
+        if (c.FT_New_Face(lib.handle, path, 0, &face) != 0) return error.FreeTypeInitFailed;
         return .{ .handle = face };
     }
 
@@ -46,7 +46,7 @@ pub const Face = struct {
 
     /// Set the pixel size for glyph loading. Pass 0 for width to auto-compute from height.
     pub fn setPixelSizes(self: Face, width: u32, height: u32) Error!void {
-        if (c.FT_Set_Pixel_Sizes(self.handle, width, height) != 0) return error.InitFailed;
+        if (c.FT_Set_Pixel_Sizes(self.handle, width, height) != 0) return error.FreeTypeInitFailed;
     }
 
     pub fn numGlyphs(self: Face) u32 {
