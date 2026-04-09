@@ -205,13 +205,13 @@ pub const Pipeline = struct {
 fn createShaderModule(
     device: vk.Device,
     dispatch: gpu_context.DeviceDispatch,
-    bytecode: []const u8,
+    bytecode: []align(4) const u8,
 ) !vk.ShaderModule {
     const ci = vk.ShaderModuleCreateInfo{
         .s_type = .shader_module_create_info,
         .flags = .{},
         .code_size = bytecode.len,
-        .p_code = @ptrCast(@alignCast(bytecode.ptr)),
+        .p_code = @ptrCast(bytecode.ptr),
     };
     return dispatch.createShaderModule(device, &ci, null);
 }
