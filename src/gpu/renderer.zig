@@ -60,7 +60,7 @@ pub const InitOptions = struct {
 };
 
 /// A host-visible, host-coherent VkBuffer with persistently mapped memory.
-pub const MappedBuffer = struct {
+const MappedBuffer = struct {
     buffer: vk.Buffer,
     memory: vk.DeviceMemory,
     mapped: [*]u8,
