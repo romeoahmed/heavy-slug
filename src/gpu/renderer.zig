@@ -367,7 +367,6 @@ pub const TextRenderer = struct {
         // Validate font handle — guards against use-after-unloadFont().
         if (!self.fonts.contains(font.id)) return Error.ShapingFailed;
 
-        // Shape text using reusable buffer
         self.shape_buffer.reset();
         self.shape_buffer.addUtf8(text);
         self.shape_buffer.guessSegmentProperties();
@@ -404,7 +403,6 @@ pub const TextRenderer = struct {
             // Compose caller's motor with per-glyph translation (both in 26.6)
             const glyph_motor = em_motor.composeTranslation(glyph_x, glyph_y);
 
-            // Cache lookup
             const cache_key = cache_mod.CacheKey{
                 .font_id = font.id,
                 .glyph_id = info.codepoint,

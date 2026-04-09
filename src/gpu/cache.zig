@@ -211,12 +211,12 @@ pub const GlyphCache = struct {
     pub fn lookup(self: *GlyphCache, key: CacheKey) ?*CacheEntry {
         const entry = self.map.getPtr(key) orelse return null;
         // Update consecutive-frame tracking
-        if (entry.last_frame == self.current_frame) {
-            // Already counted this frame — no-op
-        } else if (frameAge(self.current_frame, entry.last_frame) == 1) {
-            entry.consecutive_frames +|= 1; // saturating add (u8)
-        } else {
-            entry.consecutive_frames = 1; // gap in usage — reset streak
+        if (entry.last_frame != self.current_frame) {
+            if (frameAge(self.current_frame, entry.last_frame) == 1) {
+                entry.consecutive_frames +|= 1; // saturating add (u8)
+            } else {
+                entry.consecutive_frames = 1; // gap in usage — reset streak
+            }
         }
         entry.last_frame = self.current_frame;
         // Move cold entry to MRU position in LRU list
