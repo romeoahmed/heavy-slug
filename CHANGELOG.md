@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-04-10
+
+### Added
+
+- **MIT license** and **README.md** with usage examples, architecture overview, and build instructions
+- **GitHub Actions CI** (`.github/workflows/test.yaml`): lint, test, and release build jobs using Vulkan SDK and Zig
+- **ThinLTO** on C static libraries (FreeType, HarfBuzz, GLFW) in release builds for cross-language optimization
+
+### Changed
+
+- **`-Ddemo` build flag** (default `false`): library consumers no longer fetch or compile GLFW -- pass `-Ddemo=true` to build the demo executable
+- **`build.zig` reorganized** into clear sections: options, Vulkan bindings, shaders, GPU structs, library module, C deps, LTO, tests, demo
+
 ## [1.0.0] - 2026-04-09
 
 ### Added
@@ -31,5 +44,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Integration tests**: 8 cross-module tests in `src/root.zig` covering font pipeline, cache+pool coordination, and motor+font positioning -- all without a live Vulkan device
 - **Unit tests**: Comprehensive tests across all modules (context, descriptors, pipeline, pool, cache, renderer, PGA, font, glyph, layout_gen)
 
-[Unreleased]: https://github.com/romeoahmed/heavy-slug/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/romeoahmed/heavy-slug/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/romeoahmed/heavy-slug/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/romeoahmed/heavy-slug/releases/tag/v1.0.0
