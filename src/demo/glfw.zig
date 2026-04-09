@@ -105,6 +105,7 @@ pub const KEY_LEFT = c.GLFW_KEY_LEFT;
 pub const KEY_RIGHT = c.GLFW_KEY_RIGHT;
 
 pub const MOUSE_BUTTON_LEFT = c.GLFW_MOUSE_BUTTON_LEFT;
+pub const MOUSE_BUTTON_RIGHT = c.GLFW_MOUSE_BUTTON_RIGHT;
 
 pub fn getMouseButton(window: Window, button: c_int) bool {
     return c.glfwGetMouseButton(window, button) == c.GLFW_PRESS;
