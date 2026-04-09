@@ -49,6 +49,12 @@ pub const GlyphCache = struct {
     current_frame: u32,
     promote_frames: u8,
 
+    /// Wrapping frame age: how many frames ago was `frame` relative to `current`.
+    /// Handles u32 overflow correctly via wrapping subtraction.
+    fn frameAge(current: u32, frame: u32) u32 {
+        return current -% frame;
+    }
+
     pub fn init(
         allocator: std.mem.Allocator,
         hot_capacity: u32,
@@ -126,7 +132,7 @@ pub const GlyphCache = struct {
         // Update consecutive-frame tracking
         if (entry.last_frame == self.current_frame) {
             // Already counted this frame — no-op
-        } else if (self.current_frame > 0 and entry.last_frame == self.current_frame - 1) {
+        } else if (frameAge(self.current_frame, entry.last_frame) == 1) {
             entry.consecutive_frames +|= 1; // saturating add (u8)
         } else {
             entry.consecutive_frames = 1; // gap in usage — reset streak
@@ -138,7 +144,7 @@ pub const GlyphCache = struct {
     /// Advance the frame counter. Promotes cold entries that have been used for
     /// `promote_frames` consecutive frames into the hot tier (if hot has capacity).
     pub fn advanceFrame(self: *GlyphCache) void {
-        self.current_frame += 1;
+        self.current_frame +%= 1;
 
         if (self.hot_count >= self.hot_capacity) return;
 
@@ -164,13 +170,16 @@ pub const GlyphCache = struct {
         if (self.cold_count == 0) return null;
 
         var oldest_key: ?CacheKey = null;
-        var oldest_frame: u32 = std.math.maxInt(u32);
+        var oldest_age: u32 = 0;
 
         var it = self.map.iterator();
         while (it.next()) |entry| {
-            if (entry.value_ptr.tier == .cold and entry.value_ptr.last_frame < oldest_frame) {
-                oldest_frame = entry.value_ptr.last_frame;
-                oldest_key = entry.key_ptr.*;
+            if (entry.value_ptr.tier == .cold) {
+                const age = frameAge(self.current_frame, entry.value_ptr.last_frame);
+                if (age > oldest_age) {
+                    oldest_age = age;
+                    oldest_key = entry.key_ptr.*;
+                }
             }
         }
 
@@ -479,4 +488,33 @@ test "CacheEntry has em_box field" {
     };
     try std.testing.expectEqual(@as(f32, -1.0), entry.em_box.x_min);
     try std.testing.expectEqual(@as(f32, 12.0), entry.em_box.y_max);
+}
+
+test "GlyphCache: frame counter overflow does not break LRU" {
+    // At 60fps, current_frame (u32) overflows in ~2.3 years.
+    // Wrapping subtraction must be used so older frames still sort correctly.
+    const allocator = std.testing.allocator;
+    // Minimal cache: 4 hot slots, 4 cold slots, promote after 3 frames
+    var cache = GlyphCache.init(allocator, 4, 4, 3);
+    defer cache.deinit();
+
+    // We'll use dummy EmBox and pool allocation values
+    const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 64, .y_max = 64 };
+    const key_old = CacheKey{ .font_id = 1, .glyph_id = 1 };
+    const key_new = CacheKey{ .font_id = 1, .glyph_id = 2 };
+
+    // Simulate near-overflow: set frame to maxInt - 2
+    cache.current_frame = std.math.maxInt(u32) - 2;
+    try cache.insertCold(key_old, 0, .{ .offset = 0, .size = 64 }, dummy_box);
+
+    // Advance past overflow
+    cache.advanceFrame(); // maxInt - 1
+    cache.advanceFrame(); // maxInt
+    cache.advanceFrame(); // wraps to 0
+    try cache.insertCold(key_new, 1, .{ .offset = 64, .size = 64 }, dummy_box);
+
+    // key_old (inserted at maxInt-2) must be evicted as the oldest.
+    // With correct wrapping, its age = 0 -% (maxInt-2) = 3 (wrapping sub), which is > key_new's age of 0.
+    const evicted = cache.evictLru().?;
+    try std.testing.expectEqual(key_old, evicted.key);
 }
