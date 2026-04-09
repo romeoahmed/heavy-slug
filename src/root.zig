@@ -64,3 +64,26 @@ test "integration: shape text and encode all unique glyphs" {
     for (positions) |pos| total_advance += pos.x_advance;
     try std.testing.expect(total_advance > 0);
 }
+
+test "integration: multiple texts through same FontContext" {
+    const ft_lib = try ft.Library.init();
+    defer ft_lib.deinit();
+
+    var ctx = try glyph.FontContext.init(ft_lib, test_font_path, 24);
+    defer ctx.deinit();
+
+    const texts = [_][]const u8{ "Hello", "World", "Zig" };
+
+    for (texts) |text| {
+        const buf = try ctx.shapeText(text, null, null);
+        defer buf.destroy();
+
+        try std.testing.expect(buf.getLength() > 0);
+
+        // Encode first glyph from each pass to verify gpu_draw reset
+        const infos = buf.getGlyphInfos();
+        const encoded = try ctx.encodeGlyph(infos[0].codepoint);
+        defer encoded.destroy();
+        try std.testing.expect(encoded.data.len > 0);
+    }
+}
