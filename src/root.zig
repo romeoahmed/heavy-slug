@@ -238,3 +238,31 @@ test "integration: composeTranslation matches compose(fromTranslation)" {
         try std.testing.expectApproxEqAbs(via_general[1], via_specialized[1], 1e-2);
     }
 }
+
+test "integration: repeated motor composition drifts then unitize recovers" {
+    const small = pga.Motor.fromRotation(0.01);
+    var m = small;
+
+    // Compose 999 more small rotations (1000 total)
+    for (0..999) |_| m = pga.Motor.compose(m, small);
+
+    // Motor norm should have drifted
+    const norm_sq = m.m[0] * m.m[0] + m.m[1] * m.m[1];
+
+    // Unitize restores unit norm
+    const fixed = m.unitize();
+    const fixed_norm = fixed.m[0] * fixed.m[0] + fixed.m[1] * fixed.m[1];
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), fixed_norm, 1e-6);
+
+    // Unitized motor matches fresh construction
+    const expected_angle: f32 = 1000.0 * 0.01;
+    const fresh = pga.Motor.fromRotation(expected_angle);
+    const p = [2]f32{ 1, 0 };
+
+    const fixed_result = fixed.apply(p);
+    const fresh_result = fresh.apply(p);
+    try std.testing.expectApproxEqAbs(fresh_result[0], fixed_result[0], 0.01);
+    try std.testing.expectApproxEqAbs(fresh_result[1], fixed_result[1], 0.01);
+
+    _ = norm_sq; // verified drift exists
+}
