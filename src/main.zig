@@ -349,7 +349,9 @@ pub fn main() !void {
             text_renderer.flush(frame.cmd, orthoProjection(w, h), viewport);
         }
 
-        try gctx.endFrame(frame);
+        if (try gctx.endFrame(frame)) {
+            try gctx.recreateSwapchain(window);
+        }
     }
     gctx.demo_ddisp.deviceWaitIdle(gctx.device) catch {};
 }

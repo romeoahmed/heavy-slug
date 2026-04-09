@@ -460,7 +460,8 @@ pub const GraphicsContext = struct {
         };
     }
 
-    pub fn endFrame(self: *GraphicsContext, frame: FrameInfo) !void {
+    /// Returns true if the swapchain needs recreation (out-of-date).
+    pub fn endFrame(self: *GraphicsContext, frame: FrameInfo) !bool {
         const fi = self.frame_index;
         const cmd = frame.cmd;
 
@@ -498,6 +499,7 @@ pub const GraphicsContext = struct {
         };
         try self.demo_ddisp.queueSubmit2(self.graphics_queue, &[_]vk.SubmitInfo2{submit_info}, self.in_flight_fences[fi]);
 
+        var needs_recreate = false;
         _ = self.demo_ddisp.queuePresentKHR(self.present_queue, &vk.PresentInfoKHR{
             .wait_semaphore_count = 1,
             .p_wait_semaphores = @ptrCast(&self.render_finished[fi]),
@@ -505,11 +507,14 @@ pub const GraphicsContext = struct {
             .p_swapchains = @ptrCast(&self.swapchain),
             .p_image_indices = @ptrCast(&frame.image_index),
         }) catch |err| switch (err) {
-            error.OutOfDateKHR => {},
+            error.OutOfDateKHR => {
+                needs_recreate = true;
+            },
             else => return err,
         };
 
         self.frame_index = (fi + 1) % FRAMES_IN_FLIGHT;
+        return needs_recreate;
     }
 
     fn transitionImage(
