@@ -31,7 +31,7 @@ pub const PushConstants = extern struct {
     proj: [4][4]f32, // offset  0: column-major projection matrix
     viewport_dim: [2]f32, // offset 64: viewport width, height in pixels
     glyph_count: u32, // offset 72: number of glyphs this frame
-    _pad: u32 = 0, // offset 76: align to 80 bytes
+    glyph_base: u32 = 0, // offset 76: first glyph index in the command buffer
 };
 
 test "PushConstants is 80 bytes with correct field offsets" {

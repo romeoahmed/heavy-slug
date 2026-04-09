@@ -24,7 +24,7 @@ struct PushConstants  // 80 bytes — matches descriptors.zig
     float4x4 proj;          // offset  0: column-major (Zig layout; slangc -matrix-layout-column-major)
     float2   viewport_dim;  // offset 64: viewport width, height in pixels
     uint     glyph_count;   // offset 72: number of glyphs this frame
-    uint     _pad;          // offset 76: align to 80B
+    uint     glyph_base;    // offset 76: first glyph index in the command buffer
 };
 
 // --- HarfBuzz blob constants ---

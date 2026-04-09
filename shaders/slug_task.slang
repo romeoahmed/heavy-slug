@@ -56,10 +56,11 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
         s_survivorCount = 0;
     GroupMemoryBarrierWithGroupSync();
 
-    uint glyphIndex = gid * kGroupSize + gtid;
+    uint localIndex = gid * kGroupSize + gtid;
+    uint glyphIndex = pc.glyph_base + localIndex;
     bool alive = false;
 
-    if (glyphIndex < pc.glyph_count)
+    if (localIndex < pc.glyph_count)
     {
         GlyphCommand cmd = commands[glyphIndex];
         Motor motor = { cmd.motor };

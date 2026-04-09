@@ -169,6 +169,7 @@ pub const TextRenderer = struct {
 
     // Per-frame state
     glyph_count: u32,
+    flush_base: u32,
     max_glyphs_per_frame: u32,
 
     // Reusable HarfBuzz buffer (zero-alloc render loop)
@@ -246,6 +247,10 @@ pub const TextRenderer = struct {
         );
         errdefer destroyMappedBuffer(cmd_buf, device, dispatch);
 
+        // Bind command buffer descriptor once for the full allocation.
+        // Per-pass offsets are handled via glyph_base in push constants.
+        desc_table.updateCommandBuffer(cmd_buf.buffer, 0, cmd_buf_size);
+
         // 7. FreeType library
         const ft_library = try ft.Library.init();
         errdefer ft_library.deinit();
@@ -268,6 +273,7 @@ pub const TextRenderer = struct {
             .fonts = std.AutoHashMap(u32, *FontEntry).init(allocator),
             .next_font_id = 0,
             .glyph_count = 0,
+            .flush_base = 0,
             .max_glyphs_per_frame = options.max_glyphs_per_frame,
             .shape_buffer = shape_buffer,
             .memory_properties = memory_properties,
@@ -324,8 +330,11 @@ pub const TextRenderer = struct {
     }
 
     /// Reset per-frame state. Call once at the start of each frame.
+    /// Multiple flush() calls may follow; each dispatches only the glyphs
+    /// appended since the previous flush (or since begin).
     pub fn begin(self: *TextRenderer) void {
         self.glyph_count = 0;
+        self.flush_base = 0;
     }
 
     /// Shape text and append glyph commands for GPU rendering.
@@ -469,14 +478,8 @@ pub const TextRenderer = struct {
         proj: [4][4]f32,
         viewport: [2]f32,
     ) void {
-        if (self.glyph_count == 0) return;
-
-        // Update command buffer descriptor (binding 1 → GlyphCommand[] range)
-        self.descriptor_table.updateCommandBuffer(
-            self.command_buffer.buffer,
-            0,
-            @as(vk.DeviceSize, self.glyph_count) * @sizeOf(descriptors.GlyphCommand),
-        );
+        const pass_count = self.glyph_count - self.flush_base;
+        if (pass_count == 0) return;
 
         // Set dynamic viewport state
         const vk_viewport = vk.Viewport{
@@ -515,7 +518,8 @@ pub const TextRenderer = struct {
         const push = descriptors.PushConstants{
             .proj = proj,
             .viewport_dim = viewport,
-            .glyph_count = self.glyph_count,
+            .glyph_count = pass_count,
+            .glyph_base = self.flush_base,
         };
         self.dispatch.cmdPushConstants(
             cmd_buf,
@@ -527,8 +531,11 @@ pub const TextRenderer = struct {
         );
 
         // Dispatch mesh shader workgroups (32 threads per workgroup in task shader)
-        const workgroup_count = (self.glyph_count + 31) / 32;
+        const workgroup_count = (pass_count + 31) / 32;
         self.dispatch.cmdDrawMeshTasksEXT(cmd_buf, workgroup_count, 1, 1);
+
+        // Advance flush base for the next pass within this frame
+        self.flush_base = self.glyph_count;
 
         // Advance cache frame for LRU tracking and cold→hot promotion
         self.glyph_cache.advanceFrame();
@@ -616,6 +623,7 @@ test "TextRenderer type compiles with expected fields" {
     try std.testing.expect(@hasField(TextRenderer, "ft_library"));
     try std.testing.expect(@hasField(TextRenderer, "fonts"));
     try std.testing.expect(@hasField(TextRenderer, "glyph_count"));
+    try std.testing.expect(@hasField(TextRenderer, "flush_base"));
     try std.testing.expect(@hasField(TextRenderer, "shape_buffer"));
 }
 

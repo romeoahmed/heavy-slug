@@ -41,8 +41,8 @@ comptime {
         @compileError("PushConstants.viewport_dim offset mismatch: Slang struct layout changed");
     if (@offsetOf(descriptors.PushConstants, "glyph_count") != gpu.PushConstants_glyph_count_offset)
         @compileError("PushConstants.glyph_count offset mismatch: Slang struct layout changed");
-    if (@offsetOf(descriptors.PushConstants, "_pad") != gpu.PushConstants__pad_offset)
-        @compileError("PushConstants._pad offset mismatch: accidental padding change shifted subsequent fields");
+    if (@offsetOf(descriptors.PushConstants, "glyph_base") != gpu.PushConstants_glyph_base_offset)
+        @compileError("PushConstants.glyph_base offset mismatch: Slang struct layout changed");
 }
 
 test "layout.zig: GPU struct layouts match slangc reflection" {
