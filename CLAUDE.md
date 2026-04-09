@@ -6,12 +6,16 @@
 
 ```bash
 zig fmt src/                          # format
-zig build                             # build lib + exe (also compiles shaders)
-zig build run [-- args]               # run demo
-zig build test                        # run tests (silent on success)
+zig build                             # build library (shaders + C deps)
+zig build -Ddemo=true                 # build library + demo executable
+zig build run -Ddemo=true [-- args]   # run demo
+zig build test                        # run library + layout_gen tests
+zig build test -Ddemo=true            # run all tests (library + demo)
 zig build shaders                     # compile Slang -> SPIR-V only
-zig build -Doptimize=ReleaseFast      # ReleaseSafe | ReleaseSmall | ReleaseFast
+zig build -Doptimize=ReleaseFast      # release build (ThinLTO on C deps)
 ```
+
+`-Ddemo=false` (default) builds library only -- GLFW is not fetched or compiled. `-Ddemo=true` adds the demo executable, GLFW, run step, and demo tests. Release builds enable ThinLTO on C static libraries (FreeType, HarfBuzz, GLFW) for cross-language optimization. Zig executables do not use LTO due to unresolved compiler-rt symbols in the LTO pipeline (Zig 0.16.0-dev limitation).
 
 ## Commits
 

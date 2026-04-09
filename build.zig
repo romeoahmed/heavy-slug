@@ -3,13 +3,9 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const build_demo = b.option(bool, "demo", "Build demo executable (requires GLFW)") orelse false;
 
-    const mod = b.addModule("heavy_slug", .{
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-    });
-
-    // Vulkan bindings: manual generation from Vulkan-Headers vk.xml
+    // --- Vulkan bindings: generate from Vulkan-Headers vk.xml ---
     const registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml");
     const vk_gen = b.dependency("vulkan", .{}).artifact("vulkan-zig-generator");
     const vk_generate_cmd = b.addRunArtifact(vk_gen);
@@ -17,71 +13,14 @@ pub fn build(b: *std.Build) void {
     const vulkan_zig = b.addModule("vulkan-zig", .{
         .root_source_file = vk_generate_cmd.addOutputFileArg("vk.zig"),
     });
-    mod.addImport("vulkan", vulkan_zig);
 
-    // C library compilation (spec §8.2)
-    const ft_dep = b.dependency("freetype_src", .{});
-    const hb_dep = b.dependency("harfbuzz_src", .{});
-    const ft_lib = buildFreetype(b, target, optimize);
-    const hb_lib = buildHarfbuzz(b, target, optimize, ft_lib);
-    mod.linkLibrary(ft_lib);
-    mod.linkLibrary(hb_lib);
-    mod.addIncludePath(ft_dep.path("include"));
-    mod.addIncludePath(hb_dep.path("src"));
-
-    const exe = b.addExecutable(.{
-        .name = "heavy_slug",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "heavy_slug", .module = mod },
-                .{ .name = "vulkan", .module = vulkan_zig },
-            },
-        }),
-    });
-    // GLFW for demo executable
-    const glfw_dep = b.dependency("glfw_src", .{});
-    const glfw_lib = buildGlfw(b, target, optimize);
-    exe.root_module.linkLibrary(glfw_lib);
-    exe.root_module.addIncludePath(glfw_dep.path("include"));
-    // Wayland system libraries must be linked on the exe, not the static lib
-    if (target.result.os.tag == .linux) {
-        exe.root_module.linkSystemLibrary("wayland-client", .{});
-        exe.root_module.linkSystemLibrary("wayland-cursor", .{});
-        exe.root_module.linkSystemLibrary("wayland-egl", .{});
-        exe.root_module.linkSystemLibrary("xkbcommon", .{});
-    }
-
-    b.installArtifact(exe);
-
-    // Run step
-    const run_step = b.step("run", "Run the app");
-    const run_cmd = b.addRunArtifact(exe);
-    run_step.dependOn(&run_cmd.step);
-    run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
-
-    // Test step — library module + executable module + build tools in parallel
-    const test_step = b.step("test", "Run tests");
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = mod })).step);
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = exe.root_module })).step);
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
-        .root_source_file = b.path("tools/layout_gen.zig"),
-        .target = b.graph.host,
-    }) })).step);
-
-    // Shader compilation: Slang → SPIR-V
+    // --- Shader compilation: Slang -> SPIR-V ---
     const shader_step = b.step("shaders", "Compile Slang shaders to SPIR-V");
 
     const task_spv = compileSlangShader(b, "slug_task.spv", "shaders/slug_task.slang", "taskMain", "amplification");
     const mesh_spv = compileSlangShader(b, "slug_mesh.spv", "shaders/slug_mesh.slang", "meshMain", "mesh");
     const frag_spv = compileSlangShader(b, "slug_fragment.spv", "shaders/slug_fragment.slang", "fragmentMain", "fragment");
 
-    // Embed SPIR-V binaries into a Zig module for @embedFile access.
     const shader_wf = b.addWriteFiles();
     _ = shader_wf.addCopyFile(task_spv, "slug_task.spv");
     _ = shader_wf.addCopyFile(mesh_spv, "slug_mesh.spv");
@@ -91,17 +30,7 @@ pub fn build(b: *std.Build) void {
         \\pub const mesh: []align(4) const u8 = @alignCast(@embedFile("slug_mesh.spv"));
         \\pub const fragment: []align(4) const u8 = @alignCast(@embedFile("slug_fragment.spv"));
     );
-    const shader_spv_mod = b.addModule("shader_spv", .{
-        .root_source_file = spv_zig,
-    });
-    mod.addImport("shader_spv", shader_spv_mod);
-
-    // GPU struct generation: slangc reflection → extern struct definitions
-    const reflection_json = generateReflectionJson(b);
-    const gpu_structs_zig = generateGpuStructs(b, reflection_json);
-    mod.addImport("gpu_structs", b.addModule("gpu_structs", .{
-        .root_source_file = gpu_structs_zig,
-    }));
+    const shader_spv_mod = b.addModule("shader_spv", .{ .root_source_file = spv_zig });
 
     const install_task = b.addInstallFile(task_spv, "shaders/slug_task.spv");
     const install_mesh = b.addInstallFile(mesh_spv, "shaders/slug_mesh.spv");
@@ -110,6 +39,94 @@ pub fn build(b: *std.Build) void {
     shader_step.dependOn(&install_mesh.step);
     shader_step.dependOn(&install_frag.step);
 
+    // --- GPU struct generation: slangc reflection -> extern struct definitions ---
+    const reflection_json = generateReflectionJson(b);
+    const gpu_structs_zig = generateGpuStructs(b, reflection_json);
+    const gpu_structs_mod = b.addModule("gpu_structs", .{ .root_source_file = gpu_structs_zig });
+
+    // --- Library module ---
+    const mod = b.addModule("heavy_slug", .{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+    });
+    mod.addImport("vulkan", vulkan_zig);
+    mod.addImport("shader_spv", shader_spv_mod);
+    mod.addImport("gpu_structs", gpu_structs_mod);
+
+    // --- C libraries (library deps only: FreeType + HarfBuzz) ---
+    const ft_dep = b.dependency("freetype_src", .{});
+    const hb_dep = b.dependency("harfbuzz_src", .{});
+    const ft_lib = buildFreetype(b, target, optimize);
+    const hb_lib = buildHarfbuzz(b, target, optimize, ft_lib);
+    mod.linkLibrary(ft_lib);
+    mod.linkLibrary(hb_lib);
+    mod.addIncludePath(ft_dep.path("include"));
+    mod.addIncludePath(hb_dep.path("src"));
+
+    // --- ThinLTO for C libraries in release mode ---
+    // Applied to C static libs only. Zig executables with -flto=thin trigger
+    // unresolved compiler-rt/musl symbols (frexpf, isnan, __DENORM, etc.)
+    // during linking -- a known Zig limitation as of 0.16.0-dev.
+    const use_lto = optimize != .Debug;
+    if (use_lto) {
+        ft_lib.lto = .thin;
+        hb_lib.lto = .thin;
+    }
+
+    // --- Tests ---
+    const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = mod })).step);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tools/layout_gen.zig"),
+        .target = b.graph.host,
+    }) })).step);
+
+    // --- Demo executable (opt-in via -Ddemo, default true) ---
+    if (build_demo) {
+        const exe = b.addExecutable(.{
+            .name = "heavy_slug",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/main.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "heavy_slug", .module = mod },
+                    .{ .name = "vulkan", .module = vulkan_zig },
+                },
+            }),
+        });
+
+        // GLFW (demo-only dependency)
+        const glfw_dep = b.dependency("glfw_src", .{});
+        const glfw_lib = buildGlfw(b, target, optimize);
+        exe.root_module.linkLibrary(glfw_lib);
+        exe.root_module.addIncludePath(glfw_dep.path("include"));
+
+        if (target.result.os.tag == .linux) {
+            exe.root_module.linkSystemLibrary("wayland-client", .{});
+            exe.root_module.linkSystemLibrary("wayland-cursor", .{});
+            exe.root_module.linkSystemLibrary("wayland-egl", .{});
+            exe.root_module.linkSystemLibrary("xkbcommon", .{});
+        }
+
+        if (use_lto) {
+            glfw_lib.lto = .thin;
+        }
+
+        b.installArtifact(exe);
+
+        // Run step
+        const run_step = b.step("run", "Run the app");
+        const run_cmd = b.addRunArtifact(exe);
+        run_step.dependOn(&run_cmd.step);
+        run_cmd.step.dependOn(b.getInstallStep());
+        if (b.args) |args| {
+            run_cmd.addArgs(args);
+        }
+
+        // Demo executable tests
+        test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = exe.root_module })).step);
+    }
 }
 
 fn compileSlangShader(
@@ -133,9 +150,6 @@ fn compileSlangShader(
 }
 
 fn generateReflectionJson(b: *std.Build) std.Build.LazyPath {
-    // Run slangc on slug_task.slang with -reflection-json flag
-    // slug_task.slang includes slug_common.slang which defines both
-    // GlyphCommand and PushConstants — one shader gives us both structs.
     const cmd = b.addSystemCommand(&.{"slangc"});
     cmd.addFileArg(b.path("shaders/slug_task.slang"));
     cmd.addArgs(&.{ "-entry", "taskMain" });
@@ -145,10 +159,8 @@ fn generateReflectionJson(b: *std.Build) std.Build.LazyPath {
     cmd.addArgs(&.{"-matrix-layout-column-major"});
     cmd.addArgs(&.{ "-I", "shaders" });
     cmd.addArgs(&.{"-O2"});
-    // slangc requires a SPIR-V output file even when we only want reflection
     cmd.addArg("-o");
     _ = cmd.addOutputFileArg("reflection_task.spv");
-    // Reflection JSON output
     cmd.addArg("-reflection-json");
     return cmd.addOutputFileArg("reflection.json");
 }
@@ -240,7 +252,6 @@ fn buildGlfw(
             lib.root_module.linkSystemLibrary("shell32", .{});
         },
         .linux => {
-            // Generate Wayland protocol headers via wayland-scanner
             const wl_protos = generateWaylandProtocols(b, glfw_dep);
             lib.root_module.addIncludePath(wl_protos);
 
@@ -259,9 +270,6 @@ fn buildGlfw(
                 },
                 .flags = platform_flags,
             });
-            // System libraries (wayland-client, wayland-cursor, wayland-egl,
-            // xkbcommon) must be linked by the consuming executable, not here,
-            // to avoid packing .so files into the static archive.
         },
         else => {},
     }
@@ -351,14 +359,12 @@ fn buildHarfbuzz(
     lib.root_module.addIncludePath(ft_dep.path("include"));
     lib.root_module.linkLibrary(ft_lib);
 
-    // Unity build — all core HarfBuzz in one TU
     lib.root_module.addCSourceFiles(.{
         .root = hb_dep.path("src"),
         .files = &.{"harfbuzz.cc"},
         .flags = &.{ "-DHAVE_FREETYPE=1", "-fno-exceptions", "-fno-rtti" },
     });
 
-    // GPU subsystem (libharfbuzz-gpu)
     lib.root_module.addCSourceFiles(.{
         .root = hb_dep.path("src"),
         .files = &.{ "hb-gpu-draw.cc", "hb-gpu-shaders.cc" },
@@ -387,16 +393,13 @@ fn generateWaylandProtocols(
     const wf = b.addWriteFiles();
 
     for (protocol_xmls) |xml| {
-        // Strip .xml suffix to get the protocol name
         const name = xml[0 .. xml.len - 4];
 
-        // Generate client-protocol.h (client-header)
         const header_cmd = b.addSystemCommand(&.{"wayland-scanner"});
         header_cmd.addArg("client-header");
         header_cmd.addFileArg(glfw_dep.path(b.fmt("deps/wayland/{s}", .{xml})));
         const header = header_cmd.addOutputFileArg(b.fmt("{s}-client-protocol.h", .{name}));
 
-        // Generate client-protocol-code.h (private-code)
         const code_cmd = b.addSystemCommand(&.{"wayland-scanner"});
         code_cmd.addArg("private-code");
         code_cmd.addFileArg(glfw_dep.path(b.fmt("deps/wayland/{s}", .{xml})));

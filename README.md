@@ -20,14 +20,14 @@ No intermediate bitmaps. Glyphs are resolution-independent and render crisply at
 ## Quick start
 
 ```bash
-# Build and run the interactive demo
-zig build run
-
-# Build library only
+# Build library only (default)
 zig build
 
 # Run tests
 zig build test
+
+# Build and run the interactive demo
+zig build run -Ddemo=true
 ```
 
 The demo renders lorem ipsum text with pan (left-drag), zoom (scroll), rotation (right-drag with momentum), dark mode (**B**), reset (**R**), and an FPS counter. Press **ESC** to exit.
@@ -107,12 +107,17 @@ All compiled from source by `zig build` -- no system packages required.
 | [vulkan-zig](https://github.com/Snektron/vulkan-zig) | latest | Vulkan binding generation |
 | [GLFW](https://www.glfw.org/) | 3.4 | Window + input (demo only) |
 
+GLFW is only fetched when building with `-Ddemo=true`.
+
 ## Building
 
 ```bash
-zig build                             # debug build
-zig build -Doptimize=ReleaseFast      # optimized build
-zig build test                        # run all tests (silent on success)
+zig build                             # library (debug)
+zig build -Doptimize=ReleaseFast      # library (release, ThinLTO on C deps)
+zig build -Ddemo=true                 # library + demo executable
+zig build run -Ddemo=true             # run demo
+zig build test                        # library + build tool tests
+zig build test -Ddemo=true            # all tests (library + demo)
 zig build shaders                     # compile Slang -> SPIR-V only
 ```
 
