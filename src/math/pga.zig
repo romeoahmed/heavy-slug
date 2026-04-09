@@ -110,11 +110,22 @@ pub const Motor = extern struct {
     }
 
     /// Motor from rotation by `angle` radians about an arbitrary center `(cx, cy)`.
+    /// Derived directly from the constraint apply(cx, cy) = (cx, cy).
+    /// Does NOT use compose(), which follows the PGA CW convention that is
+    /// inconsistent with apply()/toMat()'s CCW convention for mixed
+    /// rotation+translation motors.
     pub fn fromRotationAbout(angle: f32, cx: f32, cy: f32) Motor {
-        return compose(
-            fromTranslation(cx, cy),
-            compose(fromRotation(angle), fromTranslation(-cx, -cy)),
-        );
+        const half = angle * 0.5;
+        const s = @cos(half);
+        const a = @sin(half);
+        const cos_a = 1.0 - 2.0 * a * a; // cos(angle)
+        const sin_a = 2.0 * s * a; // sin(angle)
+        return .{ .m = .{
+            s,
+            a,
+            a * (sin_a * cx + cos_a * cy),
+            a * (-cos_a * cx + sin_a * cy),
+        } };
     }
 
     /// Renormalize a motor so that s² + e12² = 1.
@@ -339,4 +350,46 @@ test "Motor round-trip: reverse recovers original point" {
     const back = rot.reverse().apply(tr.reverse().apply(forward));
     try testing.expectApproxEqAbs(original[0], back[0], 1e-4);
     try testing.expectApproxEqAbs(original[1], back[1], 1e-4);
+}
+
+test "Motor.fromRotationAbout: center is fixed point" {
+    // Rotation about (3, 5) at various angles must leave (3, 5) unchanged.
+    const cx: f32 = 3.0;
+    const cy: f32 = 5.0;
+    const angles = [_]f32{ 0.0, std.math.pi / 6.0, std.math.pi / 2.0, std.math.pi, 2.3 };
+    for (angles) |angle| {
+        const m = Motor.fromRotationAbout(angle, cx, cy);
+        const p = m.apply(.{ cx, cy });
+        try testing.expectApproxEqAbs(cx, p[0], 1e-4);
+        try testing.expectApproxEqAbs(cy, p[1], 1e-4);
+    }
+}
+
+test "Motor.fromRotationAbout: 90° rotates non-center point correctly" {
+    // Rotate (1, 0) by 90° CCW about (0, 1).
+    // Expected: R(90°)×((1,0)-(0,1)) + (0,1) = R(90°)×(1,-1) + (0,1) = (1,1) + (0,1) = (1,2)
+    const m = Motor.fromRotationAbout(std.math.pi / 2.0, 0.0, 1.0);
+    const p = m.apply(.{ 1.0, 0.0 });
+    try testing.expectApproxEqAbs(@as(f32, 1.0), p[0], 1e-5);
+    try testing.expectApproxEqAbs(@as(f32, 2.0), p[1], 1e-5);
+}
+
+test "Motor.fromRotationAbout: toMat matches apply" {
+    const proj = [4][4]f32{
+        .{ 1, 0, 0, 0 },
+        .{ 0, 1, 0, 0 },
+        .{ 0, 0, 1, 0 },
+        .{ 0, 0, 0, 1 },
+    };
+    const m = Motor.fromRotationAbout(std.math.pi / 3.0, 4.0, -2.0);
+    const mat = m.toMat(proj);
+    // Test several points
+    const points = [_][2]f32{ .{ 4, -2 }, .{ 0, 0 }, .{ 10, 5 }, .{ -3, 7 } };
+    for (points) |pt| {
+        const mat_x = mat[0][0] * pt[0] + mat[1][0] * pt[1] + mat[3][0];
+        const mat_y = mat[0][1] * pt[0] + mat[1][1] * pt[1] + mat[3][1];
+        const applied = m.apply(pt);
+        try testing.expectApproxEqAbs(applied[0], mat_x, 1e-4);
+        try testing.expectApproxEqAbs(applied[1], mat_y, 1e-4);
+    }
 }
