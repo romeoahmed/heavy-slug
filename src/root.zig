@@ -87,3 +87,30 @@ test "integration: multiple texts through same FontContext" {
         try std.testing.expect(encoded.data.len > 0);
     }
 }
+
+test "integration: cache eviction reclaims pool space" {
+    var pa = pool.PoolAllocator.init(std.testing.allocator, 1024, 256);
+    defer pa.deinit();
+
+    // cold_capacity=2, no hot slots
+    var gc = try cache.GlyphCache.init(std.testing.allocator, 0, 2, 3);
+    defer gc.deinit();
+
+    const dummy_box = cache.EmBox{ .x_min = 0, .y_min = 0, .x_max = 64, .y_max = 64 };
+
+    // Fill cold cache with pool-backed allocations
+    const alloc_a = pa.alloc(100).?;
+    try gc.insertCold(.{ .font_id = 1, .glyph_id = 1 }, 0, alloc_a, dummy_box);
+
+    const alloc_b = pa.alloc(100).?;
+    try gc.insertCold(.{ .font_id = 1, .glyph_id = 2 }, 1, alloc_b, dummy_box);
+
+    // Cold is full -- evict LRU (alloc_a was inserted first)
+    const evicted = gc.evictLru().?;
+    try std.testing.expectEqual(alloc_a.offset, evicted.pool_alloc.offset);
+    pa.free(evicted.pool_alloc);
+
+    // Pool space is reusable -- new alloc should reclaim the freed offset
+    const recycled = pa.alloc(100).?;
+    try std.testing.expectEqual(alloc_a.offset, recycled.offset);
+}
