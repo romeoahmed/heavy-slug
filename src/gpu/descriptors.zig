@@ -28,7 +28,7 @@ test "PushConstants is 80 bytes with correct field offsets" {
 
 /// Stack-based free-list for descriptor slot indices.
 /// Manages indices 0..capacity-1. O(1) alloc/free.
-pub const SlotAllocator = struct {
+const SlotAllocator = struct {
     /// Stack of free slot indices. stack[0..count] are available.
     stack: []u32,
     count: u32,
@@ -115,7 +115,7 @@ test "SlotAllocator: free and re-alloc cycle" {
     try std.testing.expectEqual(x, y);
 }
 
-pub const max_glyph_descriptors: u32 = 65_536;
+const max_glyph_descriptors: u32 = 65_536;
 
 pub const DescriptorTable = struct {
     device: vk.Device,

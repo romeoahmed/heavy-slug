@@ -6,7 +6,7 @@ pub const CacheKey = struct {
     glyph_id: u32,
 };
 
-pub const Tier = enum { hot, cold };
+const Tier = enum { hot, cold };
 
 /// Pre-computed em-space bounding box (float, ready for GlyphCommand).
 pub const EmBox = struct {
