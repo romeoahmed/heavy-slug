@@ -114,3 +114,33 @@ test "integration: cache eviction reclaims pool space" {
     const recycled = pa.alloc(100).?;
     try std.testing.expectEqual(alloc_a.offset, recycled.offset);
 }
+
+test "integration: cold-to-hot promotion preserves pool allocation" {
+    var pa = pool.PoolAllocator.init(std.testing.allocator, 4096, 256);
+    defer pa.deinit();
+
+    var gc = try cache.GlyphCache.init(std.testing.allocator, 4, 4, 2);
+    defer gc.deinit();
+
+    const dummy_box = cache.EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
+    const alloc = pa.alloc(200).?;
+    const key = cache.CacheKey{ .font_id = 1, .glyph_id = 42 };
+    try gc.insertCold(key, 0, alloc, dummy_box);
+
+    // Use for 2 consecutive frames to trigger promotion (promote_frames=2)
+    gc.advanceFrame();
+    _ = gc.lookup(key);
+    gc.advanceFrame();
+    _ = gc.lookup(key);
+    gc.advanceFrame(); // promotion happens here
+
+    // Verify promoted: no cold entries left to evict
+    try std.testing.expectEqual(@as(?cache.EvictedEntry, null), gc.evictLru());
+    try std.testing.expectEqual(@as(u32, 1), gc.hot_count);
+    try std.testing.expectEqual(@as(u32, 0), gc.cold_count);
+
+    // Pool allocation is unchanged after promotion
+    const entry = gc.lookup(key).?;
+    try std.testing.expectEqual(alloc.offset, entry.pool_alloc.offset);
+    try std.testing.expectEqual(alloc.size, entry.pool_alloc.size);
+}
