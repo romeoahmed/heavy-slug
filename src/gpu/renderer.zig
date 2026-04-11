@@ -36,6 +36,30 @@ pub const Error = error{
     DescriptorSlotExhausted,
 };
 
+/// Per-frame performance counters. Zero-cost in release builds.
+pub const Stats = if (@import("builtin").mode == .Debug) struct {
+    cache_hits: u32 = 0,
+    cache_misses: u32 = 0,
+    evictions: u32 = 0,
+    descriptors_flushed: u32 = 0,
+    glyphs_submitted: u32 = 0,
+    pool_free_blocks: u32 = 0,
+
+    pub fn reset(self: *@This()) void {
+        self.* = .{};
+    }
+
+    pub fn log(self: *const @This()) void {
+        std.log.scoped(.renderer).debug(
+            "frame stats: hits={d} misses={d} evictions={d} desc_flushes={d} glyphs={d} free_blocks={d}",
+            .{ self.cache_hits, self.cache_misses, self.evictions, self.descriptors_flushed, self.glyphs_submitted, self.pool_free_blocks },
+        );
+    }
+} else struct {
+    pub fn reset(_: *@This()) void {}
+    pub fn log(_: *const @This()) void {}
+};
+
 pub const InitOptions = struct {
     /// Maximum bindless glyph descriptors. 64K covers all Unicode BMP
     /// glyphs at one font size; increase for multi-font workloads.
@@ -192,6 +216,9 @@ pub const TextRenderer = struct {
     // Reusable HarfBuzz buffer (zero-alloc render loop)
     shape_buffer: hb.Buffer,
 
+    // Per-frame debug counters (zero-cost in release)
+    stats: Stats,
+
     // Stored for future buffer creation
     memory_properties: vk.PhysicalDeviceMemoryProperties,
     allocator: std.mem.Allocator,
@@ -261,6 +288,7 @@ pub const TextRenderer = struct {
         // Bind command buffer descriptor once for the full allocation.
         // Per-pass offsets are handled via glyph_base in push constants.
         desc_table.updateCommandBuffer(cmd_buf.buffer, 0, cmd_buf_size);
+        desc_table.flushWrites();
 
         // 7. FreeType library
         const ft_library = try ft.Library.init();
@@ -287,6 +315,7 @@ pub const TextRenderer = struct {
             .flush_base = 0,
             .max_glyphs_per_frame = options.max_glyphs_per_frame,
             .shape_buffer = shape_buffer,
+            .stats = .{},
             .memory_properties = ctx.memory_properties,
             .allocator = allocator,
         };
@@ -337,6 +366,7 @@ pub const TextRenderer = struct {
         self.glyph_count = 0;
         self.flush_base = 0;
         self.glyph_cache.advanceFrame();
+        self.stats.reset();
     }
 
     /// Shape text and append glyph commands for GPU rendering.
@@ -392,10 +422,13 @@ pub const TextRenderer = struct {
                 .glyph_id = info.codepoint,
             };
 
-            const cached_glyph: CachedGlyph = if (self.glyph_cache.lookup(cache_key)) |entry|
-                .{ .slot = entry.slot, .em_box = entry.em_box }
-            else
-                try self.ensureGlyphCached(font, cache_key);
+            const cached_glyph: CachedGlyph = if (self.glyph_cache.lookup(cache_key)) |entry| blk: {
+                if (@import("builtin").mode == .Debug) self.stats.cache_hits += 1;
+                break :blk .{ .slot = entry.slot, .em_box = entry.em_box };
+            } else blk: {
+                if (@import("builtin").mode == .Debug) self.stats.cache_misses += 1;
+                break :blk try self.ensureGlyphCached(font, cache_key);
+            };
 
             commands[self.glyph_count] = .{
                 .motor = glyph_motor.m,
@@ -432,6 +465,7 @@ pub const TextRenderer = struct {
         // Evict if cold cache is full
         if (self.glyph_cache.cold_count >= self.glyph_cache.cold_capacity) {
             if (self.glyph_cache.evictLru()) |evicted| {
+                if (@import("builtin").mode == .Debug) self.stats.evictions += 1;
                 self.descriptor_table.nullSlot(evicted.slot);
                 self.descriptor_table.freeSlot(evicted.slot);
                 self.pool_alloc.free(evicted.pool_alloc);
@@ -554,7 +588,14 @@ pub const TextRenderer = struct {
 
         // Dispatch mesh shader workgroups (32 threads per workgroup in task shader)
         const workgroup_count = (pass_count + 31) / 32;
+        // Commit all pending descriptor updates before GPU dispatch
+        if (@import("builtin").mode == .Debug) self.stats.descriptors_flushed = self.descriptor_table.pending.len;
+        self.descriptor_table.flushWrites();
         self.dispatch.cmdDrawMeshTasksEXT(cmd_buf, workgroup_count, 1, 1);
+        if (@import("builtin").mode == .Debug) {
+            self.stats.glyphs_submitted += pass_count;
+            self.stats.pool_free_blocks = @intCast(self.pool_alloc.free_blocks.items.len);
+        }
 
         // Advance flush base for the next pass within this frame
         self.flush_base = self.glyph_count;
@@ -644,9 +685,24 @@ test "TextRenderer type compiles with expected fields" {
     try std.testing.expect(@hasField(TextRenderer, "glyph_count"));
     try std.testing.expect(@hasField(TextRenderer, "flush_base"));
     try std.testing.expect(@hasField(TextRenderer, "shape_buffer"));
+    try std.testing.expect(@hasField(TextRenderer, "stats"));
 }
 
 test "TextRenderer.init compiles" {
     // Type-check only — cannot call without a live Vulkan device
     _ = @TypeOf(TextRenderer.init);
+}
+
+test "Stats type compiles and has expected API" {
+    var stats = Stats{};
+    stats.reset();
+    stats.log();
+    if (@import("builtin").mode == .Debug) {
+        try std.testing.expectEqual(@as(u32, 0), stats.cache_hits);
+        try std.testing.expectEqual(@as(u32, 0), stats.cache_misses);
+        try std.testing.expectEqual(@as(u32, 0), stats.evictions);
+        try std.testing.expectEqual(@as(u32, 0), stats.descriptors_flushed);
+        try std.testing.expectEqual(@as(u32, 0), stats.glyphs_submitted);
+        try std.testing.expectEqual(@as(u32, 0), stats.pool_free_blocks);
+    }
 }
