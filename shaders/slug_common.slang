@@ -30,6 +30,7 @@ struct PushConstants  // 80 bytes — matches descriptors.zig
 // --- HarfBuzz blob constants ---
 
 static const float UNITS_PER_EM = 4.0;  // HB_GPU_UNITS_PER_EM
+static const float INV_UNITS_PER_EM = 1.0 / UNITS_PER_EM;  // 0.25 (reciprocal for fast multiply)
 static const uint  HEADER_LEN = 2;       // texels 0-1 are header
 
 // --- Blob texel reader ---
@@ -45,17 +46,18 @@ struct BlobReader
     int4 readTexel(uint index)
     {
         uint2 raw = buf.Load2(index * 8);
-        int r = int(raw.x << 16) >> 16;
-        int g = int(raw.x) >> 16;
-        int b = int(raw.y << 16) >> 16;
-        int a = int(raw.y) >> 16;
-        return int4(r, g, b, a);
+        return int4(
+            bitfieldExtract(int(raw.x),  0, 16),
+            bitfieldExtract(int(raw.x), 16, 16),
+            bitfieldExtract(int(raw.y),  0, 16),
+            bitfieldExtract(int(raw.y), 16, 16)
+        );
     }
 
-    // Read texel and dequantize to float4 (divide by UNITS_PER_EM).
+    // Read texel and dequantize to float4 (multiply by INV_UNITS_PER_EM for performance).
     float4 readTexelF(uint index)
     {
-        return float4(readTexel(index)) / UNITS_PER_EM;
+        return float4(readTexel(index)) * INV_UNITS_PER_EM;
     }
 
     // Decode a biased offset from int16: stored as (offset - 32768).
@@ -69,7 +71,7 @@ struct BlobReader
     {
         int4 t0 = readTexel(0);  // (min_x, min_y, max_x, max_y)
         int4 t1 = readTexel(1);  // (num_hbands, num_vbands, x_scale, y_scale)
-        bounds = float4(t0) / UNITS_PER_EM;
+        bounds = float4(t0) * INV_UNITS_PER_EM;
         bandCounts = int2(t1.x, t1.y);
         // t1.b (x_scale) and t1.a (y_scale) are font design units; not needed by band lookup.
     }
@@ -87,7 +89,7 @@ struct BlobReader
         curveCount = uint(t.x);
         descOffset = decodeOffset(t.y);
         ascOffset  = decodeOffset(t.z);
-        split      = float(t.w) / UNITS_PER_EM;
+        split      = float(t.w) * INV_UNITS_PER_EM;
     }
 
     // Read a curve index entry: returns decoded offset to curve data.
