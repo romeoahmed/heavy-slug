@@ -17,12 +17,12 @@
             .hash = "vulkan-0.0.0-r7Ytx99oAwDmJu0XtvukW_bSYnAv1PpbPO9ZFwsjcPPO",
         },
         .vulkan_headers = .{
-            .url = "git+https://github.com/KhronosGroup/Vulkan-Headers#afe9eb980aa928a66d1c9c06f38c55dd59868720",
-            .hash = "N-V-__8AAPwhagKzo63CN9Xp9fZgDF34VxO0bJWvZ8XUcNZA",
+            .url = "git+https://github.com/KhronosGroup/Vulkan-Headers#f6a6f7ab165cedbfa2a7d0c93fe27a2d01ce09c8",
+            .hash = "N-V-__8AAC1ZbAIG2kVq3iPpAWaOlDTQ3MOyOyQQR0o_-9ez",
         },
         .glfw_src = .{
-            .url = "https://github.com/glfw/glfw/archive/refs/tags/3.4.tar.gz",
-            .hash = "N-V-__8AAL40TADEbrysYHBl-UIZO4KiG4chP8pLDVDINGH4",
+            .url = "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip",
+            .hash = "N-V-__8AAGILeQBiX6fOeXM8aImETLAuofbkuBtGo_q6zsGB",
         },
     },
     .paths = .{
