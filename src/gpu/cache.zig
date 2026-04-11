@@ -264,6 +264,7 @@ pub const GlyphCache = struct {
             if (self.hot_count >= self.hot_capacity) break;
             const entry = self.map.getPtr(key) orelse continue;
             if (entry.tier != .cold) continue; // already promoted or evicted
+            if (entry.consecutive_frames < self.promote_frames) continue; // stale queue entry
             self.lruUnlink(entry.lru_idx);
             self.lruFree(entry.lru_idx);
             entry.lru_idx = LRU_NONE;
