@@ -31,6 +31,25 @@ pub const CacheEntry = struct {
 const LRU_SENTINEL_HEAD: u32 = 0; // MRU end
 const LRU_SENTINEL_TAIL: u32 = 1; // LRU end
 const LRU_NONE: u32 = std.math.maxInt(u32);
+const MAX_PROMOTIONS_PER_FRAME: usize = 64;
+
+/// Fixed-capacity queue backed by a stack array. Used for the promotion queue.
+fn BoundedQueue(comptime T: type, comptime cap: usize) type {
+    return struct {
+        buf: [cap]T = undefined,
+        len: usize = 0,
+
+        pub fn append(self: *@This(), val: T) error{Overflow}!void {
+            if (self.len >= cap) return error.Overflow;
+            self.buf[self.len] = val;
+            self.len += 1;
+        }
+
+        pub fn constSlice(self: *const @This()) []const T {
+            return self.buf[0..self.len];
+        }
+    };
+}
 
 const LruNode = struct {
     key: CacheKey,
@@ -64,6 +83,7 @@ pub const GlyphCache = struct {
     allocator: std.mem.Allocator,
     lru_nodes: []LruNode,
     lru_free_head: u32,
+    promote_queue: BoundedQueue(CacheKey, MAX_PROMOTIONS_PER_FRAME),
 
     /// Wrapping frame age: how many frames ago was `frame` relative to `current`.
     /// Handles u32 overflow correctly via wrapping subtraction.
@@ -139,6 +159,7 @@ pub const GlyphCache = struct {
             .promote_frames = promote_frames,
             .lru_nodes = lru_nodes,
             .lru_free_head = free_head,
+            .promote_queue = .{},
         };
     }
 
@@ -210,45 +231,48 @@ pub const GlyphCache = struct {
     /// Returns a mutable pointer into the map — valid until next map mutation.
     pub fn lookup(self: *GlyphCache, key: CacheKey) ?*CacheEntry {
         const entry = self.map.getPtr(key) orelse return null;
+
+        // Same-frame dedup: skip LRU touch and consecutive-frame logic
+        if (entry.last_frame == self.current_frame) return entry;
+
         // Update consecutive-frame tracking
-        if (entry.last_frame != self.current_frame) {
-            if (frameAge(self.current_frame, entry.last_frame) == 1) {
-                entry.consecutive_frames +|= 1; // saturating add (u8)
-            } else {
-                entry.consecutive_frames = 1; // gap in usage — reset streak
-            }
+        if (frameAge(self.current_frame, entry.last_frame) == 1) {
+            entry.consecutive_frames +|= 1; // saturating add (u8)
+        } else {
+            entry.consecutive_frames = 1; // gap in usage — reset streak
         }
         entry.last_frame = self.current_frame;
+
         // Move cold entry to MRU position in LRU list
         if (entry.tier == .cold) {
             self.lruTouch(entry.lru_idx);
+            // Queue for promotion if threshold reached
+            if (entry.consecutive_frames >= self.promote_frames) {
+                self.promote_queue.append(key) catch {};
+            }
         }
         return entry;
     }
 
-    /// Advance the frame counter. Promotes cold entries that have been used for
-    /// `promote_frames` consecutive frames into the hot tier (if hot has capacity).
+    /// Advance the frame counter. Promotes cold entries queued during lookup()
+    /// into the hot tier (if hot has capacity). O(queue_len), not O(cache_size).
     pub fn advanceFrame(self: *GlyphCache) void {
         self.current_frame +%= 1;
 
-        if (self.hot_count >= self.hot_capacity) return;
-
-        // Only mutate value_ptr fields in-place — do NOT call map.put/remove here.
-        var it = self.map.iterator();
-        while (it.next()) |entry| {
-            if (entry.value_ptr.tier == .cold and
-                entry.value_ptr.consecutive_frames >= self.promote_frames)
-            {
-                self.lruUnlink(entry.value_ptr.lru_idx);
-                self.lruFree(entry.value_ptr.lru_idx);
-                entry.value_ptr.lru_idx = LRU_NONE;
-                entry.value_ptr.tier = .hot;
-                entry.value_ptr.consecutive_frames = 0;
-                self.hot_count += 1;
-                self.cold_count -= 1;
-                if (self.hot_count >= self.hot_capacity) break;
-            }
+        // Promote queued candidates (O(queue_len), not O(cache_size))
+        for (self.promote_queue.constSlice()) |key| {
+            if (self.hot_count >= self.hot_capacity) break;
+            const entry = self.map.getPtr(key) orelse continue;
+            if (entry.tier != .cold) continue; // already promoted or evicted
+            self.lruUnlink(entry.lru_idx);
+            self.lruFree(entry.lru_idx);
+            entry.lru_idx = LRU_NONE;
+            entry.tier = .hot;
+            entry.consecutive_frames = 0;
+            self.hot_count += 1;
+            self.cold_count -= 1;
         }
+        self.promote_queue.len = 0;
     }
 
     /// Evict the least-recently-used cold entry. O(1) via DLL tail pop.
@@ -634,6 +658,8 @@ test "GlyphCache: access moves entry to MRU end" {
     try cache.insertCold(key_b, 1, .{ .offset = 64, .size = 64 }, dummy_box);
     try cache.insertCold(key_c, 2, .{ .offset = 128, .size = 64 }, dummy_box);
 
+    // Advance to next frame so lookup isn't same-frame as insert
+    cache.advanceFrame();
     // Touch A — moves to MRU
     _ = cache.lookup(key_a);
 
@@ -663,4 +689,56 @@ test "GlyphCache: promoted entry not returned by evictLru" {
     const evicted = cache.evictLru().?;
     try std.testing.expectEqual(key_b, evicted.key);
     try std.testing.expectEqual(@as(?EvictedEntry, null), cache.evictLru());
+}
+
+test "GlyphCache: promotion queue populated during lookup" {
+    var cache_inst = try GlyphCache.init(std.testing.allocator, 4, 8, 2);
+    defer cache_inst.deinit();
+
+    const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
+    const key = CacheKey{ .font_id = 1, .glyph_id = 65 };
+    try cache_inst.insertCold(key, 0, .{ .offset = 0, .size = 64 }, dummy_box);
+
+    // Frame 0: insert → consecutive = 1
+    // Frame 1: lookup → consecutive = 2 (>= promote_frames=2)
+    cache_inst.advanceFrame();
+    _ = cache_inst.lookup(key);
+
+    // Queue should have the key ready for promotion
+    try std.testing.expectEqual(@as(usize, 1), cache_inst.promote_queue.len);
+    try std.testing.expectEqual(key, cache_inst.promote_queue.constSlice()[0]);
+
+    // advanceFrame drains the queue and promotes
+    cache_inst.advanceFrame();
+    try std.testing.expectEqual(@as(usize, 0), cache_inst.promote_queue.len);
+    try std.testing.expectEqual(Tier.hot, cache_inst.lookup(key).?.tier);
+}
+
+test "GlyphCache: same-frame lookups skip LRU touch" {
+    // Verify that same-frame duplicate lookups do not change eviction order.
+    var cache_inst = try GlyphCache.init(std.testing.allocator, 0, 3, 3);
+    defer cache_inst.deinit();
+
+    const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
+    const key_a = CacheKey{ .font_id = 1, .glyph_id = 1 };
+    const key_b = CacheKey{ .font_id = 1, .glyph_id = 2 };
+    const key_c = CacheKey{ .font_id = 1, .glyph_id = 3 };
+
+    try cache_inst.insertCold(key_a, 0, .{ .offset = 0, .size = 64 }, dummy_box);
+    try cache_inst.insertCold(key_b, 1, .{ .offset = 64, .size = 64 }, dummy_box);
+    try cache_inst.insertCold(key_c, 2, .{ .offset = 128, .size = 64 }, dummy_box);
+
+    // Advance frame so lookups aren't same-frame as insert
+    cache_inst.advanceFrame();
+
+    // Touch A once — moves to MRU (frame 1 != frame 0 → lruTouch)
+    _ = cache_inst.lookup(key_a);
+
+    // Touch A again in the same frame — should NOT re-touch LRU
+    _ = cache_inst.lookup(key_a);
+
+    // Evict order: B (LRU), C, A (MRU) — same as if only touched once
+    try std.testing.expectEqual(key_b, cache_inst.evictLru().?.key);
+    try std.testing.expectEqual(key_c, cache_inst.evictLru().?.key);
+    try std.testing.expectEqual(key_a, cache_inst.evictLru().?.key);
 }
