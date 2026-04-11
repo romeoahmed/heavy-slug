@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Vulkan-Headers** updated to 1.4.349 (`f6a6f7ab`)
+- **GLFW** dependency URL switched from tar.gz archive to official zip release artifact
+
 ## [1.1.0] - 2026-04-10
 
 ### Added
