@@ -7,10 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-04-12
+
+### Added
+
+- **Debug stats** (`renderer.zig`): comptime-conditional `Stats` struct tracking cache hits/misses, evictions, descriptor flushes, glyphs submitted, and pool free blocks per frame -- zero overhead in release builds
+- **Promotion queue** (`cache.zig`): bounded queue (max 64) populated during `lookup()`, drained in `advanceFrame()` -- replaces O(cache_size) full HashMap scan with O(queue_length)
+- **Same-frame dedup** (`cache.zig`): `lookup()` short-circuits on repeated access within the same frame, eliminating redundant LRU list mutations
+- **Shared `kTaskGroupSize`** (`slug_common.slang`): task/mesh workgroup size defined once, imported by both shaders to prevent silent divergence
+- **`INV_UNITS_PER_EM`** (`slug_common.slang`): precomputed reciprocal constant for BlobReader dequantization
+
 ### Changed
 
-- **Vulkan-Headers** updated to 1.4.349 (`f6a6f7ab`)
-- **GLFW** dependency URL switched from tar.gz archive to official zip release artifact
+- **Descriptor writes batched** (`descriptors.zig`): `updateSlot()`, `nullSlot()`, and `updateCommandBuffer()` enqueue into a pending buffer (max 256) flushed in a single `vkUpdateDescriptorSets` call -- reduces hundreds of Vulkan API calls to 1-2 per frame
+- **Pool allocator rewritten** (`pool.zig`): offset-sorted free-list with best-fit allocation and adjacent-block coalescing on `free()` -- keeps free list at ~10-50 entries in steady state vs thousands without coalescing
+- **Task shader uses wave ballot** (`slug_task.slang`): `WaveActiveCountBits`/`WavePrefixCountBits` replace `InterlockedAdd` atomic compaction (~1 cycle vs ~32 serial cycles); precomputes dilation values into extended `TaskPayload`
+- **Mesh shader reads precomputed payload** (`slug_mesh.slang`): `emPerPixels[gid]` from task payload replaces local dilation computation, eliminating 2x `sqrt` per mesh workgroup
+- **BlobReader micro-optimizations** (`slug_common.slang`): `/ UNITS_PER_EM` replaced with `* INV_UNITS_PER_EM`; `bitfieldExtract` replaces shift-based int16 unpacking in `readTexel()`
+- **`README.md` and `CLAUDE.md`** rewritten to document performance architecture, new subsystem sections, LTO limitation details, and `std.BoundedArray` removal (ziglang/zig#24699)
+
+### Fixed
+
+- **False promotion guard** (`cache.zig`): `advanceFrame()` re-checks `consecutive_frames >= promote_frames` at drain time to prevent stale queue entries from triggering incorrect promotion after `removeFont()` + reinsertion
+- **`descriptors_flushed` stat** (`renderer.zig`): changed from `=` to `+=` to accumulate correctly across multi-flush frames
 
 ## [1.1.0] - 2026-04-10
 
@@ -22,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Vulkan-Headers** updated to 1.4.349 (`f6a6f7ab`)
+- **GLFW** dependency URL switched from tar.gz archive to official zip release artifact
 - **`-Ddemo` build flag** (default `false`): library consumers no longer fetch or compile GLFW -- pass `-Ddemo=true` to build the demo executable
 - **`build.zig` reorganized** into clear sections: options, Vulkan bindings, shaders, GPU structs, library module, C deps, LTO, tests, demo
 
@@ -49,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Integration tests**: 8 cross-module tests in `src/root.zig` covering font pipeline, cache+pool coordination, and motor+font positioning -- all without a live Vulkan device
 - **Unit tests**: Comprehensive tests across all modules (context, descriptors, pipeline, pool, cache, renderer, PGA, font, glyph, layout_gen)
 
-[Unreleased]: https://github.com/romeoahmed/heavy-slug/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/romeoahmed/heavy-slug/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/romeoahmed/heavy-slug/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/romeoahmed/heavy-slug/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/romeoahmed/heavy-slug/releases/tag/v1.0.0
