@@ -17,9 +17,9 @@ pub fn build(b: *std.Build) void {
     // --- Shader compilation: Slang -> SPIR-V ---
     const shader_step = b.step("shaders", "Compile Slang shaders to SPIR-V");
 
-    const task_spv = compileSlangShader(b, "slug_task.spv", "shaders/slug_task.slang", "taskMain", "amplification");
-    const mesh_spv = compileSlangShader(b, "slug_mesh.spv", "shaders/slug_mesh.slang", "meshMain", "mesh");
-    const frag_spv = compileSlangShader(b, "slug_fragment.spv", "shaders/slug_fragment.slang", "fragmentMain", "fragment");
+    const task_spv = compileSlangShader(b, "slug_task.spv", "shaders/slug_task.slang", "taskMain", "amplification", "spvGroupNonUniformBallot");
+    const mesh_spv = compileSlangShader(b, "slug_mesh.spv", "shaders/slug_mesh.slang", "meshMain", "mesh", "");
+    const frag_spv = compileSlangShader(b, "slug_fragment.spv", "shaders/slug_fragment.slang", "fragmentMain", "fragment", "");
 
     const shader_wf = b.addWriteFiles();
     _ = shader_wf.addCopyFile(task_spv, "slug_task.spv");
@@ -135,13 +135,18 @@ fn compileSlangShader(
     source: []const u8,
     entry: []const u8,
     stage: []const u8,
+    extra_caps: []const u8,
 ) std.Build.LazyPath {
     const cmd = b.addSystemCommand(&.{"slangc"});
     cmd.addFileArg(b.path(source));
     cmd.addArgs(&.{ "-entry", entry });
     cmd.addArgs(&.{ "-stage", stage });
     cmd.addArgs(&.{ "-target", "spirv" });
-    cmd.addArgs(&.{ "-profile", "spirv_1_6" });
+    const profile = if (extra_caps.len > 0)
+        std.mem.concat(b.allocator, u8, &.{ "spirv_1_6+", extra_caps }) catch @panic("OOM")
+    else
+        "spirv_1_6";
+    cmd.addArgs(&.{ "-profile", profile });
     cmd.addArgs(&.{"-matrix-layout-column-major"});
     cmd.addArgs(&.{ "-I", "shaders" });
     cmd.addArgs(&.{"-O2"});
@@ -155,7 +160,7 @@ fn generateReflectionJson(b: *std.Build) std.Build.LazyPath {
     cmd.addArgs(&.{ "-entry", "taskMain" });
     cmd.addArgs(&.{ "-stage", "amplification" });
     cmd.addArgs(&.{ "-target", "spirv" });
-    cmd.addArgs(&.{ "-profile", "spirv_1_6" });
+    cmd.addArgs(&.{ "-profile", "spirv_1_6+spvGroupNonUniformBallot" });
     cmd.addArgs(&.{"-matrix-layout-column-major"});
     cmd.addArgs(&.{ "-I", "shaders" });
     cmd.addArgs(&.{"-O2"});
