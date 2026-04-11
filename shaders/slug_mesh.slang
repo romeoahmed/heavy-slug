@@ -17,9 +17,9 @@ PushConstants pc;
 
 struct TaskPayload
 {
-    uint glyphIndices[32];
-    float motorScales[32];   // precomputed motor scale (dot product of motor rotor)
-    float2 emPerPixels[32];  // precomputed em-per-pixel for dilation
+    uint glyphIndices[kTaskGroupSize];
+    float motorScales[kTaskGroupSize];   // precomputed motor scale (dot product of motor rotor)
+    float2 emPerPixels[kTaskGroupSize];  // precomputed em-per-pixel for dilation
 };
 
 // --- Mesh output ---

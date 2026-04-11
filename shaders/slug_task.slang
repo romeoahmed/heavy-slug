@@ -14,16 +14,13 @@ StructuredBuffer<GlyphCommand> commands;
 [[vk::push_constant]]
 PushConstants pc;
 
-// Workgroup size constant — must match [numthreads] attribute.
-static const uint kGroupSize = 32;
-
 // --- Payload to mesh shader ---
 
 struct TaskPayload
 {
-    uint glyphIndices[kGroupSize];
-    float motorScales[kGroupSize];   // precomputed motor scale (dot product of motor rotor)
-    float2 emPerPixels[kGroupSize];  // precomputed em-per-pixel for dilation
+    uint glyphIndices[kTaskGroupSize];
+    float motorScales[kTaskGroupSize];   // precomputed motor scale (dot product of motor rotor)
+    float2 emPerPixels[kTaskGroupSize];  // precomputed em-per-pixel for dilation
 };
 
 groupshared TaskPayload s_payload;
@@ -47,10 +44,10 @@ bool isVisible(float4 c0, float4 c1, float4 c2, float4 c3)
 }
 
 [shader("amplification")]
-[numthreads(kGroupSize, 1, 1)]
+[numthreads(kTaskGroupSize, 1, 1)]
 void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
 {
-    uint localIndex = gid * kGroupSize + gtid;
+    uint localIndex = gid * kTaskGroupSize + gtid;
     uint glyphIndex = pc.glyph_base + localIndex;
     bool alive = false;
 

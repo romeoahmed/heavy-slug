@@ -33,6 +33,11 @@ static const float UNITS_PER_EM = 4.0;  // HB_GPU_UNITS_PER_EM
 static const float INV_UNITS_PER_EM = 1.0 / UNITS_PER_EM;  // 0.25 (reciprocal for fast multiply)
 static const uint  HEADER_LEN = 2;       // texels 0-1 are header
 
+// --- Task/mesh workgroup size ---
+// Both slug_task.slang and slug_mesh.slang import this constant to keep
+// TaskPayload array sizes in sync. Change only here.
+static const uint kTaskGroupSize = 32;
+
 // --- Blob texel reader ---
 // Each texel is 8 bytes: 4x int16 packed as 2x uint32.
 // Storage buffer contains raw bytes; we unpack int16 manually.
