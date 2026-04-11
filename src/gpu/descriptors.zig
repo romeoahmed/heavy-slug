@@ -116,6 +116,13 @@ test "SlotAllocator: free and re-alloc cycle" {
 }
 
 const max_glyph_descriptors: u32 = 65_536;
+const max_pending_writes: u32 = 256;
+
+const PendingWrites = struct {
+    writes: [max_pending_writes]vk.WriteDescriptorSet = undefined,
+    buf_infos: [max_pending_writes]vk.DescriptorBufferInfo = undefined,
+    len: u32 = 0,
+};
 
 pub const DescriptorTable = struct {
     device: vk.Device,
@@ -124,6 +131,7 @@ pub const DescriptorTable = struct {
     pool: vk.DescriptorPool,
     set: vk.DescriptorSet,
     slots: SlotAllocator,
+    pending: PendingWrites,
 
     pub fn init(
         ctx: gpu_context.VulkanContext,
@@ -207,6 +215,7 @@ pub const DescriptorTable = struct {
             .pool = pool,
             .set = set,
             .slots = slots,
+            .pending = .{},
         };
     }
 
@@ -217,6 +226,28 @@ pub const DescriptorTable = struct {
         self.dispatch.destroyDescriptorPool(self.device, self.pool, null);
         self.dispatch.destroyDescriptorSetLayout(self.device, self.layout, null);
         self.* = undefined;
+    }
+
+    /// Flush all pending descriptor writes in a single Vulkan API call.
+    /// Must be called before any GPU work that reads the descriptors.
+    pub fn flushWrites(self: *DescriptorTable) void {
+        if (self.pending.len == 0) return;
+        // Fix up p_buffer_info pointers — they must point into our inline array
+        for (self.pending.writes[0..self.pending.len], 0..) |*w, i| {
+            w.p_buffer_info = @ptrCast(&self.pending.buf_infos[i]);
+        }
+        self.dispatch.updateDescriptorSets(self.device, self.pending.writes[0..self.pending.len], null);
+        self.pending.len = 0;
+    }
+
+    /// Append a write to the pending buffer. Auto-flushes if buffer is full.
+    fn enqueueWrite(self: *DescriptorTable, buf_info: vk.DescriptorBufferInfo, write: vk.WriteDescriptorSet) void {
+        if (self.pending.len == max_pending_writes) {
+            self.flushWrites();
+        }
+        self.pending.buf_infos[self.pending.len] = buf_info;
+        self.pending.writes[self.pending.len] = write;
+        self.pending.len += 1;
     }
 
     /// Point descriptor slot `index` at a sub-range of `buffer`.
@@ -240,11 +271,11 @@ pub const DescriptorTable = struct {
             .dst_array_element = index,
             .descriptor_count = 1,
             .descriptor_type = .storage_buffer,
-            .p_buffer_info = @ptrCast(&buf_info),
+            .p_buffer_info = undefined, // fixed up in flushWrites
             .p_image_info = undefined,
             .p_texel_buffer_view = undefined,
         };
-        self.dispatch.updateDescriptorSets(self.device, &.{write}, null);
+        self.enqueueWrite(buf_info, write);
     }
 
     /// Update binding 1 to point at the GlyphCommand[] buffer for this frame.
@@ -266,11 +297,11 @@ pub const DescriptorTable = struct {
             .dst_array_element = 0,
             .descriptor_count = 1,
             .descriptor_type = .storage_buffer,
-            .p_buffer_info = @ptrCast(&buf_info),
+            .p_buffer_info = undefined, // fixed up in flushWrites
             .p_image_info = undefined,
             .p_texel_buffer_view = undefined,
         };
-        self.dispatch.updateDescriptorSets(self.device, &.{write}, null);
+        self.enqueueWrite(buf_info, write);
     }
 
     /// Allocate a descriptor slot index from the free-list.
@@ -300,11 +331,11 @@ pub const DescriptorTable = struct {
             .dst_array_element = index,
             .descriptor_count = 1,
             .descriptor_type = .storage_buffer,
-            .p_buffer_info = @ptrCast(&buf_info),
+            .p_buffer_info = undefined, // fixed up in flushWrites
             .p_image_info = undefined,
             .p_texel_buffer_view = undefined,
         };
-        self.dispatch.updateDescriptorSets(self.device, &.{write}, null);
+        self.enqueueWrite(buf_info, write);
     }
 };
 
@@ -317,4 +348,14 @@ test "DescriptorTable type and field layout compiles" {
     try std.testing.expect(@hasField(DescriptorTable, "pool"));
     try std.testing.expect(@hasField(DescriptorTable, "set"));
     try std.testing.expect(@hasField(DescriptorTable, "slots"));
+    try std.testing.expect(@hasField(DescriptorTable, "pending"));
+}
+
+test "DescriptorTable: pending write buffer type compiles" {
+    // Compile-time verification that DescriptorTable has batched write fields.
+    try std.testing.expect(@hasField(DescriptorTable, "pending"));
+    // Verify flushWrites method exists
+    _ = @TypeOf(DescriptorTable.flushWrites);
+    // Verify enqueueWrite is accessible (it's private but compiles)
+    _ = @TypeOf(DescriptorTable.enqueueWrite);
 }
