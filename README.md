@@ -6,15 +6,15 @@ GPU text rendering library for Zig, implementing the [Slug algorithm](https://jc
 
 1. **Shape** -- HarfBuzz performs Unicode text shaping (bidi, ligatures, kerning)
 2. **Encode** -- HarfBuzz GPU encodes glyph outlines into Slug-format blobs (quadratic Bezier bands)
-3. **Cache** -- Two-tier glyph cache (hot/cold LRU) maps glyphs to bindless storage buffer descriptors
-4. **Dispatch** -- Task shader frustum-culls, mesh shader emits dilated quads, fragment shader evaluates exact coverage per-pixel
+3. **Cache** -- Two-tier glyph cache (hot/cold LRU) with promotion queue maps glyphs to bindless storage buffer descriptors
+4. **Dispatch** -- Task shader frustum-culls via wave ballot, mesh shader emits dilated quads from precomputed payload, fragment shader evaluates exact coverage per-pixel
 
 No intermediate bitmaps. Glyphs are resolution-independent and render crisply at any zoom level.
 
 ## Requirements
 
 - **GPU**: Vulkan 1.4 with `VK_EXT_mesh_shader` and `VK_EXT_robustness2`
-- **Build**: Zig 0.16.0-dev (minimum `0.16.0-dev.3133+5ec8e45f3`)
+- **Build**: Zig 0.16.0-dev (minimum `0.16.0-dev.3144+ac6fb0b59`)
 - **Shader compiler**: [slangc](https://shader-slang.com/) on PATH
 
 ## Quick start
@@ -77,18 +77,18 @@ src/
     glyph.zig         -- FontContext: shape + encode pipeline
   gpu/
     context.zig       -- VulkanContext, device dispatch, feature validation
-    descriptors.zig   -- Bindless descriptor table, auto-generated GPU structs
-    pool.zig          -- Bump + free-list sub-allocator for glyph blobs
-    cache.zig         -- Two-tier hot/cold LRU glyph cache (O(1) ops)
+    descriptors.zig   -- Bindless descriptor table with batched writes, auto-generated GPU structs
+    pool.zig          -- Sorted best-fit sub-allocator with adjacent-block coalescing
+    cache.zig         -- Two-tier hot/cold LRU glyph cache with promotion queue
     pipeline.zig      -- Mesh shader pipeline, embedded SPIR-V
     renderer.zig      -- TextRenderer: the public rendering API
   math/
     pga.zig           -- 2D PGA motors, SIMD via @Vector(4,f32)
 shaders/
-    slug_task.slang   -- Task shader: frustum cull + workgroup dispatch
-    slug_mesh.slang   -- Mesh shader: dilated quad per glyph
+    slug_task.slang   -- Task shader: frustum cull + wave ballot compaction
+    slug_mesh.slang   -- Mesh shader: dilated quad from precomputed payload
     slug_fragment.slang -- Fragment shader: Slug band coverage
-    slug_common.slang -- Shared types (GlyphCommand, PushConstants)
+    slug_common.slang -- Shared types, constants, BlobReader
     pga.slang         -- Motor math (mirrors pga.zig)
 tools/
     layout_gen.zig    -- Generates Zig structs from Slang shader reflection
