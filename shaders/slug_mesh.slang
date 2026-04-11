@@ -18,6 +18,8 @@ PushConstants pc;
 struct TaskPayload
 {
     uint glyphIndices[32];
+    float motorScales[32];   // precomputed motor scale (dot product of motor rotor)
+    float2 emPerPixels[32];  // precomputed em-per-pixel for dilation
 };
 
 // --- Mesh output ---
@@ -66,16 +68,8 @@ void meshMain(
     float2 emSize = emMax - emMin;
 
     // Dilate by half a pixel in em-space to avoid clipping edge fragments.
-    // Compute em-per-pixel from the projection + motor scale.
-    // Use column vector lengths so rotated projections (via Motor.toMat) work;
-    // for a diagonal projection this reduces to abs(proj[i][i]) * viewport/2.
-    float motorScale = cmd.motor.x * cmd.motor.x + cmd.motor.y * cmd.motor.y;
-    float2 halfDim = pc.viewport_dim * 0.5;
-    float2 pixPerEm = float2(
-        length(float2(pc.proj[0][0] * halfDim.x, pc.proj[1][0] * halfDim.y)),
-        length(float2(pc.proj[0][1] * halfDim.x, pc.proj[1][1] * halfDim.y))
-    );
-    float2 emPerPixel = 1.0 / (pixPerEm * motorScale);
+    // em-per-pixel is precomputed in the task shader to avoid 2x sqrt per workgroup.
+    float2 emPerPixel = taskPayload.emPerPixels[gid];
     float2 dilate = emPerPixel * 0.5;
     float2 dilMin = emMin - dilate;
     float2 dilMax = emMax + dilate;
