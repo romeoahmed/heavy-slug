@@ -589,7 +589,7 @@ pub const TextRenderer = struct {
         // Dispatch mesh shader workgroups (32 threads per workgroup in task shader)
         const workgroup_count = (pass_count + 31) / 32;
         // Commit all pending descriptor updates before GPU dispatch
-        if (@import("builtin").mode == .Debug) self.stats.descriptors_flushed = self.descriptor_table.pending.len;
+        if (@import("builtin").mode == .Debug) self.stats.descriptors_flushed += self.descriptor_table.pending.len;
         self.descriptor_table.flushWrites();
         self.dispatch.cmdDrawMeshTasksEXT(cmd_buf, workgroup_count, 1, 1);
         if (@import("builtin").mode == .Debug) {
