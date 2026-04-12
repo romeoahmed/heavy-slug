@@ -96,9 +96,9 @@ pub fn build(b: *std.Build) void {
             }),
         });
 
-        // GLFW (demo-only dependency)
-        const glfw_dep = b.dependency("glfw_src", .{});
-        const glfw_lib = buildGlfw(b, target, optimize);
+        // GLFW (demo-only dependency, lazy in build.zig.zon)
+        const glfw_dep = b.lazyDependency("glfw_src", .{}) orelse return;
+        const glfw_lib = buildGlfw(b, glfw_dep, target, optimize);
         exe.root_module.linkLibrary(glfw_lib);
         exe.root_module.addIncludePath(glfw_dep.path("include"));
 
@@ -188,10 +188,10 @@ fn generateGpuStructs(
 
 fn buildGlfw(
     b: *std.Build,
+    glfw_dep: *std.Build.Dependency,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) *std.Build.Step.Compile {
-    const glfw_dep = b.dependency("glfw_src", .{});
     const vk_headers = b.dependency("vulkan_headers", .{});
 
     const lib = b.addLibrary(.{
