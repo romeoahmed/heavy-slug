@@ -13,8 +13,26 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Detect Zig version
+        id: zig
+        run: echo "version=$(grep -oP 'minimum_zig_version\s*=\s*"\K[^"]+' build.zig.zon)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Zig cache
+        id: zig-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/zig
+          key: zig-${{ steps.zig.outputs.version }}-linux-x86_64
+
       - name: Setup Zig
-        uses: mlugg/setup-zig@v2
+        run: .github/scripts/setup-zig.sh
+
+      - name: Save Zig cache
+        if: steps.zig-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/zig
+          key: zig-${{ steps.zig.outputs.version }}-linux-x86_64
 
       - name: Check formatting
         run: zig fmt --check src/ tools/
@@ -25,14 +43,73 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Zig
-        uses: mlugg/setup-zig@v2
+      - name: Detect Zig version
+        id: zig
+        run: echo "version=$(grep -oP 'minimum_zig_version\s*=\s*"\K[^"]+' build.zig.zon)" >> "$GITHUB_OUTPUT"
 
-      - name: Install Vulkan SDK
-        uses: humbletim/install-vulkan-sdk@v1.2
+      - name: Detect Slang version
+        id: slang
+        run: echo "version=$(gh api repos/shader-slang/slang/releases/latest --jq '.tag_name | ltrimstr("v")')" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # --- Restore all caches ---
+
+      - name: Restore Zig cache
+        id: zig-cache
+        uses: actions/cache/restore@v5
         with:
-          version: latest
-          cache: true
+          path: ~/zig
+          key: zig-${{ steps.zig.outputs.version }}-linux-x86_64
+
+      - name: Restore Slang cache
+        id: slang-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/slang
+          key: slang-${{ steps.slang.outputs.version }}-linux-x86_64
+
+      - name: Cache Zig global packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/zig
+          key: zig-global-${{ hashFiles('build.zig.zon') }}
+          restore-keys: zig-global-
+
+      - name: Cache Zig local build artifacts
+        uses: actions/cache@v5
+        with:
+          path: .zig-cache
+          key: zig-local-test-${{ hashFiles('build.zig.zon', 'build.zig', 'src/**', 'shaders/**', 'tools/**') }}
+          restore-keys: zig-local-test-
+
+      # --- Setup tools ---
+
+      - name: Setup Zig
+        run: .github/scripts/setup-zig.sh
+
+      - name: Setup Slang
+        run: .github/scripts/setup-slang.sh
+        env:
+          SLANG_VERSION: ${{ steps.slang.outputs.version }}
+
+      # --- Save tool caches (explicit save survives build failures) ---
+
+      - name: Save Zig cache
+        if: steps.zig-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/zig
+          key: zig-${{ steps.zig.outputs.version }}-linux-x86_64
+
+      - name: Save Slang cache
+        if: steps.slang-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/slang
+          key: slang-${{ steps.slang.outputs.version }}-linux-x86_64
+
+      # --- Build and test ---
 
       - name: Verify tools
         run: |
@@ -49,14 +126,73 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Setup Zig
-        uses: mlugg/setup-zig@v2
+      - name: Detect Zig version
+        id: zig
+        run: echo "version=$(grep -oP 'minimum_zig_version\s*=\s*"\K[^"]+' build.zig.zon)" >> "$GITHUB_OUTPUT"
 
-      - name: Install Vulkan SDK
-        uses: humbletim/install-vulkan-sdk@v1.2
+      - name: Detect Slang version
+        id: slang
+        run: echo "version=$(gh api repos/shader-slang/slang/releases/latest --jq '.tag_name | ltrimstr("v")')" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      # --- Restore all caches ---
+
+      - name: Restore Zig cache
+        id: zig-cache
+        uses: actions/cache/restore@v5
         with:
-          version: latest
-          cache: true
+          path: ~/zig
+          key: zig-${{ steps.zig.outputs.version }}-linux-x86_64
+
+      - name: Restore Slang cache
+        id: slang-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/slang
+          key: slang-${{ steps.slang.outputs.version }}-linux-x86_64
+
+      - name: Cache Zig global packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/zig
+          key: zig-global-${{ hashFiles('build.zig.zon') }}
+          restore-keys: zig-global-
+
+      - name: Cache Zig local build artifacts
+        uses: actions/cache@v5
+        with:
+          path: .zig-cache
+          key: zig-local-build-${{ hashFiles('build.zig.zon', 'build.zig', 'src/**', 'shaders/**', 'tools/**') }}
+          restore-keys: zig-local-build-
+
+      # --- Setup tools ---
+
+      - name: Setup Zig
+        run: .github/scripts/setup-zig.sh
+
+      - name: Setup Slang
+        run: .github/scripts/setup-slang.sh
+        env:
+          SLANG_VERSION: ${{ steps.slang.outputs.version }}
+
+      # --- Save tool caches (explicit save survives build failures) ---
+
+      - name: Save Zig cache
+        if: steps.zig-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/zig
+          key: zig-${{ steps.zig.outputs.version }}-linux-x86_64
+
+      - name: Save Slang cache
+        if: steps.slang-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/slang
+          key: slang-${{ steps.slang.outputs.version }}-linux-x86_64
+
+      # --- Build ---
 
       - name: Build
         run: zig build -Doptimize=ReleaseFast
