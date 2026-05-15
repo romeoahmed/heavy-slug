@@ -1,0 +1,24 @@
+pub const freetype = @import("freetype.zig");
+pub const harfbuzz = @import("harfbuzz.zig");
+pub const glyph = @import("glyph.zig");
+pub const shape = @import("shape.zig");
+pub const font_system = @import("font_system.zig");
+
+pub const FreeTypeLibrary = freetype.Library;
+pub const FreeTypeFace = freetype.Face;
+pub const HarfBuzzBuffer = harfbuzz.Buffer;
+pub const HarfBuzzFont = harfbuzz.Font;
+pub const FontContext = glyph.FontContext;
+pub const EncodedGlyph = glyph.EncodedGlyph;
+pub const FontSystem = font_system.FontSystem;
+
+pub const ft = freetype;
+pub const hb = harfbuzz;
+
+test {
+    _ = freetype;
+    _ = harfbuzz;
+    _ = glyph;
+    _ = shape;
+    _ = font_system;
+}

@@ -1,24 +1,33 @@
 //! heavy_slug core API: font shaping, glyph encoding, and math.
 
 const std = @import("std");
-pub const font = @import("font/root.zig");
+pub const core = @import("core/root.zig");
 pub const pga = @import("math/pga.zig");
-pub const cache = @import("cache/glyph.zig");
-pub const pool = @import("cache/pool.zig");
-pub const render = @import("render.zig");
+pub const gpu = @import("gpu/root.zig");
 
-pub const FontContext = font.FontContext;
-pub const EncodedGlyph = font.EncodedGlyph;
-pub const FontHandle = render.FontHandle;
+pub const FontContext = core.font.FontContext;
+pub const EncodedGlyph = core.font.EncodedGlyph;
+pub const FontHandle = core.render.text_core.FontHandle;
+pub const Color = core.Color;
+pub const Transform = core.Transform;
+pub const Viewport = core.Viewport;
+pub const Projection = core.Projection;
+pub const FillRule = core.FillRule;
+pub const FontSource = core.FontSource;
+pub const FontOptions = core.FontOptions;
+pub const GlyphKey = core.GlyphKey;
+pub const RendererOptions = core.RendererOptions;
+pub const TextRun = core.TextRun;
 
 const test_font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
+const font = core.font;
+const cache = core.cache.glyph_cache;
+const pool = core.cache.byte_pool;
 
 test {
-    _ = font;
+    _ = core;
     _ = pga;
-    _ = pool;
-    _ = cache;
-    _ = render;
+    _ = gpu;
 }
 
 test "integration: shape text and encode all unique glyphs" {

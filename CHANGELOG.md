@@ -9,17 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking refactor in progress:** core public types, unit conversions, backend contracts, font/cache/render internals, and demo layout moved under the new `src/core/`, `src/gpu/`, `src/backends/`, and `src/demo/{common,vulkan,metal}/` structure described in `docs/architecture-refactor-spec.md`.
+- **Backend renderer API now exposes `Frame` and `Target` types** so demos submit text through an explicit begin/draw/submit frame boundary.
+- **Text submission now uses `TextRun`** on backend frames, and font loading uses `FontSource` plus `FontOptions`.
+- **Slang sources are split into `shaders/core/` and `shaders/entries/`** so shared modules and entry points have distinct ownership.
+- **Build logic split into `build/` modules** for dependency resolution, C libraries, shader compilation, backend modules, and demos.
+- **Root compatibility aliases removed** for old font/cache/pool/render paths; consumers should use top-level public types or explicit `heavy_slug.core.*` modules.
 - **Breaking:** `FontContext.init` now takes an explicit allocator for the Zig-native outline encoder.
 - **Glyph encoding now owns its blob format** by using HarfBuzz draw callbacks directly instead of `hb_gpu_draw_encode`, then raising all outline primitives into cubic spans.
 - **Cubic rendering regularized** by splitting cubic outlines at axis extrema and inflection points, preserving monotone control polygons after quantization, and using safeguarded Newton iteration with strict crossing tests in the fragment shader.
 - **Glyph cache keys are variation-aware** with a reserved variation hash field for future variable-font instances.
 - **Coverage V3 blobs gained an h-band candidate index** that accelerates common fragments while preserving the full-scan path as the correctness fallback.
+- **Coverage blob versioning normalized** so encoder, decoder, and shader modules all refer to Coverage V3.
 - **Zig 0.16 API usage tightened** by replacing deprecated `std.ArrayListUnmanaged` aliases and old `std.mem.indexOf` calls.
 - **CI expanded** to run tests and ReleaseFast builds on both `ubuntu-latest` and `macos-26`, including `-Dvulkan=true` on Ubuntu and `-Dmetal=true` on macOS ARM64.
 - **Tool setup scripts hardened** to infer runner platforms, resolve Zig packages from the official download index, and match Slang release tarballs exactly.
 
 ### Removed
 
+- **Legacy source roots** `src/font/`, `src/cache/`, `src/render.zig`, `src/vulkan/`, and `src/metal/`; consumers now use top-level public types or explicit `heavy_slug.core.*` modules.
 - **Repository-local VS Code settings** (`.vscode/`) so editor configuration stays user-local.
 
 ## [2.0.0] - 2026-05-15

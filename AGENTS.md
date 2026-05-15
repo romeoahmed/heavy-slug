@@ -2,9 +2,9 @@
 
 ## Project Structure & Module Organization
 
-`heavy-slug` is a Zig 0.16 GPU text rendering library. The core module is `src/root.zig`; it exports font shaping, HarfBuzz-backed native outline encoding, PGA math, cache/pool utilities, and backend-neutral render orchestration from `src/render.zig`. The core does not own a GPU context or depend on GLFW.
+`heavy-slug` is a Zig 0.16 GPU text rendering library. The core module is `src/root.zig`; it exports stable public types from `src/core/`, HarfBuzz-backed native outline encoding, PGA math, cache/pool utilities, and backend-neutral render orchestration. The core does not own a GPU context or depend on GLFW.
 
-Backend modules are opt-in. `src/vulkan/` provides `heavy_slug_vulkan` for Vulkan SPIR-V 1.6 mesh shaders. `src/metal/` provides `heavy_slug_metal` for macOS Metal 4 and accepts externally provided Metal device, command queue, and layer objects. Demo-only code lives in `src/demo/`; GLFW and Cocoa window setup must stay there. Shaders are in `shaders/`, and `tools/layout_gen.zig` generates GPU ABI structs from Slang reflection. Test assets live in `assets/`.
+Backend modules are opt-in. `src/backends/vulkan/` provides `heavy_slug_vulkan` for Vulkan SPIR-V 1.6 mesh shaders. `src/backends/metal/` provides `heavy_slug_metal` for macOS Metal 4 and accepts externally provided Metal device, command queue, and layer objects. Demo-only code lives in `src/demo/`; shared scene/input code is in `src/demo/common/`, and platform hosts stay under `src/demo/vulkan/` and `src/demo/metal/`. Shared Slang modules are in `shaders/core/`, entry points are in `shaders/entries/`, and `tools/layout_gen.zig` generates GPU ABI structs from Slang reflection. Architecture plans live in `docs/`.
 
 ## Build, Test, and Development Commands
 
@@ -20,7 +20,7 @@ Backend modules are opt-in. `src/vulkan/` provides `heavy_slug_vulkan` for Vulka
 
 ## Coding Style & Naming Conventions
 
-Run `zig fmt build.zig src/ tools/` before submitting. Use lowercase module filenames, `PascalCase` public types, `camelCase` functions and fields, and descriptive constants matching local style. Keep shader layouts generated from reflection; do not hand-edit generated GPU structs. Use `build.zig` `addTranslateC()` modules for C headers instead of source-level `@cImport`.
+Run `zig fmt build.zig build/ src/ tools/` before submitting. Use lowercase module filenames, `PascalCase` public types, `camelCase` functions and fields, and descriptive constants matching local style. Keep shader layouts generated from reflection; do not hand-edit generated GPU structs. Use build-system `addTranslateC()` modules for C headers instead of source-level `@cImport`.
 
 ## Testing Guidelines
 

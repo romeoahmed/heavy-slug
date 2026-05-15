@@ -46,7 +46,6 @@ Import the core module plus one backend module:
 ```zig
 const heavy_slug = @import("heavy_slug");
 const heavy_slug_vulkan = @import("heavy_slug_vulkan");
-const pga = heavy_slug.pga;
 
 try heavy_slug_vulkan.Context.checkDeviceSupport(
     physical_device,
@@ -61,14 +60,23 @@ const ctx = heavy_slug_vulkan.Context.init(
     get_device_proc_addr,
 );
 
-var renderer = try heavy_slug_vulkan.TextRenderer.init(ctx, color_format, allocator, .{});
+var renderer = try heavy_slug_vulkan.Renderer.init(ctx, color_format, allocator, .{});
 defer renderer.deinit();
 
-const font = try renderer.loadFont("assets/Inter-Regular.otf", 24);
+const font = try renderer.loadFont(.{ .path = "assets/Inter-Regular.otf" }, .{ .size_px = 24 });
 
-renderer.begin();
-try renderer.drawText(font, "Hello, world!", pga.Motor.fromTranslation(100, 200), .{ 1, 1, 1, 1 });
-renderer.flush(cmd_buf, projection, .{ viewport_w, viewport_h });
+var frame = renderer.beginFrame();
+try frame.drawText(.{
+    .font = font,
+    .text = "Hello, world!",
+    .transform = heavy_slug.Transform.translation(100, 200),
+    .color = .white,
+});
+try frame.submit(.{
+    .command_buffer = cmd_buf,
+    .projection = projection,
+    .viewport = .{ viewport_w, viewport_h },
+});
 ```
 
 Metal uses the same renderer shape, but the app provides host-owned Metal objects:
@@ -83,7 +91,7 @@ var ctx = try heavy_slug_metal.Context.init(.{
 });
 defer ctx.deinit();
 
-var renderer = try heavy_slug_metal.TextRenderer.init(ctx, allocator, .{});
+var renderer = try heavy_slug_metal.Renderer.init(ctx, allocator, .{});
 defer renderer.deinit();
 ```
 
@@ -92,17 +100,21 @@ defer renderer.deinit();
 ```text
 src/
   root.zig              core public module
-  render.zig            backend-neutral TextCore
-  font/                 FreeType, HarfBuzz, FontContext
-  cache/                glyph cache and byte pool
+  core/                 public/private core types, units, font, outline, blob, render contracts
+  gpu/                  backend-neutral GPU resource model declarations
   math/                 PGA motor math
-  vulkan/               Vulkan backend module
-  metal/                Metal backend module and ObjC++ bridge
-  demo/                 GLFW demos and platform host helpers
-  c/                    headers translated by build.zig addTranslateC()
-shaders/                Slang task/object, mesh, fragment, shared ABI
+  backends/vulkan/      Vulkan backend module
+  backends/metal/       Metal backend module and ObjC++ bridge
+  demo/common/          shared GLFW scene/input code
+  demo/vulkan/          Vulkan demo host and main
+  demo/metal/           Metal demo host and main
+  c/                    headers translated by build-system addTranslateC()
+build/                  build graph modules for deps, C libs, shaders, backends, and demos
+shaders/core/           shared Slang ABI, PGA, and coverage modules
+shaders/entries/        Slang task/object, mesh, and fragment entry points
 tools/layout_gen.zig    Slang reflection to Zig extern structs
 assets/                 test/demo assets
+docs/                   architecture spec and phase plans
 ```
 
 ## Build Options

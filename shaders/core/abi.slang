@@ -1,0 +1,25 @@
+// GPU ABI shared by all heavy-slug shader stages.
+// CPU structs are generated from slangc reflection of these definitions.
+
+struct GlyphCommand
+{
+    float4 motor;
+    float4 color;
+    float  em_x_min;
+    float  em_y_min;
+    float  em_x_max;
+    float  em_y_max;
+    uint   descriptor_index;
+    uint   flags;
+    uint2  _pad;
+};
+
+struct PushConstants
+{
+    float4x4 proj;
+    float2   viewport_dim;
+    uint     glyph_count;
+    uint     glyph_base;
+};
+
+static const uint kTaskGroupSize = 32;
