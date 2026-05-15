@@ -7,76 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-05-15
+
+### Added
+
+- **Metal 4 backend** (`src/metal/`): macOS renderer using Slang-generated Metal MSL, mesh shaders, an ObjC++ Metal bridge, external host objects, and triple-buffered submission.
+- **Backend-neutral core renderer** (`src/render.zig`): shared text shaping, glyph encoding, cache/pool coordination, empty-glyph handling, and command generation used by Vulkan and Metal.
+- **Demo-only Metal host** (`src/demo/metal_host.mm`): GLFW Cocoa window to Metal device, command queue, and `CAMetalLayer` setup without coupling the library backend to GLFW.
+- **Zig 0.16 C translation modules** (`src/c/`): FreeType/HarfBuzz and GLFW declarations are translated from `build.zig` with `addTranslateC()`.
+- **Configurable ThinLTO** (`-Dthinlto=auto|on|off`): release builds enable ThinLTO where Zig 0.16 can link it and expose an explicit hard-fail mode.
+
 ### Changed
 
-- **CI rewritten** (`.github/workflows/test.yaml`): replaced third-party setup actions with bash scripts (`.github/scripts/setup-zig.sh`, `setup-slang.sh`) that resolve Zig from `build.zig.zon`, stable/latest/master, or an explicit version and resolve Slang from latest or an explicit release; `workflow_dispatch` inputs can override Zig and Slang versions manually
-- **Layered CI caching**: `actions/cache@v5` with four layers -- Zig/Slang binaries (explicit restore/save, survives build failures), Zig global packages (keyed on `build.zig.zon`), Zig local build artifacts (keyed on source hash, separate keys for test vs release)
-- **GLFW marked lazy** (`build.zig.zon`): `.lazy = true` prevents Zig from eagerly fetching GLFW when building without `-Ddemo=true`
+- **Breaking:** Public API split into a lightweight `heavy_slug` core module plus opt-in `heavy_slug_vulkan` and `heavy_slug_metal` backend modules.
+- **Breaking:** GPU contexts are externally supplied; core code no longer owns windowing or graphics-device creation.
+- **Breaking:** Demo build selection is platform/backend explicit: `-Ddemo-backend=vulkan_spirv16` for Windows/Linux and `-Ddemo-backend=metal4` for macOS.
+- **Vulkan renderer simplified** to use shared `TextCore`, reducing duplicated shaping, caching, and command encoding logic.
+- **Glyph cache eviction made current-frame safe** so pool storage referenced by the frame being assembled is not reused prematurely.
+- **Build graph cleaned up** so `vulkan`, `vulkan_headers`, and `glfw_src` remain lazy, and FreeType/HarfBuzz dependencies are resolved once.
+- **CI rewritten** with repository scripts for configurable Zig and Slang versions plus layered caching for tools, global Zig packages, and local build artifacts.
+- **Documentation rewritten** for the 2.0 architecture; `README.md` and `AGENTS.md` now describe core/backend boundaries and current commands.
+
+### Removed
+
+- **Source-level `@cImport` blocks** in Zig modules; C imports now live in build-system translation modules.
+- **`CLAUDE.md`** project guidance; `AGENTS.md` is now the repository contributor and agent guide.
+- **Hard GLFW dependency outside demos**; library and backend modules no longer require GLFW.
+
+### Fixed
+
+- **Slang SPIR-V profile warning** by declaring required group non-uniform capabilities explicitly.
+- **macOS release ThinLTO behavior** by skipping unsupported Mach-O ThinLTO in `auto` mode and reporting a clear error in `on` mode.
 
 ## [1.2.0] - 2026-04-12
 
 ### Added
 
-- **Debug stats** (`renderer.zig`): comptime-conditional `Stats` struct tracking cache hits/misses, evictions, descriptor flushes, glyphs submitted, and pool free blocks per frame -- zero overhead in release builds
-- **Promotion queue** (`cache.zig`): bounded queue (max 64) populated during `lookup()`, drained in `advanceFrame()` -- replaces O(cache_size) full HashMap scan with O(queue_length)
-- **Same-frame dedup** (`cache.zig`): `lookup()` short-circuits on repeated access within the same frame, eliminating redundant LRU list mutations
-- **Shared `kTaskGroupSize`** (`slug_common.slang`): task/mesh workgroup size defined once, imported by both shaders to prevent silent divergence
-- **`INV_UNITS_PER_EM`** (`slug_common.slang`): precomputed reciprocal constant for BlobReader dequantization
+- **Debug stats** (`renderer.zig`): comptime-conditional `Stats` struct tracking cache hits/misses, evictions, descriptor flushes, glyphs submitted, and pool free blocks per frame -- zero overhead in release builds.
+- **Promotion queue** (`cache.zig`): bounded queue populated during `lookup()`, drained in `advanceFrame()` -- replaces O(cache_size) full HashMap scans.
+- **Same-frame dedup** (`cache.zig`): `lookup()` short-circuits on repeated access within the same frame, eliminating redundant LRU list mutations.
+- **Shared shader constants** (`slug_common.slang`): task/mesh workgroup size and reciprocal units-per-em constants are shared by shader stages.
 
 ### Changed
 
-- **Descriptor writes batched** (`descriptors.zig`): `updateSlot()`, `nullSlot()`, and `updateCommandBuffer()` enqueue into a pending buffer (max 256) flushed in a single `vkUpdateDescriptorSets` call -- reduces hundreds of Vulkan API calls to 1-2 per frame
-- **Pool allocator rewritten** (`pool.zig`): offset-sorted free-list with best-fit allocation and adjacent-block coalescing on `free()` -- keeps free list at ~10-50 entries in steady state vs thousands without coalescing
-- **Task shader uses wave ballot** (`slug_task.slang`): `WaveActiveCountBits`/`WavePrefixCountBits` replace `InterlockedAdd` atomic compaction (~1 cycle vs ~32 serial cycles); precomputes dilation values into extended `TaskPayload`
-- **Mesh shader reads precomputed payload** (`slug_mesh.slang`): `emPerPixels[gid]` from task payload replaces local dilation computation, eliminating 2x `sqrt` per mesh workgroup
-- **BlobReader micro-optimizations** (`slug_common.slang`): `/ UNITS_PER_EM` replaced with `* INV_UNITS_PER_EM`; `bitfieldExtract` replaces shift-based int16 unpacking in `readTexel()`
-- **`README.md` and `CLAUDE.md`** rewritten to document performance architecture, new subsystem sections, LTO limitation details, and `std.BoundedArray` removal (ziglang/zig#24699)
+- **Descriptor writes batched** (`descriptors.zig`): descriptor updates are accumulated and flushed in fewer Vulkan API calls.
+- **Pool allocator rewritten** (`pool.zig`): offset-sorted free-list with best-fit allocation and adjacent-block coalescing on `free()`.
+- **Task shader optimized** with wave ballot compaction and precomputed payload values.
+- **Mesh/fragment shader math optimized** by reducing repeated dilation and dequantization work.
+- **Documentation expanded** to cover performance architecture and build constraints.
 
 ### Fixed
 
-- **False promotion guard** (`cache.zig`): `advanceFrame()` re-checks `consecutive_frames >= promote_frames` at drain time to prevent stale queue entries from triggering incorrect promotion after `removeFont()` + reinsertion
-- **`descriptors_flushed` stat** (`renderer.zig`): changed from `=` to `+=` to accumulate correctly across multi-flush frames
+- **False promotion guard**: promotion queue entries are rechecked before promotion.
+- **`descriptors_flushed` stat**: multi-flush frames now accumulate correctly.
 
 ## [1.1.0] - 2026-04-10
 
 ### Added
 
-- **MIT license** and **README.md** with usage examples, architecture overview, and build instructions
-- **GitHub Actions CI** (`.github/workflows/test.yaml`): lint, test, and release build jobs using Vulkan SDK and Zig
-- **ThinLTO** on C static libraries (FreeType, HarfBuzz, GLFW) in release builds for cross-language optimization
+- **MIT license** and initial `README.md`.
+- **GitHub Actions CI** for formatting, tests, and release builds.
+- **ThinLTO** on C static libraries in release builds where supported.
 
 ### Changed
 
-- **Vulkan-Headers** updated to 1.4.349 (`f6a6f7ab`)
-- **GLFW** dependency URL switched from tar.gz archive to official zip release artifact
-- **`-Ddemo` build flag** (default `false`): library consumers no longer fetch or compile GLFW -- pass `-Ddemo=true` to build the demo executable
-- **`build.zig` reorganized** into clear sections: options, Vulkan bindings, shaders, GPU structs, library module, C deps, LTO, tests, demo
+- **Vulkan-Headers** updated to 1.4.349.
+- **GLFW** dependency switched to the official zip release artifact.
+- **`-Ddemo` build flag** defaults to `false` so library consumers avoid demo dependencies.
+- **`build.zig` reorganized** into clearer build sections.
 
 ## [1.0.0] - 2026-04-09
 
 ### Added
 
-- **Core library** (`src/root.zig`): GPU text rendering via the Slug algorithm (Eric Lengyel) for exact quadratic Bezier coverage
-- **PGA motor math** (`src/math/pga.zig`): Cl(2,0,1) 2D motors with `@Vector(4,f32)` SIMD -- translation, rotation, composition, `composeTranslation` hot path, `unitize`, `toMat` projection embedding
-- **FreeType integration** (`src/font/ft.zig`): Font loading via FreeType 2.14.3 compiled from source
-- **HarfBuzz integration** (`src/font/hb.zig`): Unicode text shaping and HarfBuzz GPU glyph encoding via HarfBuzz 14.1.0
-- **FontContext** (`src/font/glyph.zig`): Combined font pipeline -- shape text, encode glyphs to Slug format blobs
-- **VulkanContext** (`src/gpu/context.zig`): Device wrapper with filtered dispatch, feature validation for `VK_EXT_mesh_shader` and `VK_EXT_robustness2`
-- **Mesh shader pipeline** (`src/gpu/pipeline.zig`): Task + mesh + fragment pipeline with embedded SPIR-V, dynamic rendering (no VkRenderPass)
-- **Bindless descriptors** (`src/gpu/descriptors.zig`): Descriptor table with slot allocator for glyph storage buffers
-- **Glyph cache** (`src/gpu/cache.zig`): Two-tier hot/cold LRU cache with O(1) eviction via index-based doubly-linked list, automatic cold-to-hot promotion
-- **Pool allocator** (`src/gpu/pool.zig`): Bump + free-list sub-allocator for GPU buffer memory, aligned to `minStorageBufferOffsetAlignment`
-- **TextRenderer** (`src/gpu/renderer.zig`): Public API -- `init`, `loadFont`, `unloadFont`, `begin`/`drawText`/`flush` render loop
-- **Slang shaders** (`shaders/`): Task shader (frustum cull), mesh shader (dilated quad), fragment shader (Slug band lookup + coverage), PGA motor math, shared types
-- **GPU struct generation** (`tools/layout_gen.zig`): Build-time tool that parses `slangc -reflection-json` output and generates `extern struct` Zig types -- shader is single source of truth
-- **Interactive demo** (`src/main.zig`): Pan, zoom, right-drag rotation with momentum, dark mode (B), reset (R), FPS counter, lorem ipsum text viewer
-- **GLFW wrapper** (`src/demo/glfw.zig`): GLFW 3.4 with manual Vulkan externs to avoid vulkan.h conflicts
-- **Demo Vulkan bootstrap** (`src/demo/vulkan.zig`): Instance, device, swapchain, double-buffered frame sync
-- **Wayland support**: Linux builds use Wayland backend for GLFW
-- **Integration tests**: 8 cross-module tests in `src/root.zig` covering font pipeline, cache+pool coordination, and motor+font positioning -- all without a live Vulkan device
-- **Unit tests**: Comprehensive tests across all modules (context, descriptors, pipeline, pool, cache, renderer, PGA, font, glyph, layout_gen)
+- Initial core Slug text renderer with FreeType, HarfBuzz, Vulkan mesh shaders, PGA motor math, Slang shaders, generated GPU structs, interactive demo, Wayland GLFW support, and unit/integration tests.
 
-[Unreleased]: https://github.com/romeoahmed/heavy-slug/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/romeoahmed/heavy-slug/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/romeoahmed/heavy-slug/compare/v1.2.0...v2.0.0
 [1.2.0]: https://github.com/romeoahmed/heavy-slug/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/romeoahmed/heavy-slug/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/romeoahmed/heavy-slug/releases/tag/v1.0.0

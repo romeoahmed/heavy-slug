@@ -13,13 +13,7 @@ extern fn glfwGetInstanceProcAddress(instance: vk.Instance, procname: [*:0]const
 extern fn glfwCreateWindowSurface(instance: vk.Instance, window: glfw.Window, allocator: ?*const anyopaque, surface: *vk.SurfaceKHR) vk.Result;
 
 fn getRequiredInstanceExtensions() []const [*:0]const u8 {
-    const c = @cImport({
-        @cDefine("GLFW_INCLUDE_NONE", "");
-        @cInclude("GLFW/glfw3.h");
-    });
-    var count: u32 = 0;
-    const exts = c.glfwGetRequiredInstanceExtensions(&count) orelse return &.{};
-    return @ptrCast(exts[0..count]);
+    return glfw.getRequiredInstanceExtensions();
 }
 
 fn getInstanceProcAddress(instance: vk.Instance, name: [*:0]const u8) vk.PfnVoidFunction {

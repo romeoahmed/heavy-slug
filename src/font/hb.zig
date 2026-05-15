@@ -1,12 +1,6 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("ft2build.h");
-    @cInclude("freetype/freetype.h");
-    @cInclude("hb.h");
-    @cInclude("hb-ft.h");
-    @cInclude("hb-gpu.h");
-});
 const ft = @import("ft.zig");
+const c = ft.c;
 
 pub const Error = error{
     HarfBuzzBufferCreateFailed,
@@ -116,8 +110,7 @@ pub const Font = struct {
     /// Create a HarfBuzz font from a raw FT_Face handle.
     /// Uses hb_ft_font_create_referenced — HarfBuzz takes a reference to the face,
     /// so the caller must keep the FT_Face alive for the lifetime of this Font.
-    pub fn createFromFtFace(ft_face_raw: *anyopaque) !Font {
-        const ft_face: c.FT_Face = @ptrCast(@alignCast(ft_face_raw));
+    pub fn createFromFtFace(ft_face: c.FT_Face) !Font {
         const hb_font = c.hb_ft_font_create_referenced(ft_face) orelse return error.HarfBuzzAllocationFailed;
         return .{ .handle = hb_font };
     }

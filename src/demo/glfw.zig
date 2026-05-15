@@ -1,9 +1,6 @@
 //! Thin GLFW wrapper for the demo executable.
 
-const c = @cImport({
-    @cDefine("GLFW_INCLUDE_NONE", "");
-    @cInclude("GLFW/glfw3.h");
-});
+pub const c = @import("glfw_c");
 
 // --- Public API ---
 
@@ -52,6 +49,13 @@ pub fn getFramebufferSize(window: Window) [2]u32 {
     var h: c_int = 0;
     c.glfwGetFramebufferSize(window, &w, &h);
     return .{ @intCast(w), @intCast(h) };
+}
+
+/// Returns GLFW-managed Vulkan instance extension names.
+pub fn getRequiredInstanceExtensions() []const [*:0]const u8 {
+    var count: u32 = 0;
+    const exts = c.glfwGetRequiredInstanceExtensions(&count) orelse return &.{};
+    return @ptrCast(exts[0..count]);
 }
 
 pub fn getTime() f64 {

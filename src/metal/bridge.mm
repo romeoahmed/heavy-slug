@@ -1,21 +1,28 @@
 #include "bridge.h"
 
-#import <Cocoa/Cocoa.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 
-#define GLFW_EXPOSE_NATIVE_COCOA
-#include <GLFW/glfw3.h>
-#include <GLFW/glfw3native.h>
-
+#include <dispatch/dispatch.h>
 #include <stdio.h>
 #include <string.h>
+
+static constexpr uint32_t kFrameSlotCount = 3;
+
+struct hs_metal_frame_slot {
+    dispatch_semaphore_t semaphore;
+    bool reserved;
+    bool in_flight;
+    bool failed;
+    __strong NSString *message;
+};
 
 struct hs_metal_context {
     id<MTLDevice> device;
     id<MTLCommandQueue> command_queue;
     id<MTLRenderPipelineState> pipeline_state;
     CAMetalLayer *layer;
+    hs_metal_frame_slot frame_slots[kFrameSlotCount];
 };
 
 struct hs_metal_buffer {
@@ -52,8 +59,8 @@ static id<MTLLibrary> make_library(
     return library;
 }
 
-static hs_metal_context *create_context(
-    NSWindow *ns_window,
+hs_metal_context *hs_metal_context_create(
+    hs_metal_host_objects host,
     const char *task_source,
     size_t task_source_len,
     const char *mesh_source,
@@ -63,9 +70,9 @@ static hs_metal_context *create_context(
     char *error_buffer,
     size_t error_buffer_len) {
     @autoreleasepool {
-        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        id<MTLDevice> device = (__bridge id<MTLDevice>)host.device;
         if (!device) {
-            write_error(error_buffer, error_buffer_len, @"MTLCreateSystemDefaultDevice returned nil");
+            write_error(error_buffer, error_buffer_len, @"Metal context creation received a nil MTLDevice");
             return nullptr;
         }
 
@@ -74,20 +81,17 @@ static hs_metal_context *create_context(
             return nullptr;
         }
 
-        if (!ns_window) {
-            write_error(error_buffer, error_buffer_len, @"Metal context creation received a nil NSWindow");
+        id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)host.command_queue;
+        if (!command_queue) {
+            write_error(error_buffer, error_buffer_len, @"Metal context creation received a nil MTLCommandQueue");
             return nullptr;
         }
 
-        CAMetalLayer *layer = [CAMetalLayer layer];
-        layer.device = device;
-        layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-        layer.framebufferOnly = YES;
-        layer.displaySyncEnabled = YES;
-
-        NSView *view = [ns_window contentView];
-        view.wantsLayer = YES;
-        view.layer = layer;
+        CAMetalLayer *layer = (__bridge CAMetalLayer *)host.layer;
+        if (!layer) {
+            write_error(error_buffer, error_buffer_len, @"Metal context creation received a nil CAMetalLayer");
+            return nullptr;
+        }
 
         id<MTLLibrary> task_library = make_library(device, task_source, task_source_len, error_buffer, error_buffer_len);
         if (!task_library) return nullptr;
@@ -123,63 +127,68 @@ static hs_metal_context *create_context(
 
         hs_metal_context *context = new hs_metal_context();
         context->device = device;
-        context->command_queue = [device newCommandQueue];
+        context->command_queue = command_queue;
         context->pipeline_state = pipeline_state;
         context->layer = layer;
+        for (uint32_t i = 0; i < kFrameSlotCount; i++) {
+            context->frame_slots[i].semaphore = dispatch_semaphore_create(1);
+            context->frame_slots[i].reserved = false;
+            context->frame_slots[i].in_flight = false;
+            context->frame_slots[i].failed = false;
+            context->frame_slots[i].message = nil;
+        }
         return context;
     }
 }
 
-hs_metal_context *hs_metal_context_create_from_cocoa_window(
-    void *ns_window,
-    const char *task_source,
-    size_t task_source_len,
-    const char *mesh_source,
-    size_t mesh_source_len,
-    const char *fragment_source,
-    size_t fragment_source_len,
-    char *error_buffer,
-    size_t error_buffer_len) {
-    return create_context(
-        (__bridge NSWindow *)ns_window,
-        task_source,
-        task_source_len,
-        mesh_source,
-        mesh_source_len,
-        fragment_source,
-        fragment_source_len,
-        error_buffer,
-        error_buffer_len);
+static bool valid_slot(uint32_t slot_index) {
+    return slot_index < kFrameSlotCount;
 }
 
-hs_metal_context *hs_metal_context_create_from_glfw_window(
-    GLFWwindow *window,
-    const char *task_source,
-    size_t task_source_len,
-    const char *mesh_source,
-    size_t mesh_source_len,
-    const char *fragment_source,
-    size_t fragment_source_len,
+int hs_metal_context_wait_frame_slot(
+    hs_metal_context *context,
+    uint32_t slot_index,
     char *error_buffer,
     size_t error_buffer_len) {
-    NSWindow *ns_window = glfwGetCocoaWindow(window);
-    if (!ns_window) {
-        write_error(error_buffer, error_buffer_len, @"glfwGetCocoaWindow returned nil");
-        return nullptr;
+    if (!context || !valid_slot(slot_index)) {
+        write_error(error_buffer, error_buffer_len, @"invalid Metal frame slot");
+        return 0;
     }
-    return create_context(
-        ns_window,
-        task_source,
-        task_source_len,
-        mesh_source,
-        mesh_source_len,
-        fragment_source,
-        fragment_source_len,
-        error_buffer,
-        error_buffer_len);
+
+    hs_metal_frame_slot *slot = &context->frame_slots[slot_index];
+    dispatch_semaphore_wait(slot->semaphore, DISPATCH_TIME_FOREVER);
+    if (slot->failed) {
+        write_error(error_buffer, error_buffer_len, slot->message);
+        slot->failed = false;
+        slot->message = nil;
+        dispatch_semaphore_signal(slot->semaphore);
+        return 0;
+    }
+
+    slot->reserved = true;
+    return 1;
+}
+
+void hs_metal_context_release_frame_slot(hs_metal_context *context, uint32_t slot_index) {
+    if (!context || !valid_slot(slot_index)) return;
+    hs_metal_frame_slot *slot = &context->frame_slots[slot_index];
+    if (!slot->reserved) return;
+    slot->reserved = false;
+    dispatch_semaphore_signal(slot->semaphore);
+}
+
+void hs_metal_context_wait_submitted(hs_metal_context *context) {
+    if (!context) return;
+    for (uint32_t i = 0; i < kFrameSlotCount; i++) {
+        hs_metal_frame_slot *slot = &context->frame_slots[i];
+        if (!slot->in_flight) continue;
+        dispatch_semaphore_wait(slot->semaphore, DISPATCH_TIME_FOREVER);
+        dispatch_semaphore_signal(slot->semaphore);
+    }
 }
 
 void hs_metal_context_destroy(hs_metal_context *context) {
+    hs_metal_context_wait_submitted(context);
     delete context;
 }
 
@@ -215,6 +224,7 @@ int hs_metal_context_draw(
     hs_metal_buffer *push_constants,
     hs_metal_buffer *glyph_pool,
     uint32_t workgroup_count,
+    uint32_t slot_index,
     char *error_buffer,
     size_t error_buffer_len) {
     @autoreleasepool {
@@ -222,12 +232,25 @@ int hs_metal_context_draw(
             write_error(error_buffer, error_buffer_len, @"Metal draw received a null handle");
             return 0;
         }
-        if (workgroup_count == 0) return 1;
+        if (!valid_slot(slot_index)) {
+            write_error(error_buffer, error_buffer_len, @"invalid Metal frame slot");
+            return 0;
+        }
+        hs_metal_frame_slot *slot = &context->frame_slots[slot_index];
+        if (!slot->reserved) {
+            write_error(error_buffer, error_buffer_len, @"Metal draw used an unreserved frame slot");
+            return 0;
+        }
+        if (workgroup_count == 0) {
+            hs_metal_context_release_frame_slot(context, slot_index);
+            return 1;
+        }
 
         context->layer.drawableSize = CGSizeMake(width, height);
         id<CAMetalDrawable> drawable = [context->layer nextDrawable];
         if (!drawable) {
             write_error(error_buffer, error_buffer_len, @"CAMetalLayer nextDrawable returned nil");
+            hs_metal_context_release_frame_slot(context, slot_index);
             return 0;
         }
 
@@ -251,12 +274,19 @@ int hs_metal_context_draw(
               threadsPerMeshThreadgroup:MTLSizeMake(4, 1, 1)];
         [encoder endEncoding];
         [cb presentDrawable:drawable];
+        slot->reserved = false;
+        slot->in_flight = true;
+        slot->failed = false;
+        slot->message = nil;
+        [cb addCompletedHandler:^(id<MTLCommandBuffer> command_buffer) {
+            if ([command_buffer status] == MTLCommandBufferStatusError) {
+                slot->failed = true;
+                slot->message = command_buffer.error.localizedDescription;
+            }
+            slot->in_flight = false;
+            dispatch_semaphore_signal(slot->semaphore);
+        }];
         [cb commit];
-        [cb waitUntilCompleted];
-        if ([cb status] == MTLCommandBufferStatusError) {
-            write_error(error_buffer, error_buffer_len, cb.error.localizedDescription);
-            return 0;
-        }
         return 1;
     }
 }

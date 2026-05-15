@@ -286,6 +286,24 @@ pub const GlyphCache = struct {
         const lru_idx = self.lru_nodes[LRU_SENTINEL_TAIL].prev;
         std.debug.assert(lru_idx != LRU_SENTINEL_HEAD);
 
+        return self.evictColdNode(lru_idx);
+    }
+
+    pub fn evictLruNotUsedInFrame(self: *GlyphCache, protected_frame: u32) ?EvictedEntry {
+        if (self.cold_count == 0) return null;
+
+        var idx = self.lru_nodes[LRU_SENTINEL_TAIL].prev;
+        while (idx != LRU_SENTINEL_HEAD) {
+            const key = self.lru_nodes[idx].key;
+            const entry = self.map.get(key) orelse unreachable;
+            if (entry.last_frame != protected_frame) return self.evictColdNode(idx);
+            idx = self.lru_nodes[idx].prev;
+        }
+
+        return null;
+    }
+
+    fn evictColdNode(self: *GlyphCache, lru_idx: u32) EvictedEntry {
         const key = self.lru_nodes[lru_idx].key;
         self.lruUnlink(lru_idx);
         self.lruFree(lru_idx);
@@ -742,4 +760,29 @@ test "GlyphCache: same-frame lookups skip LRU touch" {
     try std.testing.expectEqual(key_b, cache_inst.evictLru().?.key);
     try std.testing.expectEqual(key_c, cache_inst.evictLru().?.key);
     try std.testing.expectEqual(key_a, cache_inst.evictLru().?.key);
+}
+
+test "GlyphCache: evictLruNotUsedInFrame protects current frame entries" {
+    var cache_inst = try GlyphCache.init(std.testing.allocator, 0, 3, 3);
+    defer cache_inst.deinit();
+
+    const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
+    const key_a = CacheKey{ .font_id = 1, .glyph_id = 1 };
+    const key_b = CacheKey{ .font_id = 1, .glyph_id = 2 };
+    const key_c = CacheKey{ .font_id = 1, .glyph_id = 3 };
+
+    try cache_inst.insertCold(key_a, 0, .{ .offset = 0, .size = 64 }, dummy_box);
+    try cache_inst.insertCold(key_b, 1, .{ .offset = 64, .size = 64 }, dummy_box);
+    try cache_inst.insertCold(key_c, 2, .{ .offset = 128, .size = 64 }, dummy_box);
+
+    cache_inst.advanceFrame();
+    _ = cache_inst.lookup(key_a);
+    _ = cache_inst.lookup(key_b);
+
+    const evicted = cache_inst.evictLruNotUsedInFrame(cache_inst.current_frame).?;
+    try std.testing.expectEqual(key_c, evicted.key);
+
+    _ = cache_inst.lookup(key_a);
+    _ = cache_inst.lookup(key_b);
+    try std.testing.expectEqual(@as(?EvictedEntry, null), cache_inst.evictLruNotUsedInFrame(cache_inst.current_frame));
 }

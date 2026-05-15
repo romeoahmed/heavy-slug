@@ -5,9 +5,11 @@ pub const font = @import("font/root.zig");
 pub const pga = @import("math/pga.zig");
 pub const cache = @import("cache/glyph.zig");
 pub const pool = @import("cache/pool.zig");
+pub const render = @import("render.zig");
 
 pub const FontContext = font.FontContext;
 pub const EncodedGlyph = font.EncodedGlyph;
+pub const FontHandle = render.FontHandle;
 
 const test_font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
 
@@ -16,6 +18,7 @@ test {
     _ = pga;
     _ = pool;
     _ = cache;
+    _ = render;
 }
 
 test "integration: shape text and encode all unique glyphs" {

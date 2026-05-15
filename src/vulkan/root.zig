@@ -12,7 +12,8 @@ pub const InstanceDispatch = context.InstanceDispatch;
 pub const FeatureError = context.FeatureError;
 pub const TextRenderer = renderer.TextRenderer;
 pub const Renderer = renderer.TextRenderer;
-pub const RendererOptions = renderer.InitOptions;
+pub const Options = renderer.Options;
+pub const RendererOptions = renderer.Options;
 pub const FontHandle = renderer.FontHandle;
 pub const Stats = renderer.Stats;
 

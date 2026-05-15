@@ -11,6 +11,12 @@ const ResolvedDemoBackend = enum {
     metal4,
 };
 
+const ThinLtoMode = enum {
+    auto,
+    on,
+    off,
+};
+
 const SpirvShaders = struct {
     task: std.Build.LazyPath,
     mesh: std.Build.LazyPath,
@@ -35,16 +41,25 @@ const MetalBackend = struct {
     module: *std.Build.Module,
 };
 
+const CoreCDeps = struct {
+    freetype: *std.Build.Dependency,
+    harfbuzz: *std.Build.Dependency,
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const build_demo = b.option(bool, "demo", "Build demo executable") orelse false;
     const demo_backend_opt = b.option(DemoBackend, "demo-backend", "Demo backend: auto, vulkan_spirv16, metal4") orelse .auto;
+    const thin_lto_mode = b.option(ThinLtoMode, "thinlto", "ThinLTO: auto, on, off") orelse .auto;
     const demo_backend = resolveDemoBackend(target.result.os.tag, demo_backend_opt);
     const build_vulkan = (b.option(bool, "vulkan", "Build the Vulkan SPIR-V 1.6 backend module") orelse false) or
         (build_demo and demo_backend == .vulkan_spirv16);
     const build_metal = (b.option(bool, "metal", "Build the Metal 4 backend module") orelse false) or
         (build_demo and demo_backend == .metal4);
+    if (build_metal and target.result.os.tag != .macos) {
+        std.process.fatal("Metal backend is supported only on macOS targets", .{});
+    }
 
     // --- Shader compilation: Slang -> SPIR-V ---
     const shader_step = b.step("shaders", "Compile Slang shaders to SPIR-V");
@@ -61,24 +76,20 @@ pub fn build(b: *std.Build) void {
     });
 
     // --- C libraries (library deps only: FreeType + HarfBuzz) ---
-    const ft_dep = b.dependency("freetype_src", .{});
-    const hb_dep = b.dependency("harfbuzz_src", .{});
-    const ft_lib = buildFreetype(b, target, optimize);
-    const hb_lib = buildHarfbuzz(b, target, optimize, ft_lib);
+    const c_deps = CoreCDeps{
+        .freetype = b.dependency("freetype_src", .{}),
+        .harfbuzz = b.dependency("harfbuzz_src", .{}),
+    };
+    const ft_lib = buildFreetype(b, target, optimize, c_deps.freetype);
+    const hb_lib = buildHarfbuzz(b, target, optimize, c_deps, ft_lib);
+    const c_mod = translateHeavySlugC(b, target, optimize, c_deps);
+    mod.addImport("heavy_slug_c", c_mod);
     mod.linkLibrary(ft_lib);
     mod.linkLibrary(hb_lib);
-    mod.addIncludePath(ft_dep.path("include"));
-    mod.addIncludePath(hb_dep.path("src"));
 
-    // --- ThinLTO for C libraries in release mode ---
-    // Applied to C static libs only. Zig executables with -flto=thin trigger
-    // unresolved compiler-rt/musl symbols (frexpf, isnan, __DENORM, etc.)
-    // during linking -- a known Zig limitation observed in the 0.16 toolchain.
-    const use_lto = optimize != .Debug;
-    if (use_lto) {
-        ft_lib.lto = .thin;
-        hb_lib.lto = .thin;
-    }
+    // --- ThinLTO for release builds ---
+    const use_lto = resolveThinLto(optimize, target.result, thin_lto_mode);
+    enableThinLtoAll(use_lto, &.{ ft_lib, hb_lib });
 
     // --- Tests ---
     const test_step = b.step("test", "Run tests");
@@ -152,6 +163,26 @@ fn resolveDemoBackend(
     }
 
     return resolved;
+}
+
+fn resolveThinLto(
+    optimize: std.builtin.OptimizeMode,
+    target: std.Target,
+    mode: ThinLtoMode,
+) bool {
+    if (optimize == .Debug or mode == .off) return false;
+
+    // Zig 0.16 emits "LTO requires using LLD", but also reports
+    // "using LLD to link macho files is unsupported" for native macOS.
+    const can_link_with_lld = target.ofmt != .macho;
+    if (!can_link_with_lld) {
+        if (mode == .on) {
+            std.process.fatal("ThinLTO is unsupported for Mach-O targets in Zig 0.16 because LLD Mach-O linking is unavailable", .{});
+        }
+        return false;
+    }
+
+    return true;
 }
 
 fn buildSpirvShaders(b: *std.Build) SpirvShaders {
@@ -281,6 +312,16 @@ fn buildMetalBackend(
     mod.addImport("heavy_slug", core_mod);
     mod.addImport("metal_shaders", metal_shaders.module);
     mod.addImport("gpu_structs", gpu_structs_mod);
+    mod.addIncludePath(b.path("src/metal"));
+    mod.link_libcpp = true;
+    mod.linkFramework("QuartzCore", .{});
+    mod.linkFramework("Metal", .{});
+    mod.linkFramework("Foundation", .{});
+    mod.addCSourceFiles(.{
+        .root = b.path("src/metal"),
+        .files = &.{"bridge.mm"},
+        .flags = &.{ "-std=c++17", "-fobjc-arc" },
+    });
 
     return .{ .module = mod };
 }
@@ -309,7 +350,9 @@ fn buildVulkanDemo(
 
     const glfw_dep = b.lazyDependency("glfw_src", .{}) orelse return null;
     const glfw_lib = buildGlfw(b, glfw_dep, backend.headers, target, optimize);
+    const glfw_c = translateGlfwC(b, target, optimize, glfw_dep);
     exe.root_module.linkLibrary(glfw_lib);
+    exe.root_module.addImport("glfw_c", glfw_c);
     exe.root_module.addIncludePath(glfw_dep.path("include"));
 
     if (target.result.os.tag == .linux) {
@@ -319,9 +362,7 @@ fn buildVulkanDemo(
         exe.root_module.linkSystemLibrary("xkbcommon", .{});
     }
 
-    if (use_lto) {
-        glfw_lib.lto = .thin;
-    }
+    enableThinLtoAll(use_lto, &.{ glfw_lib, exe });
 
     return exe;
 }
@@ -349,25 +390,64 @@ fn buildMetalDemo(
 
     const glfw_dep = b.lazyDependency("glfw_src", .{}) orelse return null;
     const glfw_lib = buildGlfw(b, glfw_dep, null, target, optimize);
+    const glfw_c = translateGlfwC(b, target, optimize, glfw_dep);
     exe.root_module.linkLibrary(glfw_lib);
+    exe.root_module.addImport("glfw_c", glfw_c);
     exe.root_module.addIncludePath(glfw_dep.path("include"));
-    exe.root_module.addIncludePath(b.path("src/metal"));
+    exe.root_module.addIncludePath(b.path("src/demo"));
     exe.root_module.link_libcpp = true;
     exe.root_module.linkFramework("Cocoa", .{});
     exe.root_module.linkFramework("QuartzCore", .{});
     exe.root_module.linkFramework("Metal", .{});
     exe.root_module.linkFramework("Foundation", .{});
     exe.root_module.addCSourceFiles(.{
-        .root = b.path("src/metal"),
-        .files = &.{"bridge.mm"},
+        .root = b.path("src/demo"),
+        .files = &.{"metal_host.mm"},
         .flags = &.{ "-std=c++17", "-fobjc-arc" },
     });
 
-    if (use_lto) {
-        glfw_lib.lto = .thin;
-    }
+    enableThinLtoAll(use_lto, &.{ glfw_lib, exe });
 
     return exe;
+}
+
+fn enableThinLtoAll(enabled: bool, compile_steps: []const *std.Build.Step.Compile) void {
+    if (!enabled) return;
+    for (compile_steps) |compile_step| {
+        compile_step.use_lld = true;
+        compile_step.lto = .thin;
+    }
+}
+
+fn translateHeavySlugC(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    deps: CoreCDeps,
+) *std.Build.Module {
+    const translate = b.addTranslateC(.{
+        .root_source_file = b.path("src/c/heavy_slug.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    translate.addIncludePath(deps.freetype.path("include"));
+    translate.addIncludePath(deps.harfbuzz.path("src"));
+    return translate.createModule();
+}
+
+fn translateGlfwC(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    glfw_dep: *std.Build.Dependency,
+) *std.Build.Module {
+    const translate = b.addTranslateC(.{
+        .root_source_file = b.path("src/c/glfw.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    translate.addIncludePath(glfw_dep.path("include"));
+    return translate.createModule();
 }
 
 fn compileSlangShader(
@@ -570,9 +650,8 @@ fn buildFreetype(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    ft_dep: *std.Build.Dependency,
 ) *std.Build.Step.Compile {
-    const ft_dep = b.dependency("freetype_src", .{});
-
     const lib = b.addLibrary(.{
         .name = "freetype",
         .linkage = .static,
@@ -628,11 +707,9 @@ fn buildHarfbuzz(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
+    deps: CoreCDeps,
     ft_lib: *std.Build.Step.Compile,
 ) *std.Build.Step.Compile {
-    const hb_dep = b.dependency("harfbuzz_src", .{});
-    const ft_dep = b.dependency("freetype_src", .{});
-
     const lib = b.addLibrary(.{
         .name = "harfbuzz",
         .linkage = .static,
@@ -644,18 +721,18 @@ fn buildHarfbuzz(
         }),
     });
 
-    lib.root_module.addIncludePath(hb_dep.path("src"));
-    lib.root_module.addIncludePath(ft_dep.path("include"));
+    lib.root_module.addIncludePath(deps.harfbuzz.path("src"));
+    lib.root_module.addIncludePath(deps.freetype.path("include"));
     lib.root_module.linkLibrary(ft_lib);
 
     lib.root_module.addCSourceFiles(.{
-        .root = hb_dep.path("src"),
+        .root = deps.harfbuzz.path("src"),
         .files = &.{"harfbuzz.cc"},
         .flags = &.{ "-DHAVE_FREETYPE=1", "-fno-exceptions", "-fno-rtti" },
     });
 
     lib.root_module.addCSourceFiles(.{
-        .root = hb_dep.path("src"),
+        .root = deps.harfbuzz.path("src"),
         .files = &.{ "hb-gpu.cc", "hb-gpu-draw.cc", "hb-gpu-paint.cc" },
         .flags = &.{ "-DHAVE_FREETYPE=1", "-DHAVE_HB_GPU=1", "-fno-exceptions", "-fno-rtti" },
     });

@@ -1,8 +1,5 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("ft2build.h");
-    @cInclude("freetype/freetype.h");
-});
+pub const c = @import("heavy_slug_c");
 
 pub const Error = error{
     FreeTypeInitFailed,
@@ -54,9 +51,8 @@ pub const Face = struct {
         return @intCast(n);
     }
 
-    /// Raw FT_Face handle for cross-module interop (see Cross-Module @cImport Note).
-    pub fn rawHandle(self: Face) *anyopaque {
-        return @ptrCast(self.handle.?);
+    pub fn rawHandle(self: Face) c.FT_Face {
+        return self.handle;
     }
 };
 

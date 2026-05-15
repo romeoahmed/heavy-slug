@@ -5,6 +5,18 @@ const glfw = @import("glfw.zig");
 
 const pga = heavy_slug.pga;
 
+const MetalHostHandle = opaque {};
+
+extern fn hs_demo_metal_host_create(
+    window: glfw.Window,
+    error_buffer: [*]u8,
+    error_buffer_len: usize,
+) ?*MetalHostHandle;
+extern fn hs_demo_metal_host_destroy(host: *MetalHostHandle) void;
+extern fn hs_demo_metal_host_device(host: *MetalHostHandle) *anyopaque;
+extern fn hs_demo_metal_host_command_queue(host: *MetalHostHandle) *anyopaque;
+extern fn hs_demo_metal_host_layer(host: *MetalHostHandle) *anyopaque;
+
 const lines = [_][]const u8{
     "Heavy Slug",
     "Metal 4 mesh shaders",
@@ -31,7 +43,18 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var ctx = try heavy_slug_metal.Context.initForGlfwWindow(@ptrCast(window));
+    var error_buf: [2048]u8 = undefined;
+    const host = hs_demo_metal_host_create(window, &error_buf, error_buf.len) orelse {
+        std.log.err("Metal host init failed: {s}", .{std.mem.sliceTo(&error_buf, 0)});
+        return error.MetalHostInitFailed;
+    };
+    defer hs_demo_metal_host_destroy(host);
+
+    var ctx = try heavy_slug_metal.Context.init(.{
+        .device = hs_demo_metal_host_device(host),
+        .command_queue = hs_demo_metal_host_command_queue(host),
+        .layer = hs_demo_metal_host_layer(host),
+    });
     defer ctx.deinit();
 
     var text_renderer = try heavy_slug_metal.TextRenderer.init(ctx, allocator, .{});
@@ -49,7 +72,7 @@ pub fn main() !void {
 
         const w: f32 = @floatFromInt(size[0]);
         const h: f32 = @floatFromInt(size[1]);
-        text_renderer.begin();
+        try text_renderer.begin();
         try text_renderer.drawText(
             title_font,
             lines[0],
