@@ -4,7 +4,7 @@
 # Environment:
 #   ZIG_VERSION       — from-zon | stable | latest | master | explicit version
 #                       (default: from-zon)
-#   ZIG_TARGET        — Zig download target (default: x86_64-linux)
+#   ZIG_TARGET        — Zig download target (default: inferred from runner)
 #   ZIG_DOWNLOAD_URL  — optional pre-resolved tarball URL
 #   ZIG_INSTALL_DIR   — extraction target (default: ~/zig)
 #   GITHUB_PATH       — GitHub Actions PATH file
@@ -28,12 +28,56 @@ elif [[ -n "${1:-}" ]]; then
 fi
 
 INSTALL_DIR="${ZIG_INSTALL_DIR:-$HOME/zig}"
-TARGET="${ZIG_TARGET:-x86_64-linux}"
 REQUESTED="${ZIG_VERSION:-from-zon}"
 
 zon_version() {
     sed -nE 's/.*\.minimum_zig_version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' build.zig.zon | head -n 1
 }
+
+version_from_url() {
+    local base prefix suffix
+    base="${1##*/}"
+    prefix="zig-${TARGET}-"
+    suffix=".tar.xz"
+    if [[ "$base" == "$prefix"*"$suffix" ]]; then
+        base="${base#"$prefix"}"
+        printf '%s\n' "${base%"$suffix"}"
+    fi
+}
+
+lower() {
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+infer_target() {
+    local os arch
+    os="$(lower "${RUNNER_OS:-$(uname -s)}")"
+    arch="$(lower "${RUNNER_ARCH:-$(uname -m)}")"
+
+    case "$os" in
+        linux) os="linux" ;;
+        macos|darwin) os="macos" ;;
+        windows|mingw*|msys*) os="windows" ;;
+        *)
+            echo "::error::cannot infer Zig target for OS '$os'; set ZIG_TARGET"
+            exit 1
+            ;;
+    esac
+
+    case "$arch" in
+        x64|x86_64|amd64) arch="x86_64" ;;
+        arm64|aarch64) arch="aarch64" ;;
+        x86|i386|i686) arch="x86" ;;
+        *)
+            echo "::error::cannot infer Zig target for arch '$arch'; set ZIG_TARGET"
+            exit 1
+            ;;
+    esac
+
+    printf '%s-%s\n' "$arch" "$os"
+}
+
+TARGET="${ZIG_TARGET:-$(infer_target)}"
 
 emit_outputs() {
     if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
@@ -93,6 +137,12 @@ if [[ -n "${ZIG_DOWNLOAD_URL:-}" ]]; then
     RESOLVED_VERSION="$REQUESTED"
     if [[ "$RESOLVED_VERSION" == "from-zon" || "$RESOLVED_VERSION" == "auto" || -z "$RESOLVED_VERSION" ]]; then
         RESOLVED_VERSION=$(zon_version)
+    elif [[ "$RESOLVED_VERSION" == "latest" || "$RESOLVED_VERSION" == "stable" || "$RESOLVED_VERSION" == "master" || "$RESOLVED_VERSION" == "nightly" ]]; then
+        RESOLVED_VERSION=$(version_from_url "$ZIG_DOWNLOAD_URL")
+    fi
+    if [[ -z "$RESOLVED_VERSION" ]]; then
+        echo "::error::could not infer Zig version from URL '$ZIG_DOWNLOAD_URL'; set ZIG_VERSION to the resolved version"
+        exit 1
     fi
     DOWNLOAD_URL="$ZIG_DOWNLOAD_URL"
 else

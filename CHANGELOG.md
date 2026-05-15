@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **CI expanded** to run tests and ReleaseFast builds on both `ubuntu-latest` and `macos-26`, including `-Dvulkan=true` on Ubuntu and `-Dmetal=true` on macOS ARM64.
+- **Tool setup scripts hardened** to infer runner platforms, resolve Zig packages from the official download index, and match Slang release tarballs exactly.
+
+### Removed
+
+- **Repository-local VS Code settings** (`.vscode/`) so editor configuration stays user-local.
+
 ## [2.0.0] - 2026-05-15
 
 ### Added

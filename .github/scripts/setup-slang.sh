@@ -3,7 +3,8 @@
 #
 # Environment:
 #   SLANG_VERSION       — latest | explicit version/tag (default: latest)
-#   SLANG_ASSET_PATTERN — release asset regex (default: linux-x86_64\.tar\.gz$)
+#   SLANG_PLATFORM      — release asset platform (default: inferred from runner)
+#   SLANG_ASSET_PATTERN — optional release asset regex override
 #   SLANG_DOWNLOAD_URL  — optional pre-resolved tarball URL
 #   SLANG_INSTALL_DIR   — extraction target (default: ~/slang)
 #   GH_TOKEN            — optional GitHub token for API requests
@@ -29,7 +30,51 @@ fi
 
 INSTALL_DIR="${SLANG_INSTALL_DIR:-$HOME/slang}"
 REQUESTED="${SLANG_VERSION:-latest}"
-ASSET_PATTERN="${SLANG_ASSET_PATTERN:-linux-x86_64\\.tar\\.gz$}"
+
+lower() {
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+infer_platform() {
+    local os arch
+    os="$(lower "${RUNNER_OS:-$(uname -s)}")"
+    arch="$(lower "${RUNNER_ARCH:-$(uname -m)}")"
+
+    case "$os" in
+        linux) os="linux" ;;
+        macos|darwin) os="macos" ;;
+        windows|mingw*|msys*) os="windows" ;;
+        *)
+            echo "::error::cannot infer Slang platform for OS '$os'; set SLANG_PLATFORM"
+            exit 1
+            ;;
+    esac
+
+    case "$arch" in
+        x64|x86_64|amd64) arch="x86_64" ;;
+        arm64|aarch64) arch="aarch64" ;;
+        *)
+            echo "::error::cannot infer Slang platform for arch '$arch'; set SLANG_PLATFORM"
+            exit 1
+            ;;
+    esac
+
+    printf '%s-%s\n' "$os" "$arch"
+}
+
+PLATFORM="${SLANG_PLATFORM:-$(infer_platform)}"
+ASSET_PATTERN="${SLANG_ASSET_PATTERN:-}"
+
+version_from_url() {
+    local base prefix suffix
+    base="${1##*/}"
+    prefix="slang-"
+    suffix="-${PLATFORM}.tar.gz"
+    if [[ "$base" == "$prefix"*"$suffix" ]]; then
+        base="${base#"$prefix"}"
+        printf '%s\n' "${base%"$suffix"}"
+    fi
+}
 
 github_api() {
     local url="$1"
@@ -48,6 +93,7 @@ emit_outputs() {
         {
             echo "version=$RESOLVED_VERSION"
             echo "url=$DOWNLOAD_URL"
+            echo "platform=$PLATFORM"
             echo "install_dir=$INSTALL_DIR"
         } >> "$GITHUB_OUTPUT"
     fi
@@ -68,18 +114,30 @@ resolve_release() {
     fi
 
     RESOLVED_VERSION=$(echo "$release_json" | jq -r '.tag_name | ltrimstr("v")')
-    asset_url=$(echo "$release_json" | jq -r --arg pattern "$ASSET_PATTERN" '
-        .assets[]
-        | select(.name | test($pattern))
-        | .browser_download_url
-    ' | head -n 1)
+    if [[ -n "$ASSET_PATTERN" ]]; then
+        asset_url=$(echo "$release_json" | jq -r --arg pattern "$ASSET_PATTERN" '
+            .assets[]
+            | select(.name | test($pattern))
+            | .browser_download_url
+        ' | head -n 1)
+    else
+        asset_url=$(echo "$release_json" | jq -r --arg name "slang-${RESOLVED_VERSION}-${PLATFORM}.tar.gz" '
+            .assets[]
+            | select(.name == $name)
+            | .browser_download_url
+        ' | head -n 1)
+    fi
 
     if [[ -z "$RESOLVED_VERSION" || "$RESOLVED_VERSION" == "null" ]]; then
         echo "::error::could not resolve Slang version from request '$requested'"
         exit 1
     fi
     if [[ -z "$asset_url" || "$asset_url" == "null" ]]; then
-        echo "::error::no Slang release asset matched '$ASSET_PATTERN' for '$RESOLVED_VERSION'"
+        if [[ -n "$ASSET_PATTERN" ]]; then
+            echo "::error::no Slang release asset matched '$ASSET_PATTERN' for '$RESOLVED_VERSION'"
+        else
+            echo "::error::no Slang release asset named 'slang-${RESOLVED_VERSION}-${PLATFORM}.tar.gz'"
+        fi
         echo "Available assets:"
         echo "$release_json" | jq -r '.assets[].name'
         exit 1
@@ -90,13 +148,20 @@ resolve_release() {
 
 if [[ -n "${SLANG_DOWNLOAD_URL:-}" ]]; then
     RESOLVED_VERSION="${REQUESTED#v}"
+    if [[ "$RESOLVED_VERSION" == "" || "$RESOLVED_VERSION" == "latest" || "$RESOLVED_VERSION" == "auto" ]]; then
+        RESOLVED_VERSION=$(version_from_url "$SLANG_DOWNLOAD_URL")
+    fi
+    if [[ -z "$RESOLVED_VERSION" ]]; then
+        echo "::error::could not infer Slang version from URL '$SLANG_DOWNLOAD_URL'; set SLANG_VERSION to the resolved version"
+        exit 1
+    fi
     DOWNLOAD_URL="$SLANG_DOWNLOAD_URL"
 else
     resolve_release "$REQUESTED"
 fi
 
 echo "Slang request: $REQUESTED"
-echo "Slang resolved: $RESOLVED_VERSION"
+echo "Slang resolved: $RESOLVED_VERSION ($PLATFORM)"
 echo "Slang URL: $DOWNLOAD_URL"
 emit_outputs
 
