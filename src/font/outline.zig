@@ -57,7 +57,7 @@ const Texel = extern struct {
 
 pub const OutlineBuilder = struct {
     allocator: std.mem.Allocator,
-    curves: std.ArrayListUnmanaged(Cubic) = .empty,
+    curves: std.ArrayList(Cubic) = .empty,
     current: Point = .{ .x = 0, .y = 0 },
     start: Point = .{ .x = 0, .y = 0 },
     has_open_contour: bool = false,
@@ -393,7 +393,7 @@ pub fn encodeCurves(
         return error.GlyphOffsetOverflow;
     }
 
-    var texels = try std.ArrayListUnmanaged(Texel).initCapacity(allocator, total_len);
+    var texels = try std.ArrayList(Texel).initCapacity(allocator, total_len);
     defer texels.deinit(allocator);
     texels.appendNTimesAssumeCapacity(.{ .r = 0, .g = 0, .b = 0, .a = 0 }, total_len);
 

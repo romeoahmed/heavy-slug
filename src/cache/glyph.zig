@@ -326,7 +326,7 @@ pub const GlyphCache = struct {
     /// returned slice with the same allocator.
     pub fn removeFont(self: *GlyphCache, allocator: std.mem.Allocator, font_id: u32) ![]EvictedEntry {
         // Collect keys to remove (can't remove during iteration)
-        var to_remove: std.ArrayListUnmanaged(CacheKey) = .empty;
+        var to_remove: std.ArrayList(CacheKey) = .empty;
         defer to_remove.deinit(allocator);
 
         var it = self.map.iterator();

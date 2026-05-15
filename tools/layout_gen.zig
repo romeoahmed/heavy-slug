@@ -556,19 +556,19 @@ test "emitZig produces extern struct definitions" {
     defer std.testing.allocator.free(output);
 
     // Header
-    try std.testing.expect(std.mem.indexOf(u8, output, "AUTO-GENERATED") != null);
+    try std.testing.expect(std.mem.find(u8, output, "AUTO-GENERATED") != null);
 
     // GlyphCommand extern struct
-    try std.testing.expect(std.mem.indexOf(u8, output, "pub const GlyphCommand = extern struct {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "motor: [4]f32,") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "flags: u32,") != null);
+    try std.testing.expect(std.mem.find(u8, output, "pub const GlyphCommand = extern struct {") != null);
+    try std.testing.expect(std.mem.find(u8, output, "motor: [4]f32,") != null);
+    try std.testing.expect(std.mem.find(u8, output, "flags: u32,") != null);
     // _pad gets a zero default
-    try std.testing.expect(std.mem.indexOf(u8, output, "_pad: [2]u32 = .{0} ** 2,") != null);
+    try std.testing.expect(std.mem.find(u8, output, "_pad: [2]u32 = .{0} ** 2,") != null);
 
     // PushConstants extern struct
-    try std.testing.expect(std.mem.indexOf(u8, output, "pub const PushConstants = extern struct {") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "proj: [4][4]f32,") != null);
-    try std.testing.expect(std.mem.indexOf(u8, output, "glyph_count: u32,") != null);
+    try std.testing.expect(std.mem.find(u8, output, "pub const PushConstants = extern struct {") != null);
+    try std.testing.expect(std.mem.find(u8, output, "proj: [4][4]f32,") != null);
+    try std.testing.expect(std.mem.find(u8, output, "glyph_count: u32,") != null);
 }
 
 test "emitZig: non-square matrix emits [cols][rows] (column-major)" {
@@ -586,7 +586,7 @@ test "emitZig: non-square matrix emits [cols][rows] (column-major)" {
     defer std.testing.allocator.free(output);
 
     // Column-major: [cols][rows], so float3x4 → [4][3]f32
-    try std.testing.expect(std.mem.indexOf(u8, output, "m: [4][3]f32,") != null);
+    try std.testing.expect(std.mem.find(u8, output, "m: [4][3]f32,") != null);
 }
 
 test "emitZig inserts gap padding" {
@@ -606,9 +606,9 @@ test "emitZig inserts gap padding" {
     defer std.testing.allocator.free(output);
 
     // Gap padding between a (end=4) and b (offset=8)
-    try std.testing.expect(std.mem.indexOf(u8, output, "_gap0: [4]u8 = .{0} ** 4,") != null);
+    try std.testing.expect(std.mem.find(u8, output, "_gap0: [4]u8 = .{0} ** 4,") != null);
     // Tail padding after b (end=12) to struct size 16
-    try std.testing.expect(std.mem.indexOf(u8, output, "_tail") != null);
+    try std.testing.expect(std.mem.find(u8, output, "_tail") != null);
 }
 
 test "parseReflection: empty parameters produces empty slice" {

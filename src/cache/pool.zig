@@ -24,7 +24,7 @@ pub const PoolAllocator = struct {
     alignment: u32,
     cursor: u32,
     /// Offset-sorted free list. Sorted ascending by offset at all times.
-    free_blocks: std.ArrayListUnmanaged(FreeBlock),
+    free_blocks: std.ArrayList(FreeBlock),
 
     pub fn init(allocator: std.mem.Allocator, capacity: u32, alignment: u32) PoolAllocator {
         std.debug.assert(capacity > 0);
