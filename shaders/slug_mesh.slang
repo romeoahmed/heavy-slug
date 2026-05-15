@@ -28,9 +28,15 @@ struct VertexOutput
 {
     float4 position    : SV_Position;
     float4 color       : COLOR;
+#if HEAVY_SLUG_METAL
+    float2 texcoord    : TEXCOORD;
+    nointerpolation uint descriptorIndex : TEXCOORD_1;
+    nointerpolation uint flags           : TEXCOORD_2;
+#else
     float2 texcoord    : TEXCOORD0;
     nointerpolation uint descriptorIndex : TEXCOORD1;
     nointerpolation uint flags           : TEXCOORD2;
+#endif
 };
 
 // Quad corner order: BL, BR, TR, TL (CCW triangles: 0-1-2, 0-2-3).

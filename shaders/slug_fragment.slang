@@ -21,9 +21,15 @@ struct FragmentInput
 {
     float4 position    : SV_Position;
     float4 color       : COLOR;
-    float2 texcoord    : TEXCOORD0;         // em-space sample coordinates
+#if HEAVY_SLUG_METAL
+    float2 texcoord    : TEXCOORD;         // em-space sample coordinates
     nointerpolation uint descriptorIndex : TEXCOORD1;
     nointerpolation uint flags           : TEXCOORD2;
+#else
+    float2 texcoord    : TEXCOORD0;        // em-space sample coordinates
+    nointerpolation uint descriptorIndex : TEXCOORD1;
+    nointerpolation uint flags           : TEXCOORD2;
+#endif
 };
 
 // --- Slug algorithm core ---
