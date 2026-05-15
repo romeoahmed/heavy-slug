@@ -1,5 +1,5 @@
 // shaders/slug_fragment.slang
-// Fragment shader: Coverage V2 analytic cubic coverage.
+// Fragment shader: Coverage V3 analytic cubic coverage.
 
 import pga;
 import slug_common;

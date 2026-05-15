@@ -731,12 +731,6 @@ fn buildHarfbuzz(
         .flags = &.{ "-DHAVE_FREETYPE=1", "-fno-exceptions", "-fno-rtti" },
     });
 
-    lib.root_module.addCSourceFiles(.{
-        .root = deps.harfbuzz.path("src"),
-        .files = &.{ "hb-gpu.cc", "hb-gpu-draw.cc", "hb-gpu-paint.cc" },
-        .flags = &.{ "-DHAVE_FREETYPE=1", "-DHAVE_HB_GPU=1", "-fno-exceptions", "-fno-rtti" },
-    });
-
     return lib;
 }
 

@@ -19,64 +19,9 @@ const hband_height = 4.0;
 const hband_height_q = @as(i16, @intFromFloat(hband_height * units_per_em));
 const curve_ids_per_texel = 4;
 
-pub const SegmentKind = enum(i16) {
-    quad = 0,
-    cubic = 1,
-};
-
 pub const Point = struct {
     x: f64,
     y: f64,
-};
-
-pub const Segment = struct {
-    kind: SegmentKind,
-    p0: Point,
-    p1: Point,
-    p2: Point,
-    p3: Point = .{ .x = 0, .y = 0 },
-
-    fn minX(self: Segment) f64 {
-        return switch (self.kind) {
-            .quad => @min(@min(self.p0.x, self.p1.x), self.p2.x),
-            .cubic => @min(@min(self.p0.x, self.p1.x), @min(self.p2.x, self.p3.x)),
-        };
-    }
-
-    fn maxX(self: Segment) f64 {
-        return switch (self.kind) {
-            .quad => @max(@max(self.p0.x, self.p1.x), self.p2.x),
-            .cubic => @max(@max(self.p0.x, self.p1.x), @max(self.p2.x, self.p3.x)),
-        };
-    }
-
-    fn minY(self: Segment) f64 {
-        return switch (self.kind) {
-            .quad => @min(@min(self.p0.y, self.p1.y), self.p2.y),
-            .cubic => @min(@min(self.p0.y, self.p1.y), @min(self.p2.y, self.p3.y)),
-        };
-    }
-
-    fn maxY(self: Segment) f64 {
-        return switch (self.kind) {
-            .quad => @max(@max(self.p0.y, self.p1.y), self.p2.y),
-            .cubic => @max(@max(self.p0.y, self.p1.y), @max(self.p2.y, self.p3.y)),
-        };
-    }
-
-    fn isHorizontal(self: Segment) bool {
-        return switch (self.kind) {
-            .quad => self.p0.y == self.p1.y and self.p1.y == self.p2.y,
-            .cubic => self.p0.y == self.p1.y and self.p1.y == self.p2.y and self.p2.y == self.p3.y,
-        };
-    }
-
-    fn isVertical(self: Segment) bool {
-        return switch (self.kind) {
-            .quad => self.p0.x == self.p1.x and self.p1.x == self.p2.x,
-            .cubic => self.p0.x == self.p1.x and self.p1.x == self.p2.x and self.p2.x == self.p3.x,
-        };
-    }
 };
 
 fn lineAsCubic(p0: Point, p1: Point) Cubic {
@@ -112,7 +57,7 @@ const Texel = extern struct {
 
 pub const OutlineBuilder = struct {
     allocator: std.mem.Allocator,
-    segments: std.ArrayListUnmanaged(Segment) = .empty,
+    curves: std.ArrayListUnmanaged(Cubic) = .empty,
     current: Point = .{ .x = 0, .y = 0 },
     start: Point = .{ .x = 0, .y = 0 },
     has_open_contour: bool = false,
@@ -123,12 +68,12 @@ pub const OutlineBuilder = struct {
     }
 
     pub fn deinit(self: *OutlineBuilder) void {
-        self.segments.deinit(self.allocator);
+        self.curves.deinit(self.allocator);
         self.* = undefined;
     }
 
     pub fn clear(self: *OutlineBuilder) void {
-        self.segments.clearRetainingCapacity();
+        self.curves.clearRetainingCapacity();
         self.current = .{ .x = 0, .y = 0 };
         self.start = .{ .x = 0, .y = 0 };
         self.has_open_contour = false;
@@ -172,8 +117,8 @@ pub const OutlineBuilder = struct {
         self.has_open_contour = false;
     }
 
-    fn append(self: *OutlineBuilder, segment: Segment) void {
-        self.segments.append(self.allocator, segment) catch {
+    fn append(self: *OutlineBuilder, curve: Cubic) void {
+        self.curves.append(self.allocator, curve) catch {
             self.failed = true;
         };
     }
@@ -201,7 +146,7 @@ pub const OutlineBuilder = struct {
 
     fn appendPreparedCubic(self: *OutlineBuilder, curve: Cubic, depth: u8) void {
         if (depth >= max_cubic_prepare_depth or cubicControlPolygonMonotoneAfterQuantize(curve)) {
-            self.append(curve.segment());
+            self.append(curve);
             return;
         }
 
@@ -211,21 +156,11 @@ pub const OutlineBuilder = struct {
     }
 };
 
-const Cubic = struct {
+pub const Cubic = struct {
     p0: Point,
     p1: Point,
     p2: Point,
     p3: Point,
-
-    fn segment(self: Cubic) Segment {
-        return .{
-            .kind = .cubic,
-            .p0 = self.p0,
-            .p1 = self.p1,
-            .p2 = self.p2,
-            .p3 = self.p3,
-        };
-    }
 
     fn minX(self: Cubic) f64 {
         return @min(@min(self.p0.x, self.p1.x), @min(self.p2.x, self.p3.x));
@@ -378,7 +313,12 @@ pub const Encoder = struct {
         self.* = undefined;
     }
 
-    pub fn encodeGlyph(self: *Encoder, font: hb.Font, glyph_id: u32) Error!hb.GpuDraw.Encoded {
+    pub const Encoded = struct {
+        blob: hb.Blob,
+        extents: hb.GlyphExtents,
+    };
+
+    pub fn encodeGlyph(self: *Encoder, font: hb.Font, glyph_id: u32) Error!Encoded {
         self.builder.clear();
         const drawn = c.hb_font_draw_glyph_or_fail(
             font.handle,
@@ -397,37 +337,37 @@ pub const Encoder = struct {
         };
         _ = c.hb_font_get_glyph_extents(font.handle, glyph_id, &extents);
 
-        if (drawn == 0 or self.builder.segments.items.len == 0) {
+        if (drawn == 0 or self.builder.curves.items.len == 0) {
             const empty = c.hb_blob_get_empty() orelse return error.HarfBuzzAllocationFailed;
             return .{ .blob = .{ .handle = empty }, .extents = extents };
         }
 
-        const blob = try encodeSegments(self.allocator, self.builder.segments.items);
+        const blob = try encodeCurves(self.allocator, self.builder.curves.items);
         return .{ .blob = blob, .extents = extents };
     }
 };
 
-pub fn encodeSegments(
+pub fn encodeCurves(
     allocator: std.mem.Allocator,
-    segments: []const Segment,
+    source_curves: []const Cubic,
 ) Error!hb.Blob {
-    if (segments.len == 0) {
+    if (source_curves.len == 0) {
         const empty = c.hb_blob_get_empty() orelse return error.HarfBuzzAllocationFailed;
         return .{ .handle = empty };
     }
 
-    if (segments.len > std.math.maxInt(i16)) return error.GlyphOffsetOverflow;
+    if (source_curves.len > std.math.maxInt(i16)) return error.GlyphOffsetOverflow;
 
     var min_x_f: f64 = std.math.inf(f64);
     var min_y_f: f64 = std.math.inf(f64);
     var max_x_f: f64 = -std.math.inf(f64);
     var max_y_f: f64 = -std.math.inf(f64);
 
-    var curves = try allocator.alloc(Cubic, segments.len);
+    var curves = try allocator.alloc(Cubic, source_curves.len);
     defer allocator.free(curves);
 
-    for (segments, 0..) |segment, i| {
-        const curve = try quantizedCubic(canonicalCubic(segment));
+    for (source_curves, 0..) |source_curve, i| {
+        const curve = try quantizedCubic(source_curve);
         curves[i] = curve;
         min_x_f = @min(min_x_f, curve.minX());
         min_y_f = @min(min_y_f, curve.minY());
@@ -646,13 +586,6 @@ fn samePoint(a: Point, b: Point) bool {
     return a.x == b.x and a.y == b.y;
 }
 
-fn canonicalCubic(segment: Segment) Cubic {
-    return switch (segment.kind) {
-        .quad => quadAsCubic(segment.p0, segment.p1, segment.p2),
-        .cubic => .{ .p0 = segment.p0, .p1 = segment.p1, .p2 = segment.p2, .p3 = segment.p3 },
-    };
-}
-
 fn quantizedCubic(curve: Cubic) Error!Cubic {
     return .{
         .p0 = try quantizedPoint(curve.p0),
@@ -817,7 +750,7 @@ fn builderFromData(draw_data: ?*anyopaque) *OutlineBuilder {
     return @ptrCast(@alignCast(draw_data.?));
 }
 
-test "OutlineBuilder: records cubic segments for curves and close paths" {
+test "OutlineBuilder: records cubic spans for curves and close paths" {
     var builder = OutlineBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
@@ -826,12 +759,10 @@ test "OutlineBuilder: records cubic segments for curves and close paths" {
     builder.closePath();
 
     try std.testing.expect(!builder.failed);
-    try std.testing.expectEqual(@as(usize, 2), builder.segments.items.len);
-    try std.testing.expectEqual(SegmentKind.cubic, builder.segments.items[0].kind);
-    try std.testing.expectEqual(SegmentKind.cubic, builder.segments.items[1].kind);
+    try std.testing.expectEqual(@as(usize, 2), builder.curves.items.len);
 }
 
-test "OutlineBuilder: raises quadratic curves to cubic segments" {
+test "OutlineBuilder: raises quadratic curves to cubic spans" {
     var builder = OutlineBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
@@ -839,16 +770,15 @@ test "OutlineBuilder: raises quadratic curves to cubic segments" {
     builder.quadTo(.{ .x = 3, .y = 3 }, .{ .x = 9, .y = 6 });
 
     try std.testing.expect(!builder.failed);
-    try std.testing.expectEqual(@as(usize, 1), builder.segments.items.len);
-    const segment = builder.segments.items[0];
-    try std.testing.expectEqual(SegmentKind.cubic, segment.kind);
-    try std.testing.expectApproxEqAbs(@as(f64, 2), segment.p1.x, 1.0e-9);
-    try std.testing.expectApproxEqAbs(@as(f64, 2), segment.p1.y, 1.0e-9);
-    try std.testing.expectApproxEqAbs(@as(f64, 5), segment.p2.x, 1.0e-9);
-    try std.testing.expectApproxEqAbs(@as(f64, 4), segment.p2.y, 1.0e-9);
+    try std.testing.expectEqual(@as(usize, 1), builder.curves.items.len);
+    const curve = builder.curves.items[0];
+    try std.testing.expectApproxEqAbs(@as(f64, 2), curve.p1.x, 1.0e-9);
+    try std.testing.expectApproxEqAbs(@as(f64, 2), curve.p1.y, 1.0e-9);
+    try std.testing.expectApproxEqAbs(@as(f64, 5), curve.p2.x, 1.0e-9);
+    try std.testing.expectApproxEqAbs(@as(f64, 4), curve.p2.y, 1.0e-9);
 }
 
-test "OutlineBuilder: prepares cubic segments at axis extrema" {
+test "OutlineBuilder: prepares cubic spans at axis extrema" {
     var builder = OutlineBuilder.init(std.testing.allocator);
     defer builder.deinit();
 
@@ -856,11 +786,10 @@ test "OutlineBuilder: prepares cubic segments at axis extrema" {
     builder.cubicTo(.{ .x = 100, .y = 200 }, .{ .x = -100, .y = 200 }, .{ .x = 0, .y = 0 });
 
     try std.testing.expect(!builder.failed);
-    try std.testing.expect(builder.segments.items.len > 1);
-    for (builder.segments.items) |segment| {
-        if (segment.kind != .cubic) continue;
-        try std.testing.expect(!hasInteriorAxisExtremum(segment.p0.x, segment.p1.x, segment.p2.x, segment.p3.x));
-        try std.testing.expect(!hasInteriorAxisExtremum(segment.p0.y, segment.p1.y, segment.p2.y, segment.p3.y));
+    try std.testing.expect(builder.curves.items.len > 1);
+    for (builder.curves.items) |curve| {
+        try std.testing.expect(!hasInteriorAxisExtremum(curve.p0.x, curve.p1.x, curve.p2.x, curve.p3.x));
+        try std.testing.expect(!hasInteriorAxisExtremum(curve.p0.y, curve.p1.y, curve.p2.y, curve.p3.y));
     }
 }
 
@@ -872,27 +801,20 @@ test "OutlineBuilder: prepared cubic control polygons stay monotone after quanti
     builder.cubicTo(.{ .x = 300, .y = 20 }, .{ .x = -280, .y = 22 }, .{ .x = 40, .y = 44 });
 
     try std.testing.expect(!builder.failed);
-    for (builder.segments.items) |segment| {
-        if (segment.kind != .cubic) continue;
+    for (builder.curves.items) |curve| {
         try std.testing.expect(cubicControlPolygonMonotoneAfterQuantize(.{
-            .p0 = segment.p0,
-            .p1 = segment.p1,
-            .p2 = segment.p2,
-            .p3 = segment.p3,
+            .p0 = curve.p0,
+            .p1 = curve.p1,
+            .p2 = curve.p2,
+            .p3 = curve.p3,
         }));
     }
 }
 
-test "encodeSegments: writes Coverage V3 cubic curve list" {
-    const segments = [_]Segment{
+test "encodeCurves: writes Coverage V3 cubic curve list" {
+    const curves = [_]Cubic{
+        quadAsCubic(.{ .x = 0, .y = 0 }, .{ .x = 0, .y = 1 }, .{ .x = 1, .y = 1 }),
         .{
-            .kind = .quad,
-            .p0 = .{ .x = 0, .y = 0 },
-            .p1 = .{ .x = 0, .y = 1 },
-            .p2 = .{ .x = 1, .y = 1 },
-        },
-        .{
-            .kind = .cubic,
             .p0 = .{ .x = 1, .y = 1 },
             .p1 = .{ .x = 2, .y = 2 },
             .p2 = .{ .x = 3, .y = 2 },
@@ -900,14 +822,14 @@ test "encodeSegments: writes Coverage V3 cubic curve list" {
         },
     };
 
-    const blob = try encodeSegments(std.testing.allocator, &segments);
+    const blob = try encodeCurves(std.testing.allocator, &curves);
     defer blob.destroy();
 
     const texels = std.mem.bytesAsSlice(Texel, blob.getData());
     try std.testing.expectEqual(@as(i16, 2), texels[1].r);
     try std.testing.expectEqual(@as(i16, blob_version), texels[1].g);
     try std.testing.expectEqual(@as(i16, header_len), texels[1].a);
-    try std.testing.expect(texels.len > header_len + segments.len * curve_texel_len);
+    try std.testing.expect(texels.len > header_len + curves.len * curve_texel_len);
 
     const first_curve = texels[header_len..][0..curve_texel_len];
     try std.testing.expectEqual(@as(i16, 0), first_curve[0].r);
@@ -918,13 +840,13 @@ test "encodeSegments: writes Coverage V3 cubic curve list" {
     try std.testing.expectEqual(@as(i16, 4), first_curve[1].g);
 }
 
-test "encodeSegments: writes h-band candidate index after curves" {
-    const segments = [_]Segment{
-        lineSegment(.{ .x = 0, .y = 0 }, .{ .x = 1, .y = 1 }),
-        lineSegment(.{ .x = 1, .y = 1 }, .{ .x = 2, .y = 2 }),
+test "encodeCurves: writes h-band candidate index after curves" {
+    const curves = [_]Cubic{
+        lineCurve(.{ .x = 0, .y = 0 }, .{ .x = 1, .y = 1 }),
+        lineCurve(.{ .x = 1, .y = 1 }, .{ .x = 2, .y = 2 }),
     };
 
-    const blob = try encodeSegments(std.testing.allocator, &segments);
+    const blob = try encodeCurves(std.testing.allocator, &curves);
     defer blob.destroy();
 
     const texels = std.mem.bytesAsSlice(Texel, blob.getData());
@@ -940,7 +862,7 @@ test "encodeSegments: writes h-band candidate index after curves" {
     try std.testing.expectEqual(@as(i16, 0), band_min);
     try std.testing.expectEqual(@as(usize, 1), band_count);
     try std.testing.expectEqual(@as(i16, hband_height_q), band_height);
-    try std.testing.expectEqual(curve_base + segments.len * curve_texel_len, band_base);
+    try std.testing.expectEqual(curve_base + curves.len * curve_texel_len, band_base);
     try std.testing.expectEqual(@as(i16, 2), id_count);
 
     const band = texels[band_base];
@@ -952,23 +874,23 @@ test "encodeSegments: writes h-band candidate index after curves" {
     try std.testing.expectEqual(@as(i16, 1), ids.g);
 }
 
-test "encodeSegments: stores glyph fill direction in header" {
-    const ccw = [_]Segment{
-        lineSegment(.{ .x = 0, .y = 0 }, .{ .x = 2, .y = 0 }),
-        lineSegment(.{ .x = 2, .y = 0 }, .{ .x = 2, .y = 2 }),
-        lineSegment(.{ .x = 2, .y = 2 }, .{ .x = 0, .y = 2 }),
-        lineSegment(.{ .x = 0, .y = 2 }, .{ .x = 0, .y = 0 }),
+test "encodeCurves: stores glyph fill direction in header" {
+    const ccw = [_]Cubic{
+        lineCurve(.{ .x = 0, .y = 0 }, .{ .x = 2, .y = 0 }),
+        lineCurve(.{ .x = 2, .y = 0 }, .{ .x = 2, .y = 2 }),
+        lineCurve(.{ .x = 2, .y = 2 }, .{ .x = 0, .y = 2 }),
+        lineCurve(.{ .x = 0, .y = 2 }, .{ .x = 0, .y = 0 }),
     };
-    const cw = [_]Segment{
-        lineSegment(.{ .x = 0, .y = 0 }, .{ .x = 0, .y = 2 }),
-        lineSegment(.{ .x = 0, .y = 2 }, .{ .x = 2, .y = 2 }),
-        lineSegment(.{ .x = 2, .y = 2 }, .{ .x = 2, .y = 0 }),
-        lineSegment(.{ .x = 2, .y = 0 }, .{ .x = 0, .y = 0 }),
+    const cw = [_]Cubic{
+        lineCurve(.{ .x = 0, .y = 0 }, .{ .x = 0, .y = 2 }),
+        lineCurve(.{ .x = 0, .y = 2 }, .{ .x = 2, .y = 2 }),
+        lineCurve(.{ .x = 2, .y = 2 }, .{ .x = 2, .y = 0 }),
+        lineCurve(.{ .x = 2, .y = 0 }, .{ .x = 0, .y = 0 }),
     };
 
-    const ccw_blob = try encodeSegments(std.testing.allocator, &ccw);
+    const ccw_blob = try encodeCurves(std.testing.allocator, &ccw);
     defer ccw_blob.destroy();
-    const cw_blob = try encodeSegments(std.testing.allocator, &cw);
+    const cw_blob = try encodeCurves(std.testing.allocator, &cw);
     defer cw_blob.destroy();
 
     const ccw_texels = std.mem.bytesAsSlice(Texel, ccw_blob.getData());
@@ -977,12 +899,12 @@ test "encodeSegments: stores glyph fill direction in header" {
     try std.testing.expectEqual(@as(i16, -1), cw_texels[1].b);
 }
 
-test "encodeSegments: stores decoded-geometry bounds per curve" {
-    const segments = [_]Segment{
-        lineSegment(.{ .x = 0, .y = 0 }, .{ .x = 0, .y = 8 }),
+test "encodeCurves: stores decoded-geometry bounds per curve" {
+    const curves = [_]Cubic{
+        lineCurve(.{ .x = 0, .y = 0 }, .{ .x = 0, .y = 8 }),
     };
 
-    const blob = try encodeSegments(std.testing.allocator, &segments);
+    const blob = try encodeCurves(std.testing.allocator, &curves);
     defer blob.destroy();
 
     const texels = std.mem.bytesAsSlice(Texel, blob.getData());
@@ -1011,15 +933,8 @@ test "coverage math: high zoom far-right edges are not dropped by parameter epsi
     try std.testing.expectApproxEqAbs(@as(f64, 1.0), farRightContributionForTest(ta, tb, 1.0), 1.0e-12);
 }
 
-fn lineSegment(a: Point, b: Point) Segment {
-    const cubic = lineAsCubic(a, b);
-    return .{
-        .kind = .cubic,
-        .p0 = cubic.p0,
-        .p1 = cubic.p1,
-        .p2 = cubic.p2,
-        .p3 = cubic.p3,
-    };
+fn lineCurve(a: Point, b: Point) Cubic {
+    return lineAsCubic(a, b);
 }
 
 fn hasInteriorAxisExtremum(p0: f64, p1: f64, p2: f64, p3: f64) bool {

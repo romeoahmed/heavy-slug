@@ -27,9 +27,9 @@ struct PushConstants  // 80 bytes — matches descriptors.zig
     uint     glyph_base;    // offset 76: first glyph index in the command buffer
 };
 
-// --- HarfBuzz blob constants ---
+// --- Coverage V3 blob constants ---
 
-static const float UNITS_PER_EM = 4.0;  // HB_GPU_UNITS_PER_EM
+static const float UNITS_PER_EM = 4.0;
 static const float INV_UNITS_PER_EM = 1.0 / UNITS_PER_EM;  // 0.25 (reciprocal for fast multiply)
 static const uint  HEADER_LEN = 4;       // texels 0-3 are header
 static const uint  BLOB_VERSION = 3;

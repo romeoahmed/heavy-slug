@@ -74,7 +74,7 @@ test "integration: multiple texts through same FontContext" {
 
         try std.testing.expect(buf.getLength() > 0);
 
-        // Encode first glyph from each pass to verify gpu_draw reset
+        // Encode first glyph from each pass to verify encoder reuse.
         const infos = buf.getGlyphInfos();
         const encoded = try ctx.encodeGlyph(infos[0].codepoint);
         defer encoded.destroy();

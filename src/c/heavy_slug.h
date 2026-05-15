@@ -5,4 +5,3 @@
 
 #include <hb.h>
 #include <hb-ft.h>
-#include <hb-gpu.h>

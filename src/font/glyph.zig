@@ -5,7 +5,7 @@ const outline = @import("outline.zig");
 
 /// Result of encoding a single glyph for GPU upload.
 pub const EncodedGlyph = struct {
-    /// Slug-format blob data. Owned by the blob — valid until blob.destroy().
+    /// Coverage V3 blob data. Owned by the blob — valid until blob.destroy().
     data: []const u8,
     /// Em-space bounding box from HarfBuzz.
     extents: hb.GlyphExtents,
@@ -56,7 +56,7 @@ pub const FontContext = struct {
         self.* = undefined;
     }
 
-    /// Encode a single glyph into a Slug-format blob for GPU upload.
+    /// Encode a single glyph into a Coverage V3 blob for GPU upload.
     /// The returned EncodedGlyph owns the blob — caller must call .destroy().
     pub fn encodeGlyph(self: *FontContext, glyph_id: u32) !EncodedGlyph {
         const encoded = try self.outline_encoder.encodeGlyph(self.hb_font, glyph_id);
@@ -108,7 +108,7 @@ test "FontContext: load font and encode glyph" {
     try std.testing.expect(encoded.extents.width != 0);
 }
 
-test "FontContext: preserves native CFF cubic segments" {
+test "FontContext: captures CFF outlines through HarfBuzz callbacks" {
     const ft_lib = try ft.Library.init();
     defer ft_lib.deinit();
 
@@ -122,10 +122,7 @@ test "FontContext: preserves native CFF cubic segments" {
     const encoded = try ctx.encodeGlyph(glyph_id);
     defer encoded.destroy();
 
-    const has_cubic = for (ctx.outline_encoder.builder.segments.items) |segment| {
-        if (segment.kind == .cubic) break true;
-    } else false;
-    try std.testing.expect(has_cubic);
+    try std.testing.expect(ctx.outline_encoder.builder.curves.items.len > 0);
 }
 
 test "FontContext: shape multi-glyph string" {
