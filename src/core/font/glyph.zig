@@ -5,7 +5,7 @@ const outline = @import("../outline/encode.zig");
 
 /// Result of encoding a single glyph for GPU upload.
 pub const EncodedGlyph = struct {
-    /// Coverage V3 blob data. Owned by the blob — valid until blob.destroy().
+    /// CoverageBlob data. Owned by the blob — valid until blob.destroy().
     data: []const u8,
     /// Em-space bounding box from HarfBuzz.
     extents: hb.GlyphExtents,
@@ -31,7 +31,18 @@ pub const FontContext = struct {
         path: [*:0]const u8,
         size_px: u32,
     ) !FontContext {
-        const face = try ft.Face.init(ft_lib, path);
+        return initWithFaceIndex(allocator, ft_lib, path, 0, size_px);
+    }
+
+    /// Load a font face from a file path, face index, and pixel size.
+    pub fn initWithFaceIndex(
+        allocator: std.mem.Allocator,
+        ft_lib: ft.Library,
+        path: [*:0]const u8,
+        face_index: u32,
+        size_px: u32,
+    ) !FontContext {
+        const face = try ft.Face.init(ft_lib, path, face_index);
         errdefer face.deinit();
 
         try face.setPixelSizes(0, size_px);
@@ -56,7 +67,7 @@ pub const FontContext = struct {
         self.* = undefined;
     }
 
-    /// Encode a single glyph into a Coverage V3 blob for GPU upload.
+    /// Encode a single glyph into a CoverageBlob payload for GPU upload.
     /// The returned EncodedGlyph owns the blob — caller must call .destroy().
     pub fn encodeGlyph(self: *FontContext, glyph_id: u32) !EncodedGlyph {
         const encoded = try self.outline_encoder.encodeGlyph(self.hb_font, glyph_id);

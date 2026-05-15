@@ -321,6 +321,7 @@ pub const GraphicsContext = struct {
         image_view: vk.ImageView,
         image: vk.Image,
         image_index: u32,
+        frame_index: u32,
     };
 
     pub fn createSwapchain(self: *GraphicsContext, window: glfw.Window) !void {
@@ -475,6 +476,7 @@ pub const GraphicsContext = struct {
             .image_view = self.swapchain_views[image_index],
             .image = self.swapchain_images[image_index],
             .image_index = image_index,
+            .frame_index = fi,
         };
     }
 

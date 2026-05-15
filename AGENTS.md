@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-`heavy-slug` is a Zig 0.16 GPU text rendering library. The core module is `src/root.zig`; it exports stable public types from `src/core/`, HarfBuzz-backed native outline encoding, PGA math, cache/pool utilities, and backend-neutral render orchestration. The core does not own a GPU context or depend on GLFW.
+`heavy-slug` is a Zig 0.16 GPU text rendering library. The core module is `src/root.zig`; it exports stable public types from `src/core/` and keeps font, outline, blob, cache, math, and render orchestration under explicit `heavy_slug.core.*` or private modules. The core does not own a GPU context or depend on GLFW.
 
 Backend modules are opt-in. `src/backends/vulkan/` provides `heavy_slug_vulkan` for Vulkan SPIR-V 1.6 mesh shaders. `src/backends/metal/` provides `heavy_slug_metal` for macOS Metal 4 and accepts externally provided Metal device, command queue, and layer objects. Demo-only code lives in `src/demo/`; shared scene/input code is in `src/demo/common/`, and platform hosts stay under `src/demo/vulkan/` and `src/demo/metal/`. Shared Slang modules are in `shaders/core/`, entry points are in `shaders/entries/`, and `tools/layout_gen.zig` generates GPU ABI structs from Slang reflection. Architecture plans live in `docs/`.
 
@@ -24,7 +24,7 @@ Run `zig fmt build.zig build/ src/ tools/` before submitting. Use lowercase modu
 
 ## Testing Guidelines
 
-Tests use Zig `test` blocks and `std.testing`. Put module tests near the implementation and import new modules from `src/root.zig` so nested tests are discovered. Prefer behavior names such as `test "TextCore: skips empty glyph commands"`. Use repository assets, not system font paths.
+Tests use Zig `test` blocks and `std.testing`. Put module tests near the implementation and import new modules from `src/root.zig` so nested tests are discovered. Prefer behavior names such as `test "RendererCore: skips empty glyph commands"`. Use repository assets, not system font paths.
 
 ## Commit & Pull Request Guidelines
 

@@ -1,17 +1,10 @@
-// Fragment shader: Coverage V3 analytic cubic coverage.
+// Fragment shader: CoverageBlob analytic cubic coverage.
 
 import abi;
 import coverage_blob;
 import coverage_integral;
 import hband;
-
-#if HEAVY_SLUG_METAL
-[[vk::binding(0, 0)]]
-ByteAddressBuffer glyphPool : register(t0);
-#else
-[[vk::binding(0, 0)]]
-ByteAddressBuffer glyphBlobs[];
-#endif
+import resources;
 
 struct FragmentInput
 {
@@ -34,7 +27,6 @@ float integrateCandidateCurves(
     uint curveCount,
     uint bandBase,
     uint idBase,
-    uint idCount,
     uint bandIndex,
     float2 renderCoord,
     float2 dx,
@@ -49,9 +41,6 @@ float integrateCandidateCurves(
     for (uint i = 0; i < bandIdCount; i++)
     {
         uint idIndex = idStart + i;
-        if (idIndex >= idCount)
-            break;
-
         uint curveIndex = blob.readCurveId(idBase, idIndex);
         if (curveIndex < curveCount)
         {
@@ -72,7 +61,6 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
     float bandHeight;
     uint bandBase;
     uint idBase;
-    uint idCount;
     blob.readHeader(
         bounds,
         curveCount,
@@ -82,8 +70,7 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
         bandCount,
         bandHeight,
         bandBase,
-        idBase,
-        idCount);
+        idBase);
     if (curveCount == 0)
         return 0.0;
 
@@ -113,7 +100,6 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
             curveCount,
             bandBase,
             idBase,
-            idCount,
             uint(firstBand),
             renderCoord,
             dx,

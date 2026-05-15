@@ -1,4 +1,4 @@
-# Phase 03: CoverageBlobV4 and CPU Reference
+# Phase 03: CoverageBlob and CPU Reference
 
 ## Goal
 

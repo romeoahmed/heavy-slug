@@ -85,6 +85,10 @@ pub const Transform = extern struct {
     pub fn toMotor(self: Transform) pga.Motor {
         return self.motor;
     }
+
+    pub fn toProjectionMatrix(self: Transform, projection: [4][4]f32) [4][4]f32 {
+        return self.motor.toMat(projection);
+    }
 };
 
 pub const FontHandle = extern struct {

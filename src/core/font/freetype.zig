@@ -31,9 +31,10 @@ pub const Face = struct {
     handle: c.FT_Face,
 
     /// Load a font face from a file path.
-    pub fn init(lib: Library, path: [*:0]const u8) Error!Face {
+    pub fn init(lib: Library, path: [*:0]const u8, face_index: u32) Error!Face {
         var face: c.FT_Face = null;
-        if (c.FT_New_Face(lib.handle, path, 0, &face) != 0) return error.FreeTypeInitFailed;
+        const ft_face_index = std.math.cast(c.FT_Long, face_index) orelse return error.FreeTypeInitFailed;
+        if (c.FT_New_Face(lib.handle, path, ft_face_index, &face) != 0) return error.FreeTypeInitFailed;
         return .{ .handle = face };
     }
 
@@ -61,7 +62,7 @@ const test_font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
 test "Face: load system font and query glyph count" {
     const lib = try Library.init();
     defer lib.deinit();
-    const face = Face.init(lib, test_font_path) catch return; // skip if font unavailable
+    const face = Face.init(lib, test_font_path, 0) catch return; // skip if font unavailable
     defer face.deinit();
     try std.testing.expect(face.numGlyphs() > 0);
 }
@@ -69,7 +70,7 @@ test "Face: load system font and query glyph count" {
 test "Face: set pixel sizes" {
     const lib = try Library.init();
     defer lib.deinit();
-    const face = Face.init(lib, test_font_path) catch return;
+    const face = Face.init(lib, test_font_path, 0) catch return;
     defer face.deinit();
     try face.setPixelSizes(0, 32);
 }

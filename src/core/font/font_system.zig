@@ -31,7 +31,7 @@ pub const FontSystem = struct {
         const path = switch (source) {
             .path => |p| p,
         };
-        const face = try ft.Face.init(self.library, path);
+        const face = try ft.Face.init(self.library, path, options.face_index);
         errdefer face.deinit();
         try face.setPixelSizes(0, options.size_px);
         const font = try hb.Font.createFromFtFace(face.rawHandle());
@@ -47,5 +47,19 @@ test "FontSystem loads repository font" {
     var loaded = system.load(.{ .path = "assets/Inter-Regular.otf" }, .{ .size_px = 24 }) catch return;
     defer loaded.deinit();
 
+    try std.testing.expect(loaded.face.numGlyphs() > 0);
+}
+
+test "FontSystem forwards explicit face index" {
+    var system = try FontSystem.init();
+    defer system.deinit();
+
+    var loaded = system.load(.{ .path = "assets/Inter-Regular.otf" }, .{
+        .size_px = 24,
+        .face_index = 0,
+    }) catch return;
+    defer loaded.deinit();
+
+    try std.testing.expectEqual(@as(u32, 0), loaded.options.face_index);
     try std.testing.expect(loaded.face.numGlyphs() > 0);
 }

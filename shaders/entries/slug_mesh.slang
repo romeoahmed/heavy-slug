@@ -1,17 +1,10 @@
-// shaders/slug_mesh.slang
+// shaders/entries/slug_mesh.slang
 // Mesh shader: emit a dilated screen-space quad per glyph.
 // One workgroup = one glyph = 4 vertices + 2 triangles.
 
 import pga;
 import abi;
-
-// --- Resource bindings ---
-
-[[vk::binding(1, 0)]]
-StructuredBuffer<GlyphCommand> commands;
-
-[[vk::push_constant]]
-PushConstants pc;
+import resources;
 
 // --- Payload from task shader ---
 

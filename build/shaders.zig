@@ -92,7 +92,7 @@ pub fn generateReflectionJson(b: *std.Build) std.Build.LazyPath {
     addSharedSlangArgs(cmd, "taskMain", "amplification", false);
     cmd.addArgs(&.{ "-target", "spirv" });
     cmd.addArgs(&.{ "-profile", "spirv_1_6+spvGroupNonUniform+spvGroupNonUniformBallot" });
-    addSharedIncludeAndOptArgs(cmd);
+    addSharedIncludeAndOptArgs(cmd, .vulkan);
     cmd.addArg("-o");
     _ = cmd.addOutputFileArg("reflection_task.spv");
     cmd.addArg("-reflection-json");
@@ -132,7 +132,7 @@ fn compileSlangSpirv(
     else
         "spirv_1_6";
     cmd.addArgs(&.{ "-profile", profile });
-    addSharedIncludeAndOptArgs(cmd);
+    addSharedIncludeAndOptArgs(cmd, .vulkan);
     cmd.addArg("-o");
     return cmd.addOutputFileArg(name);
 }
@@ -149,7 +149,7 @@ fn compileSlangMetal(
     addSharedSlangArgs(cmd, entry, stage, true);
     cmd.addArgs(&.{ "-target", "metal" });
     cmd.addArgs(&.{ "-capability", "metallib_4_0" });
-    addSharedIncludeAndOptArgs(cmd);
+    addSharedIncludeAndOptArgs(cmd, .metal);
     cmd.addArg("-o");
     return cmd.addOutputFileArg(name);
 }
@@ -165,10 +165,16 @@ fn addSharedSlangArgs(
     cmd.addArgs(&.{ "-stage", stage });
 }
 
-fn addSharedIncludeAndOptArgs(cmd: *std.Build.Step.Run) void {
+const ShaderBackend = enum { vulkan, metal };
+
+fn addSharedIncludeAndOptArgs(cmd: *std.Build.Step.Run, backend: ShaderBackend) void {
     cmd.addArgs(&.{"-matrix-layout-column-major"});
     cmd.addArgs(&.{ "-I", "shaders" });
     cmd.addArgs(&.{ "-I", "shaders/core" });
+    cmd.addArgs(&.{ "-I", switch (backend) {
+        .vulkan => "shaders/backend_vulkan",
+        .metal => "shaders/backend_metal",
+    } });
     cmd.addArgs(&.{ "-I", "shaders/entries" });
     cmd.addArgs(&.{"-O2"});
 }

@@ -2,8 +2,6 @@ const std = @import("std");
 const heavy_slug = @import("heavy_slug");
 const glfw = @import("demo_glfw");
 
-const pga = heavy_slug.pga;
-
 pub const font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
 pub const font_size_px: u32 = 24;
 pub const window_width: c_int = 1280;
@@ -142,7 +140,8 @@ pub const Scene = struct {
 
     pub fn projection(self: Scene, width: f32, height: f32) [4][4]f32 {
         const vp = viewProjection(width, height, self.view);
-        return pga.Motor.fromRotationAbout(self.rotation_angle, content_cx, content_cy).toMat(vp);
+        return heavy_slug.Transform.rotationAbout(self.rotation_angle, content_cx, content_cy)
+            .toProjectionMatrix(vp);
     }
 
     pub fn draw(self: Scene, renderer: anytype, font: anytype) !void {

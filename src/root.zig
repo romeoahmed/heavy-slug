@@ -2,12 +2,11 @@
 
 const std = @import("std");
 pub const core = @import("core/root.zig");
-pub const pga = @import("math/pga.zig");
 pub const gpu = @import("gpu/root.zig");
 
-pub const FontContext = core.font.FontContext;
-pub const EncodedGlyph = core.font.EncodedGlyph;
-pub const FontHandle = core.render.text_core.FontHandle;
+const pga = @import("math/pga.zig");
+
+pub const FontHandle = core.FontHandle;
 pub const Color = core.Color;
 pub const Transform = core.Transform;
 pub const Viewport = core.Viewport;
@@ -18,6 +17,7 @@ pub const FontOptions = core.FontOptions;
 pub const GlyphKey = core.GlyphKey;
 pub const RendererOptions = core.RendererOptions;
 pub const TextRun = core.TextRun;
+pub const FrameToken = core.FrameToken;
 
 const test_font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
 const font = core.font;

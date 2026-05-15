@@ -4,19 +4,23 @@ const heavy_slug = @import("heavy_slug");
 const gpu_context = @import("context.zig");
 const descriptors = @import("descriptors.zig");
 const pipeline_mod = @import("pipeline.zig");
-const render = heavy_slug.core.render.text_core;
+const render = heavy_slug.core.render.renderer_core;
 const core_types = heavy_slug.core.types;
 const pool_mod = heavy_slug.core.cache.byte_pool;
-const pga = heavy_slug.pga;
 
 pub const Error = error{
     NoSuitableMemoryType,
     DescriptorSlotExhausted,
+    FrameResourcesInUse,
 };
 
 pub const Options = render.Options;
 pub const InitOptions = Options;
 pub const FontHandle = render.FontHandle;
+pub const FrameToken = render.FrameToken;
+pub const max_frames_in_flight = frames_in_flight;
+
+const frames_in_flight = 3;
 
 pub const Stats = if (@import("builtin").mode == .Debug) struct {
     common: render.Stats = .{},
@@ -45,7 +49,7 @@ pub const Target = struct {
 };
 
 pub const Frame = struct {
-    renderer: *TextRenderer,
+    renderer: *Renderer,
     submitted: bool = false,
 
     pub fn drawText(
@@ -53,13 +57,14 @@ pub const Frame = struct {
         run: heavy_slug.TextRun,
     ) !void {
         if (self.submitted) return error.FrameAlreadySubmitted;
-        try self.renderer.drawText(run.font, run.text, run.transform.toMotor(), run.color.rgba);
+        try self.renderer.appendRun(run);
     }
 
-    pub fn submit(self: *Frame, target: Target) !void {
+    pub fn submit(self: *Frame, target: Target) !render.FrameToken {
         if (self.submitted) return error.FrameAlreadySubmitted;
-        self.renderer.flush(target.command_buffer, target.projection, target.viewport);
+        const token = self.renderer.submitFrame(target);
         self.submitted = true;
+        return token;
     }
 };
 
@@ -154,24 +159,26 @@ fn destroyMappedBuffer(self: MappedBuffer, device: vk.Device, dispatch: gpu_cont
 
 /// GPU text renderer using the Slug algorithm for exact glyph coverage.
 ///
-/// **Thread safety:** Not thread-safe. All calls (begin, drawText, flush,
-/// loadFont, unloadFont) must be made from a single thread or externally
-/// synchronized. The renderer mutates shared state (glyph cache, pool
-/// allocator, command buffer) without synchronization.
-pub const TextRenderer = struct {
+/// **Thread safety:** Not thread-safe. `beginFrame`, `Frame.drawText`,
+/// `Frame.submit`, `loadFont`, and `unloadFont` must be made from a single
+/// thread or externally synchronized. The renderer mutates shared state
+/// without synchronization.
+pub const Renderer = struct {
     pub const GlyphRef = u32;
+    pub const FrameToken = render.FrameToken;
     pub const Command = descriptors.GlyphCommand;
 
     device: vk.Device,
     dispatch: gpu_context.DeviceDispatch,
 
-    core: render.TextCore,
+    core: render.RendererCore,
     descriptor_table: descriptors.DescriptorTable,
     pip: pipeline_mod.Pipeline,
 
     // Vulkan buffers
     pool_buffer: MappedBuffer,
-    command_buffer: MappedBuffer,
+    command_buffers: [frames_in_flight]MappedBuffer,
+    active_frame: u32,
 
     // Per-frame debug counters (zero-cost in release)
     stats: Stats,
@@ -179,13 +186,16 @@ pub const TextRenderer = struct {
     // Stored for future buffer creation
     memory_properties: vk.PhysicalDeviceMemoryProperties,
     allocator: std.mem.Allocator,
+    last_submitted_frame: render.FrameToken,
+    completed_frame: render.FrameToken,
+    frame_tokens: [frames_in_flight]render.FrameToken,
 
     pub fn init(
         ctx: gpu_context.VulkanContext,
         color_format: vk.Format,
         allocator: std.mem.Allocator,
         options: InitOptions,
-    ) !TextRenderer {
+    ) !Renderer {
         const device = ctx.device;
         const dispatch = ctx.dispatch;
         // 1. Descriptor table
@@ -204,7 +214,7 @@ pub const TextRenderer = struct {
         );
         errdefer pip.deinit();
 
-        var core = try render.TextCore.init(allocator, options);
+        var core = try render.RendererCore.init(allocator, options);
         errdefer core.deinit();
 
         // 3. Pool buffer (glyph blob storage, GPU reads as storage buffer)
@@ -215,20 +225,24 @@ pub const TextRenderer = struct {
         );
         errdefer destroyMappedBuffer(pool_buf, device, dispatch);
 
-        // 4. Command buffer (GlyphCommand[] per frame, GPU reads as storage buffer)
+        // 4. Command buffers (GlyphCommand[] per frame, GPU reads as storage buffer)
         const cmd_buf_size = @as(vk.DeviceSize, options.max_glyphs_per_frame) *
             @sizeOf(descriptors.GlyphCommand);
-        const cmd_buf = try createMappedBuffer(
-            ctx,
-            cmd_buf_size,
-            .{ .storage_buffer_bit = true },
-        );
-        errdefer destroyMappedBuffer(cmd_buf, device, dispatch);
-
-        // Bind command buffer descriptor once for the full allocation.
-        // Per-pass offsets are handled via glyph_base in push constants.
-        desc_table.updateCommandBuffer(cmd_buf.buffer, 0, cmd_buf_size);
-        desc_table.flushWrites();
+        var command_buffers: [frames_in_flight]MappedBuffer = undefined;
+        var initialized_command_buffers: usize = 0;
+        errdefer {
+            for (command_buffers[0..initialized_command_buffers]) |cmd_buf| {
+                destroyMappedBuffer(cmd_buf, device, dispatch);
+            }
+        }
+        for (&command_buffers) |*cmd_buf| {
+            cmd_buf.* = try createMappedBuffer(
+                ctx,
+                cmd_buf_size,
+                .{ .storage_buffer_bit = true },
+            );
+            initialized_command_buffers += 1;
+        }
 
         return .{
             .device = device,
@@ -237,17 +251,21 @@ pub const TextRenderer = struct {
             .descriptor_table = desc_table,
             .pip = pip,
             .pool_buffer = pool_buf,
-            .command_buffer = cmd_buf,
+            .command_buffers = command_buffers,
+            .active_frame = frames_in_flight - 1,
             .stats = .{},
             .memory_properties = ctx.memory_properties,
             .allocator = allocator,
+            .last_submitted_frame = 0,
+            .completed_frame = 0,
+            .frame_tokens = .{0} ** frames_in_flight,
         };
     }
 
     /// Load a font from a file path at the given pixel size.
     /// Returns a FontHandle used in drawText calls.
     pub fn loadFont(
-        self: *TextRenderer,
+        self: *Renderer,
         source: core_types.FontSource,
         options: core_types.FontOptions,
     ) !FontHandle {
@@ -257,37 +275,42 @@ pub const TextRenderer = struct {
     /// Unload a font and evict all its cached glyphs.
     /// Caller must ensure the GPU has finished consuming any commands that
     /// reference this font's glyphs before calling this function.
-    pub fn unloadFont(self: *TextRenderer, handle: FontHandle) void {
-        self.core.unloadFont(self, handle);
+    pub fn unloadFont(self: *Renderer, handle: FontHandle) !void {
+        self.core.setRetireAfterToken(self.last_submitted_frame);
+        try self.core.unloadFont(handle);
     }
 
-    /// Reset per-frame state. Call once at the start of each frame.
-    /// Multiple flush() calls may follow; each dispatches only the glyphs
-    /// appended since the previous flush (or since begin).
-    pub fn begin(self: *TextRenderer) void {
-        self.core.begin();
+    fn reserveFrameSlot(self: *Renderer) Error!void {
+        const next_frame = (self.active_frame + 1) % frames_in_flight;
+        if (self.frame_tokens[next_frame] > self.completed_frame) return Error.FrameResourcesInUse;
+        self.active_frame = next_frame;
+        self.core.setRetireAfterToken(self.last_submitted_frame);
+        self.core.beginFrame(self.completed_frame, self);
         self.stats.reset();
     }
 
-    pub fn beginFrame(self: *TextRenderer) Frame {
-        self.begin();
+    pub fn beginFrame(self: *Renderer) Error!Frame {
+        try self.reserveFrameSlot();
         return .{ .renderer = self };
     }
 
-    /// Shape text and append glyph commands for GPU rendering.
-    /// Call between begin() and flush(). Zero Zig allocations on cache hit.
-    pub fn drawText(
-        self: *TextRenderer,
-        font: FontHandle,
-        text: []const u8,
-        motor: pga.Motor,
-        color: [4]f32,
-    ) !void {
-        const commands: [*]descriptors.GlyphCommand = @ptrCast(@alignCast(self.command_buffer.mapped));
-        try self.core.appendText(self, descriptors.GlyphCommand, commands, font, text, motor, color);
+    pub fn markFrameComplete(self: *Renderer, token: render.FrameToken) void {
+        if (token > self.completed_frame) {
+            self.completed_frame = token;
+            self.core.retireCompleted(self.completed_frame, self);
+        }
     }
 
-    pub fn uploadGlyphBlob(self: *TextRenderer, pool_alloc: pool_mod.Allocation, data: []const u8) !u32 {
+    pub fn completedFrameToken(self: *const Renderer) render.FrameToken {
+        return self.completed_frame;
+    }
+
+    fn appendRun(self: *Renderer, run: heavy_slug.TextRun) !void {
+        const commands: [*]descriptors.GlyphCommand = @ptrCast(@alignCast(self.command_buffers[self.active_frame].mapped));
+        try self.core.appendRun(self, descriptors.GlyphCommand, commands, run);
+    }
+
+    pub fn uploadGlyphBlob(self: *Renderer, pool_alloc: pool_mod.Allocation, data: []const u8) !u32 {
         const dst = self.pool_buffer.mapped[pool_alloc.offset..][0..data.len];
         @memcpy(dst, data);
         const slot = self.descriptor_table.allocSlot() orelse
@@ -301,7 +324,7 @@ pub const TextRenderer = struct {
         return slot;
     }
 
-    pub fn releaseGlyphRef(self: *TextRenderer, slot: u32) void {
+    pub fn releaseGlyphRef(self: *Renderer, slot: u32) void {
         self.descriptor_table.nullSlot(slot);
         self.descriptor_table.freeSlot(slot);
     }
@@ -313,14 +336,12 @@ pub const TextRenderer = struct {
     ///
     /// `proj`: column-major 4×4 projection matrix (e.g. orthographic).
     /// `viewport`: viewport dimensions in pixels [width, height].
-    pub fn flush(
-        self: *TextRenderer,
-        cmd_buf: vk.CommandBuffer,
-        proj: [4][4]f32,
-        viewport: [2]f32,
-    ) void {
-        const pass_count = self.core.passCount();
-        if (pass_count == 0) return;
+    fn submitFrame(self: *Renderer, target: Target) render.FrameToken {
+        const glyph_count = self.core.commandCount();
+        if (glyph_count == 0) return self.last_submitted_frame;
+        const cmd_buf = target.command_buffer;
+        const proj = target.projection;
+        const viewport = target.viewport;
 
         // Set dynamic viewport state
         const vk_viewport = vk.Viewport{
@@ -346,6 +367,8 @@ pub const TextRenderer = struct {
         self.dispatch.cmdBindPipeline(cmd_buf, .graphics, self.pip.pipeline);
 
         // Bind descriptor set
+        const command_buffer = self.command_buffers[self.active_frame];
+        self.descriptor_table.updateCommandBuffer(command_buffer.buffer, 0, command_buffer.size);
         self.dispatch.cmdBindDescriptorSets(
             cmd_buf,
             .graphics,
@@ -364,8 +387,8 @@ pub const TextRenderer = struct {
         const push = descriptors.PushConstants{
             .proj = proj_em,
             .viewport_dim = viewport,
-            .glyph_count = pass_count,
-            .glyph_base = self.core.flush_base,
+            .glyph_count = glyph_count,
+            .glyph_base = 0,
         };
         self.dispatch.cmdPushConstants(
             cmd_buf,
@@ -377,23 +400,28 @@ pub const TextRenderer = struct {
         );
 
         // Dispatch mesh shader workgroups (32 threads per workgroup in task shader)
-        const workgroup_count = (pass_count + 31) / 32;
+        const workgroup_count = (glyph_count + 31) / 32;
         // Commit all pending descriptor updates before GPU dispatch
         if (@import("builtin").mode == .Debug) self.stats.descriptors_flushed += self.descriptor_table.pending.len;
         self.descriptor_table.flushWrites();
         self.dispatch.cmdDrawMeshTasksEXT(cmd_buf, workgroup_count, 1, 1);
         if (@import("builtin").mode == .Debug) {
-            self.core.stats.glyphs_submitted += pass_count;
-            self.core.stats.pool_free_blocks = @intCast(self.core.pool_alloc.free_blocks.items.len);
+            self.core.stats.glyphs_submitted += glyph_count;
+            self.core.stats.pool_free_blocks = self.core.poolFreeBlockCount();
         }
 
-        // Advance flush base for the next pass within this frame
-        self.core.finishPass();
+        self.last_submitted_frame +%= 1;
+        self.frame_tokens[self.active_frame] = self.last_submitted_frame;
+        self.core.setRetireAfterToken(self.last_submitted_frame);
+        return self.last_submitted_frame;
     }
 
-    pub fn deinit(self: *TextRenderer) void {
+    pub fn deinit(self: *Renderer) void {
+        self.markFrameComplete(std.math.maxInt(render.FrameToken));
         // Destroy Vulkan buffers (unmap + destroy buffer + free memory)
-        destroyMappedBuffer(self.command_buffer, self.device, self.dispatch);
+        for (self.command_buffers) |cmd_buf| {
+            destroyMappedBuffer(cmd_buf, self.device, self.dispatch);
+        }
         destroyMappedBuffer(self.pool_buffer, self.device, self.dispatch);
 
         // Destroy subsystems (reverse init order)
@@ -445,26 +473,26 @@ test "findMemoryType selects correct memory type" {
     try std.testing.expectEqual(@as(?u32, null), filtered);
 }
 
-test "TextRenderer type compiles with expected fields" {
-    _ = TextRenderer;
-    try std.testing.expect(@hasField(TextRenderer, "device"));
-    try std.testing.expect(@hasField(TextRenderer, "dispatch"));
-    try std.testing.expect(@hasField(TextRenderer, "core"));
-    try std.testing.expect(@hasField(TextRenderer, "descriptor_table"));
-    try std.testing.expect(@hasField(TextRenderer, "pip"));
-    try std.testing.expect(@hasField(TextRenderer, "pool_buffer"));
-    try std.testing.expect(@hasField(TextRenderer, "command_buffer"));
-    try std.testing.expect(@hasField(TextRenderer, "stats"));
+test "Renderer type compiles with expected fields" {
+    _ = Renderer;
+    try std.testing.expect(@hasField(Renderer, "device"));
+    try std.testing.expect(@hasField(Renderer, "dispatch"));
+    try std.testing.expect(@hasField(Renderer, "core"));
+    try std.testing.expect(@hasField(Renderer, "descriptor_table"));
+    try std.testing.expect(@hasField(Renderer, "pip"));
+    try std.testing.expect(@hasField(Renderer, "pool_buffer"));
+    try std.testing.expect(@hasField(Renderer, "command_buffers"));
+    try std.testing.expect(@hasField(Renderer, "stats"));
 }
 
-test "TextRenderer satisfies core backend contract" {
-    heavy_slug.core.render.BackendContract(TextRenderer);
+test "Renderer satisfies core backend contract" {
+    heavy_slug.core.render.BackendContract(Renderer);
     try std.testing.expect(true);
 }
 
-test "TextRenderer.init compiles" {
+test "Renderer.init compiles" {
     // Type-check only — cannot call without a live Vulkan device
-    _ = @TypeOf(TextRenderer.init);
+    _ = @TypeOf(Renderer.init);
 }
 
 test "Stats type compiles and has expected API" {

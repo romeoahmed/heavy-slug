@@ -4,15 +4,17 @@ const gpu_structs = @import("gpu_structs");
 const metal_shaders = @import("metal_shaders");
 
 const pool_mod = heavy_slug.core.cache.byte_pool;
-const render = heavy_slug.core.render.text_core;
+const render = heavy_slug.core.render.renderer_core;
 const core_types = heavy_slug.core.types;
-const pga = heavy_slug.pga;
 
 pub const GlyphCommand = gpu_structs.GlyphCommand;
 pub const PushConstants = gpu_structs.PushConstants;
 
 const ContextHandle = opaque {};
+const PipelineHandle = opaque {};
 const BufferHandle = opaque {};
+const FrameHandle = opaque {};
+const TargetHandle = opaque {};
 const frames_in_flight = 3;
 
 pub const HostObjects = extern struct {
@@ -74,6 +76,7 @@ pub const Error = error{
 pub const Options = render.Options;
 pub const InitOptions = Options;
 pub const FontHandle = render.FontHandle;
+pub const FrameToken = render.FrameToken;
 pub const Stats = render.Stats;
 pub const max_frames_in_flight = frames_in_flight;
 
@@ -147,7 +150,7 @@ const FrameSlot = struct {
 };
 
 pub const Frame = struct {
-    renderer: *TextRenderer,
+    renderer: *Renderer,
     submitted: bool = false,
 
     pub fn drawText(
@@ -155,34 +158,39 @@ pub const Frame = struct {
         run: heavy_slug.TextRun,
     ) !void {
         if (self.submitted) return error.FrameAlreadySubmitted;
-        try self.renderer.drawText(run.font, run.text, run.transform.toMotor(), run.color.rgba);
+        try self.renderer.appendRun(run);
     }
 
-    pub fn submit(self: *Frame, target: Target) !void {
+    pub fn submit(self: *Frame, target: Target) !render.FrameToken {
         if (self.submitted) return error.FrameAlreadySubmitted;
-        try self.renderer.flush(target.viewport, target.projection, target.clear_color);
+        const token = try self.renderer.submitFrame(target);
         self.submitted = true;
+        return token;
     }
 };
 
-pub const TextRenderer = struct {
+pub const Renderer = struct {
     pub const GlyphRef = u32;
+    pub const FrameToken = render.FrameToken;
     pub const Command = GlyphCommand;
 
     context: Context,
-    core: render.TextCore,
+    core: render.RendererCore,
     pool_buffer: MappedBuffer,
     frame_slots: [frames_in_flight]FrameSlot,
     active_frame: u32,
     frame_reserved: bool,
+    slot_tokens: [frames_in_flight]render.FrameToken,
+    last_submitted_frame: render.FrameToken,
+    completed_frame: render.FrameToken,
     allocator: std.mem.Allocator,
 
     pub fn init(
         context: Context,
         allocator: std.mem.Allocator,
         options: InitOptions,
-    ) !TextRenderer {
-        var core = try render.TextCore.init(allocator, options);
+    ) !Renderer {
+        var core = try render.RendererCore.init(allocator, options);
         errdefer core.deinit();
 
         const pool_buf = try MappedBuffer.init(context, options.pool_buffer_size);
@@ -215,23 +223,27 @@ pub const TextRenderer = struct {
             .frame_slots = frame_slots,
             .active_frame = frames_in_flight - 1,
             .frame_reserved = false,
+            .slot_tokens = .{0} ** frames_in_flight,
+            .last_submitted_frame = 0,
+            .completed_frame = 0,
             .allocator = allocator,
         };
     }
 
     pub fn loadFont(
-        self: *TextRenderer,
+        self: *Renderer,
         source: core_types.FontSource,
         options: core_types.FontOptions,
     ) !FontHandle {
         return self.core.loadFont(source, options);
     }
 
-    pub fn unloadFont(self: *TextRenderer, handle: FontHandle) void {
-        self.core.unloadFont(self, handle);
+    pub fn unloadFont(self: *Renderer, handle: FontHandle) !void {
+        self.core.setRetireAfterToken(self.last_submitted_frame);
+        try self.core.unloadFont(handle);
     }
 
-    pub fn begin(self: *TextRenderer) Error!void {
+    fn reserveFrameSlot(self: *Renderer) Error!void {
         if (self.frame_reserved) {
             hs_metal_context_release_frame_slot(self.context.handle, self.active_frame);
             self.frame_reserved = false;
@@ -248,67 +260,66 @@ pub const TextRenderer = struct {
             std.log.err("Metal frame slot wait failed: {s}", .{std.mem.sliceTo(&error_buf, 0)});
             return Error.MetalDrawFailed;
         }
+        if (self.slot_tokens[self.active_frame] > self.completed_frame) {
+            self.completed_frame = self.slot_tokens[self.active_frame];
+        }
         self.frame_reserved = true;
-        self.core.begin();
+        self.core.setRetireAfterToken(self.last_submitted_frame);
+        self.core.beginFrame(self.completed_frame, self);
     }
 
-    pub fn beginFrame(self: *TextRenderer) Error!Frame {
-        try self.begin();
+    pub fn beginFrame(self: *Renderer) Error!Frame {
+        try self.reserveFrameSlot();
         return .{ .renderer = self };
     }
 
-    pub fn drawText(
-        self: *TextRenderer,
-        font: FontHandle,
-        text: []const u8,
-        motor: pga.Motor,
-        color: [4]f32,
-    ) !void {
+    fn appendRun(self: *Renderer, run: heavy_slug.TextRun) !void {
         const commands: [*]GlyphCommand = @ptrCast(@alignCast(self.frame_slots[self.active_frame].commands.mapped));
-        try self.core.appendText(self, GlyphCommand, commands, font, text, motor, color);
+        try self.core.appendRun(self, GlyphCommand, commands, run);
     }
 
-    pub fn uploadGlyphBlob(self: *TextRenderer, pool_alloc: pool_mod.Allocation, data: []const u8) !u32 {
+    pub fn uploadGlyphBlob(self: *Renderer, pool_alloc: pool_mod.Allocation, data: []const u8) !u32 {
         const dst = self.pool_buffer.mapped[pool_alloc.offset..][0..data.len];
         @memcpy(dst, data);
         return pool_alloc.offset;
     }
 
-    pub fn releaseGlyphRef(self: *TextRenderer, _: u32) void {
-        // Metal stores glyph refs as byte offsets into one buffer; freeing the
-        // pool allocation is enough, and TextCore handles that. Wait for
-        // submitted frames first so a reused offset cannot race GPU reads.
-        hs_metal_context_wait_submitted(self.context.handle);
+    pub fn releaseGlyphRef(self: *Renderer, _: u32) void {
+        _ = self;
+        // Metal stores glyph refs as byte offsets into one buffer; RendererCore
+        // frees the paired pool allocation only after a completed frame token.
     }
 
-    pub fn flush(
-        self: *TextRenderer,
-        viewport: [2]u32,
-        proj: [4][4]f32,
-        clear_color: [4]f32,
-    ) Error!void {
-        const pass_count = self.core.passCount();
-        if (pass_count == 0) {
+    pub fn completedFrameToken(self: *const Renderer) render.FrameToken {
+        return self.completed_frame;
+    }
+
+    fn submitFrame(self: *Renderer, target: Target) Error!render.FrameToken {
+        const glyph_count = self.core.commandCount();
+        if (glyph_count == 0) {
             if (self.frame_reserved) {
                 hs_metal_context_release_frame_slot(self.context.handle, self.active_frame);
                 self.frame_reserved = false;
             }
-            return;
+            return self.last_submitted_frame;
         }
 
+        const viewport = target.viewport;
+        const proj = target.projection;
+        const clear_color = target.clear_color;
         const proj_em = render.projectionToEm(proj);
         const frame_slot = &self.frame_slots[self.active_frame];
 
         const push = PushConstants{
             .proj = proj_em,
             .viewport_dim = .{ @floatFromInt(viewport[0]), @floatFromInt(viewport[1]) },
-            .glyph_count = pass_count,
-            .glyph_base = self.core.flush_base,
+            .glyph_count = glyph_count,
+            .glyph_base = 0,
         };
         const push_bytes = frame_slot.push_constants.mapped[0..@sizeOf(PushConstants)];
         @memcpy(push_bytes, std.mem.asBytes(&push));
 
-        const workgroup_count = (pass_count + 31) / 32;
+        const workgroup_count = (glyph_count + 31) / 32;
         var error_buf: [2048]u8 = undefined;
         if (hs_metal_context_draw(
             self.context.handle,
@@ -334,18 +345,23 @@ pub const TextRenderer = struct {
         self.frame_reserved = false;
 
         if (@import("builtin").mode == .Debug) {
-            self.core.stats.glyphs_submitted += pass_count;
-            self.core.stats.pool_free_blocks = @intCast(self.core.pool_alloc.free_blocks.items.len);
+            self.core.stats.glyphs_submitted += glyph_count;
+            self.core.stats.pool_free_blocks = self.core.poolFreeBlockCount();
         }
-        self.core.finishPass();
+        self.last_submitted_frame +%= 1;
+        self.slot_tokens[self.active_frame] = self.last_submitted_frame;
+        self.core.setRetireAfterToken(self.last_submitted_frame);
+        return self.last_submitted_frame;
     }
 
-    pub fn deinit(self: *TextRenderer) void {
+    pub fn deinit(self: *Renderer) void {
         if (self.frame_reserved) {
             hs_metal_context_release_frame_slot(self.context.handle, self.active_frame);
             self.frame_reserved = false;
         }
         hs_metal_context_wait_submitted(self.context.handle);
+        self.completed_frame = std.math.maxInt(render.FrameToken);
+        self.core.retireCompleted(self.completed_frame, self);
         for (self.frame_slots) |slot| slot.deinit();
         self.pool_buffer.deinit();
         self.core.deinit();
@@ -355,9 +371,9 @@ pub const TextRenderer = struct {
 
 test "Metal renderer public API compiles" {
     _ = Context;
-    _ = TextRenderer;
+    _ = Renderer;
     try std.testing.expectEqual(@as(usize, 3), max_frames_in_flight);
     _ = @TypeOf(Context.init);
-    _ = @TypeOf(TextRenderer.init);
-    heavy_slug.core.render.BackendContract(TextRenderer);
+    _ = @TypeOf(Renderer.init);
+    heavy_slug.core.render.BackendContract(Renderer);
 }

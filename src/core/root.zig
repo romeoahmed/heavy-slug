@@ -18,7 +18,8 @@ pub const FontOptions = types.FontOptions;
 pub const GlyphKey = types.GlyphKey;
 pub const Error = errors.Error;
 pub const RendererOptions = render.RendererOptions;
-pub const TextRun = render.renderer_core.TextRun;
+pub const TextRun = render.TextRun;
+pub const FrameToken = render.FrameToken;
 
 test {
     _ = types;

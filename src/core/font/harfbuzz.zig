@@ -153,7 +153,7 @@ test "Font: create from FT_Face and shape text" {
     // Load FreeType face
     const ft_lib = try ft.Library.init();
     defer ft_lib.deinit();
-    const ft_face = ft.Face.init(ft_lib, test_font_path) catch return;
+    const ft_face = ft.Face.init(ft_lib, test_font_path, 0) catch return;
     defer ft_face.deinit();
     try ft_face.setPixelSizes(0, 32);
 

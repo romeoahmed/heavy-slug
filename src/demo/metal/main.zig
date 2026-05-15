@@ -41,7 +41,7 @@ pub fn main() !void {
     });
     defer ctx.deinit();
 
-    var text_renderer = try heavy_slug_metal.TextRenderer.init(ctx, allocator, .{});
+    var text_renderer = try heavy_slug_metal.Renderer.init(ctx, allocator, .{});
     defer text_renderer.deinit();
 
     const font = try text_renderer.loadFont(.{ .path = demo_scene.font_path }, .{ .size_px = demo_scene.font_size_px });
@@ -66,7 +66,7 @@ pub fn main() !void {
 
         var text_frame = try text_renderer.beginFrame();
         try scene.draw(&text_frame, font);
-        try text_frame.submit(.{
+        _ = try text_frame.submit(.{
             .viewport = .{ size[0], size[1] },
             .projection = scene.projection(w, h),
             .clear_color = scene.clearColor(),

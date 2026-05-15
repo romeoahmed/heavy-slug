@@ -1,5 +1,6 @@
 const std = @import("std");
 const hb = @import("../font/harfbuzz.zig");
+const format = @import("../blob/format.zig");
 const c = hb.c;
 
 pub const Error = error{
@@ -10,14 +11,12 @@ pub const Error = error{
     OutOfMemory,
 };
 
-const units_per_em = 4.0;
+const blob_units_per_pixel = format.units_per_pixel;
 const max_cubic_prepare_depth = 8;
-const header_len = 4;
-const blob_version = 3;
-const curve_texel_len = 3;
-const hband_height = 4.0;
-const hband_height_q = @as(i16, @intFromFloat(hband_height * units_per_em));
-const curve_ids_per_texel = 4;
+const header_len = format.header_len;
+const curve_texel_len = format.curve_texel_len;
+const hband_height_q = format.hband_height_units;
+const curve_ids_per_texel = format.curve_ids_per_texel;
 
 pub const Point = struct {
     x: f64,
@@ -48,12 +47,7 @@ fn quadAsCubic(p0: Point, control: Point, p1: Point) Cubic {
     };
 }
 
-const Texel = extern struct {
-    r: i16,
-    g: i16,
-    b: i16,
-    a: i16,
-};
+const Texel = format.Texel;
 
 pub const OutlineBuilder = struct {
     allocator: std.mem.Allocator,
@@ -272,7 +266,7 @@ fn quantizedAxis4(a: f64, b: f64, cc: f64, d: f64) ?[4]i32 {
 }
 
 fn quantizedAxis(v: f64) ?i32 {
-    const q = std.math.round(v * units_per_em);
+    const q = std.math.round(v * blob_units_per_pixel);
     if (!std.math.isFinite(q) or q < std.math.minInt(i16) or q > std.math.maxInt(i16)) {
         return null;
     }
@@ -389,10 +383,6 @@ pub fn encodeCurves(
     const id_texel_count = divCeilU32(hbands.id_count, curve_ids_per_texel);
     const total_len = try addU32(id_base, id_texel_count);
 
-    if (band_base > std.math.maxInt(i16) or id_base > std.math.maxInt(i16)) {
-        return error.GlyphOffsetOverflow;
-    }
-
     var texels = try std.ArrayList(Texel).initCapacity(allocator, total_len);
     defer texels.deinit(allocator);
     texels.appendNTimesAssumeCapacity(.{ .r = 0, .g = 0, .b = 0, .a = 0 }, total_len);
@@ -400,21 +390,9 @@ pub fn encodeCurves(
     texels.items[0] = .{ .r = min_x_q, .g = min_y_q, .b = max_x_q, .a = max_y_q };
     texels.items[1] = .{
         .r = @intCast(curves.len),
-        .g = blob_version,
-        .b = fillSignCubics(curves),
-        .a = @intCast(curve_base),
-    };
-    texels.items[2] = .{
-        .r = @intCast(hbands.band_min),
-        .g = @intCast(hbands.band_count),
-        .b = hband_height_q,
-        .a = @intCast(band_base),
-    };
-    texels.items[3] = .{
-        .r = @intCast(id_base),
-        .g = @intCast(hbands.id_count),
-        .b = 0,
-        .a = 0,
+        .g = fillSignCubics(curves),
+        .b = @intCast(hbands.band_min),
+        .a = @intCast(hbands.band_count),
     };
 
     var data_texel: u32 = curve_base;
@@ -603,15 +581,15 @@ fn quantizedPoint(point: Point) Error!Point {
 }
 
 fn quantize(v: f64) Error!i16 {
-    return quantized(std.math.round(v * units_per_em));
+    return quantized(std.math.round(v * blob_units_per_pixel));
 }
 
 fn quantizeDown(v: f64) Error!i16 {
-    return quantized(@floor(v * units_per_em));
+    return quantized(@floor(v * blob_units_per_pixel));
 }
 
 fn quantizeUp(v: f64) Error!i16 {
-    return quantized(@ceil(v * units_per_em));
+    return quantized(@ceil(v * blob_units_per_pixel));
 }
 
 fn quantized(v: f64) Error!i16 {
@@ -622,7 +600,7 @@ fn quantized(v: f64) Error!i16 {
 }
 
 fn dequantize(v: i16) f64 {
-    return @as(f64, @floatFromInt(v)) / units_per_em;
+    return @as(f64, @floatFromInt(v)) / blob_units_per_pixel;
 }
 
 fn fillSignCubics(curves: []const Cubic) i16 {
@@ -811,7 +789,7 @@ test "OutlineBuilder: prepared cubic control polygons stay monotone after quanti
     }
 }
 
-test "encodeCurves: writes Coverage V3 cubic curve list" {
+test "encodeCurves: writes CoverageBlob cubic curve list" {
     const curves = [_]Cubic{
         quadAsCubic(.{ .x = 0, .y = 0 }, .{ .x = 0, .y = 1 }, .{ .x = 1, .y = 1 }),
         .{
@@ -827,8 +805,6 @@ test "encodeCurves: writes Coverage V3 cubic curve list" {
 
     const texels = std.mem.bytesAsSlice(Texel, blob.getData());
     try std.testing.expectEqual(@as(i16, 2), texels[1].r);
-    try std.testing.expectEqual(@as(i16, blob_version), texels[1].g);
-    try std.testing.expectEqual(@as(i16, header_len), texels[1].a);
     try std.testing.expect(texels.len > header_len + curves.len * curve_texel_len);
 
     const first_curve = texels[header_len..][0..curve_texel_len];
@@ -850,13 +826,14 @@ test "encodeCurves: writes h-band candidate index after curves" {
     defer blob.destroy();
 
     const texels = std.mem.bytesAsSlice(Texel, blob.getData());
-    const curve_base: usize = @intCast(texels[1].a);
-    const band_min = texels[2].r;
-    const band_count: usize = @intCast(texels[2].g);
-    const band_height = texels[2].b;
-    const band_base: usize = @intCast(texels[2].a);
-    const id_base: usize = @intCast(texels[3].r);
-    const id_count = texels[3].g;
+    const curve_count: usize = @intCast(texels[1].r);
+    const curve_base: usize = header_len;
+    const band_min = texels[1].b;
+    const band_count: usize = @intCast(texels[1].a);
+    const band_height = hband_height_q;
+    const band_base = curve_base + curve_count * curve_texel_len;
+    const id_base = band_base + band_count;
+    const id_count: i16 = 2;
 
     try std.testing.expectEqual(@as(usize, header_len), curve_base);
     try std.testing.expectEqual(@as(i16, 0), band_min);
@@ -895,8 +872,8 @@ test "encodeCurves: stores glyph fill direction in header" {
 
     const ccw_texels = std.mem.bytesAsSlice(Texel, ccw_blob.getData());
     const cw_texels = std.mem.bytesAsSlice(Texel, cw_blob.getData());
-    try std.testing.expectEqual(@as(i16, 1), ccw_texels[1].b);
-    try std.testing.expectEqual(@as(i16, -1), cw_texels[1].b);
+    try std.testing.expectEqual(@as(i16, 1), ccw_texels[1].g);
+    try std.testing.expectEqual(@as(i16, -1), cw_texels[1].g);
 }
 
 test "encodeCurves: stores decoded-geometry bounds per curve" {

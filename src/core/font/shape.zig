@@ -40,7 +40,7 @@ test "shape: creates an empty run for empty text" {
     const font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
     const lib = try ft.Library.init();
     defer lib.deinit();
-    const face = ft.Face.init(lib, font_path) catch return;
+    const face = ft.Face.init(lib, font_path, 0) catch return;
     defer face.deinit();
     try face.setPixelSizes(0, 24);
 

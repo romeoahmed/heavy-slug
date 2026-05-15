@@ -8,14 +8,28 @@ extern "C" {
 #endif
 
 typedef struct hs_metal_context hs_metal_context;
+typedef struct hs_metal_pipeline hs_metal_pipeline;
 typedef struct hs_metal_buffer hs_metal_buffer;
+typedef struct hs_metal_frame hs_metal_frame;
+typedef struct hs_metal_target hs_metal_target;
 
 typedef struct hs_metal_host_objects {
+    /* Borrowed id<MTLDevice>; caller retains ownership and must outlive context. */
     void *device;
+    /* Borrowed id<MTLCommandQueue>; caller retains ownership and must outlive context. */
     void *command_queue;
+    /* Borrowed CAMetalLayer*; caller retains ownership and must outlive context. */
     void *layer;
 } hs_metal_host_objects;
 
+/*
+ * Ownership model:
+ * - create/destroy pairs transfer ownership of hs_metal_context and hs_metal_buffer.
+ * - Host Objective-C objects are borrowed unless a function name explicitly says retain.
+ * - The context owns its internal pipeline, frame slots, target/drawable state, and
+ *   completion handlers. Zig sees only typed opaque C handles.
+ * - Errors cross the ABI as a boolean status plus caller-provided UTF-8 text buffer.
+ */
 hs_metal_context *hs_metal_context_create(
     hs_metal_host_objects host,
     const char *task_source,

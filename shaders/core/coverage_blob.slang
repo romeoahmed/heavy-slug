@@ -1,9 +1,9 @@
-// Coverage V3 blob decoding.
+// CoverageBlob decoding.
 
 static const float UNITS_PER_EM = 4.0;
 static const float INV_UNITS_PER_EM = 1.0 / UNITS_PER_EM;
-static const uint  HEADER_LEN = 4;
-static const uint  BLOB_VERSION = 3;
+static const uint  HEADER_LEN = 2;
+static const float HBAND_HEIGHT = 4.0;
 static const uint  CURVE_TEXEL_LEN = 3;
 static const uint  CURVE_IDS_PER_TEXEL = 4;
 
@@ -37,23 +37,19 @@ struct BlobReader
         out uint bandCount,
         out float bandHeight,
         out uint bandBase,
-        out uint idBase,
-        out uint idCount)
+        out uint idBase)
     {
         int4 t0 = readTexel(0);
         int4 t1 = readTexel(1);
-        int4 t2 = readTexel(2);
-        int4 t3 = readTexel(3);
         bounds = float4(t0) * INV_UNITS_PER_EM;
         curveCount = uint(max(t1.x, 0));
-        fillSign = t1.z < 0 ? -1.0 : 1.0;
-        curveBase = uint(max(t1.w, 0));
-        bandMin = t2.x;
-        bandCount = uint(max(t2.y, 0));
-        bandHeight = max(float(t2.z) * INV_UNITS_PER_EM, INV_UNITS_PER_EM);
-        bandBase = uint(max(t2.w, 0));
-        idBase = uint(max(t3.x, 0));
-        idCount = uint(max(t3.y, 0));
+        fillSign = t1.y < 0 ? -1.0 : 1.0;
+        curveBase = HEADER_LEN;
+        bandMin = t1.z;
+        bandCount = uint(max(t1.w, 0));
+        bandHeight = HBAND_HEIGHT;
+        bandBase = curveBase + curveCount * CURVE_TEXEL_LEN;
+        idBase = bandBase + bandCount;
     }
 
     void readCurve(uint curveBase, uint curveIndex, out float2 p0, out float2 p1,

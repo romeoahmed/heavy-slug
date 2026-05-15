@@ -11,16 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Breaking refactor in progress:** core public types, unit conversions, backend contracts, font/cache/render internals, and demo layout moved under the new `src/core/`, `src/gpu/`, `src/backends/`, and `src/demo/{common,vulkan,metal}/` structure described in `docs/architecture-refactor-spec.md`.
 - **Backend renderer API now exposes `Frame` and `Target` types** so demos submit text through an explicit begin/draw/submit frame boundary.
+- **Backend frame submission now returns `FrameToken`** and glyph/resource retirement is deferred until the backend reports completed tokens.
 - **Text submission now uses `TextRun`** on backend frames, and font loading uses `FontSource` plus `FontOptions`.
+- **Renderer cleanup removed transitional `TextRenderer` and renderer-level `begin/drawText/flush` APIs**; backend modules now expose only `Renderer.beginFrame()`, `Frame.drawText()`, and `Frame.submit()`.
+- **Top-level core exports narrowed** to stable public types; font internals and PGA math stay behind `heavy_slug.core.*` or private modules.
 - **Slang sources are split into `shaders/core/` and `shaders/entries/`** so shared modules and entry points have distinct ownership.
 - **Build logic split into `build/` modules** for dependency resolution, C libraries, shader compilation, backend modules, and demos.
 - **Root compatibility aliases removed** for old font/cache/pool/render paths; consumers should use top-level public types or explicit `heavy_slug.core.*` modules.
+- **Traceability audit added** in `docs/refactor-traceability.md` to map every spec phase to implementation files and verification gates.
+- **Shader resource bindings split by backend** under `shaders/backend_vulkan/` and `shaders/backend_metal/`.
+- **`GlyphStore` extracted** so cache metadata, byte-pool allocations, and deferred retirements have a single private owner.
+- **Vulkan command storage is now frame-ring buffered** and protected by completed `FrameToken` tracking before slot reuse.
 - **Breaking:** `FontContext.init` now takes an explicit allocator for the Zig-native outline encoder.
 - **Glyph encoding now owns its blob format** by using HarfBuzz draw callbacks directly instead of `hb_gpu_draw_encode`, then raising all outline primitives into cubic spans.
 - **Cubic rendering regularized** by splitting cubic outlines at axis extrema and inflection points, preserving monotone control polygons after quantization, and using safeguarded Newton iteration with strict crossing tests in the fragment shader.
 - **Glyph cache keys are variation-aware** with a reserved variation hash field for future variable-font instances.
-- **Coverage V3 blobs gained an h-band candidate index** that accelerates common fragments while preserving the full-scan path as the correctness fallback.
-- **Coverage blob versioning normalized** so encoder, decoder, and shader modules all refer to Coverage V3.
+- **CoverageBlob blobs gained an h-band candidate index** that accelerates common fragments while preserving the full-scan path as the correctness fallback.
+- **CoverageBlob header simplified** by removing the unused blob version field and related decoder checks.
 - **Zig 0.16 API usage tightened** by replacing deprecated `std.ArrayListUnmanaged` aliases and old `std.mem.indexOf` calls.
 - **CI expanded** to run tests and ReleaseFast builds on both `ubuntu-latest` and `macos-26`, including `-Dvulkan=true` on Ubuntu and `-Dmetal=true` on macOS ARM64.
 - **Tool setup scripts hardened** to infer runner platforms, resolve Zig packages from the official download index, and match Slang release tarballs exactly.
@@ -34,9 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Metal 4 backend** (`src/metal/`): macOS renderer using Slang-generated Metal MSL, mesh shaders, an ObjC++ Metal bridge, external host objects, and triple-buffered submission.
-- **Backend-neutral core renderer** (`src/render.zig`): shared text shaping, glyph encoding, cache/pool coordination, empty-glyph handling, and command generation used by Vulkan and Metal.
-- **Demo-only Metal host** (`src/demo/metal_host.mm`): GLFW Cocoa window to Metal device, command queue, and `CAMetalLayer` setup without coupling the library backend to GLFW.
+- **Metal 4 backend** (`src/backends/metal/`): macOS renderer using Slang-generated Metal MSL, mesh shaders, an ObjC++ Metal bridge, external host objects, and triple-buffered submission.
+- **Backend-neutral core renderer** (`src/core/render/`): shared text shaping, glyph encoding, cache/pool coordination, empty-glyph handling, and command generation used by Vulkan and Metal.
+- **Demo-only Metal host** (`src/demo/metal/`): GLFW Cocoa window to Metal device, command queue, and `CAMetalLayer` setup without coupling the library backend to GLFW.
 - **Zig 0.16 C translation modules** (`src/c/`): FreeType/HarfBuzz and GLFW declarations are translated from `build.zig` with `addTranslateC()`.
 - **Configurable ThinLTO** (`-Dthinlto=auto|on|off`): release builds enable ThinLTO where Zig 0.16 can link it and expose an explicit hard-fail mode.
 
@@ -45,7 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking:** Public API split into a lightweight `heavy_slug` core module plus opt-in `heavy_slug_vulkan` and `heavy_slug_metal` backend modules.
 - **Breaking:** GPU contexts are externally supplied; core code no longer owns windowing or graphics-device creation.
 - **Breaking:** Demo build selection is platform/backend explicit: `-Ddemo-backend=vulkan_spirv16` for Windows/Linux and `-Ddemo-backend=metal4` for macOS.
-- **Vulkan renderer simplified** to use shared `TextCore`, reducing duplicated shaping, caching, and command encoding logic.
+- **Vulkan renderer simplified** to use shared renderer core logic, reducing duplicated shaping, caching, and command encoding logic.
 - **Glyph cache eviction made current-frame safe** so pool storage referenced by the frame being assembled is not reused prematurely.
 - **Build graph cleaned up** so `vulkan`, `vulkan_headers`, and `glfw_src` remain lazy, and FreeType/HarfBuzz dependencies are resolved once.
 - **CI rewritten** with repository scripts for configurable Zig and Slang versions plus layered caching for tools, global Zig packages, and local build artifacts.

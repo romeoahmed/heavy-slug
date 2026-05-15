@@ -1,6 +1,6 @@
 # heavy-slug
 
-`heavy-slug` is a Zig 0.16 GPU text rendering library built around the [Slug algorithm](https://jcgt.org/published/0006/02/02/). It shapes Unicode text with HarfBuzz, encodes glyph outlines into cubic-native Coverage V3 blobs, and renders analytic coverage through opt-in mesh-shader backends.
+`heavy-slug` is a Zig 0.16 GPU text rendering library built around the [Slug algorithm](https://jcgt.org/published/0006/02/02/). It shapes Unicode text with HarfBuzz, encodes glyph outlines into cubic-native CoverageBlob payloads, and renders analytic coverage through opt-in mesh-shader backends.
 
 The core library is intentionally small: it owns fonts, shaping, glyph encoding, cache/pool management, and backend-neutral command generation. Applications provide GPU contexts. GLFW is used only by demos.
 
@@ -8,7 +8,7 @@ The core library is intentionally small: it owns fonts, shaping, glyph encoding,
 
 - Resolution-independent text rendering without CPU rasterization or texture atlases.
 - FreeType 2.14.3 and HarfBuzz 14.2.0 built from pinned source packages.
-- Native outline capture through HarfBuzz draw callbacks, regularized into quantized monotone cubic spans for shader coverage.
+- Native outline capture through HarfBuzz draw callbacks, regularized into quantized monotone cubic spans for CoverageBlob shader coverage.
 - Vulkan SPIR-V 1.6 backend for Windows/Linux with `VK_EXT_mesh_shader`.
 - macOS Metal 4 backend using Slang-generated MSL and external Metal host objects.
 - Shared shader ABI generated from Slang reflection by `tools/layout_gen.zig`.
@@ -65,18 +65,21 @@ defer renderer.deinit();
 
 const font = try renderer.loadFont(.{ .path = "assets/Inter-Regular.otf" }, .{ .size_px = 24 });
 
-var frame = renderer.beginFrame();
+var frame = try renderer.beginFrame();
 try frame.drawText(.{
     .font = font,
     .text = "Hello, world!",
     .transform = heavy_slug.Transform.translation(100, 200),
     .color = .white,
 });
-try frame.submit(.{
+const submitted_token = try frame.submit(.{
     .command_buffer = cmd_buf,
     .projection = projection,
     .viewport = .{ viewport_w, viewport_h },
 });
+
+// Later, after the host fence for that submission is known complete:
+renderer.markFrameComplete(submitted_token);
 ```
 
 Metal uses the same renderer shape, but the app provides host-owned Metal objects:
@@ -111,10 +114,12 @@ src/
   c/                    headers translated by build-system addTranslateC()
 build/                  build graph modules for deps, C libs, shaders, backends, and demos
 shaders/core/           shared Slang ABI, PGA, and coverage modules
+shaders/backend_vulkan/ Vulkan resource binding shim
+shaders/backend_metal/  Metal resource binding shim
 shaders/entries/        Slang task/object, mesh, and fragment entry points
 tools/layout_gen.zig    Slang reflection to Zig extern structs
 assets/                 test/demo assets
-docs/                   architecture spec and phase plans
+docs/                   architecture spec, phase plans, and traceability audit
 ```
 
 ## Build Options

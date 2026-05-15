@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress. This document is the implementation spec for the current breaking refactor of `heavy-slug`.
+Implemented. See `docs/refactor-traceability.md` for the phase-by-phase implementation audit.
 
 ## Date
 
@@ -29,7 +29,7 @@ The important existing decisions should remain: the core does not own a GPU cont
 
 The project works, but repeated iteration has left several contracts implicit:
 
-- `TextCore` owns too many responsibilities: shaping, glyph encoding, cache lookup, pool allocation, backend upload, and command generation.
+- The legacy renderer core owned too many responsibilities: shaping, glyph encoding, cache lookup, pool allocation, backend upload, and command generation.
 - The backend contract is encoded by `anytype` methods rather than a named interface.
 - Vulkan and Metal use different glyph reference meanings: Vulkan stores descriptor slots, while Metal stores byte offsets.
 - GPU in-flight lifetime is not represented as a first-class type. Metal waits conservatively; Vulkan relies on less explicit reuse behavior.
@@ -105,6 +105,7 @@ src/
       retirement.zig
     render/
       renderer_core.zig
+      glyph_store.zig
       text_batch.zig
       backend_contract.zig
   gpu/
@@ -233,18 +234,19 @@ pub fn BackendContract(comptime B: type) void {
 - `Units`: explicit conversions among pixel space, HarfBuzz 26.6 positions, font units, quantized blob units, and screen pixel-local coordinates.
 - `OutlineStream`: move, line, quadratic, cubic, close. This is the raw font outline contract.
 - `RegularizedCubicSpan`: monotone, quantizable cubic segment plus bounds.
-- `CoverageBlob`: owned byte payload with versioned header and decode helpers.
+- `CoverageBlob`: owned byte payload with a fixed header and decode helpers.
 - `GlyphKey`: font id, glyph id, face index, size, variation key, fill mode.
 - `FrameToken`: backend-provided monotonic frame identity for deferred frees.
 - `TextBatch`: append-only command writer for one frame.
 
 ## Coverage Blob Format
 
-The next format should become `CoverageBlobV4`.
+The format is `CoverageBlob`.
 
 Required properties:
 
-- Versioned header with fixed little-endian integer fields.
+- Fixed header with little-endian integer fields.
+- Section bases are derived from counts and fixed section order instead of stored as header fields.
 - Separate sections: header, curve spans, h-band table, candidate ids.
 - CPU decoder used by tests and debugging tools.
 - Shader decoder generated or manually mirrored only from `format.zig` constants.
@@ -401,13 +403,13 @@ Demo tests:
 
 **Dependencies:** Phase 1.
 
-### Phase 3: CoverageBlobV4 and CPU Reference Path
+### Phase 3: CoverageBlob and CPU Reference Path
 
 **Description:** Move blob format ownership into `src/core/blob/` and make CPU decode/reference coverage authoritative for tests.
 
 **Acceptance criteria:**
 
-- `CoverageBlobV4` has explicit header and section definitions.
+- `CoverageBlob` has explicit header and section definitions.
 - Encoder and decoder share constants from one Zig module.
 - H-band candidate lookup is tested against full-scan reference behavior.
 - Existing shader blob constants are treated as generated or mirrored from the Zig format.
@@ -427,7 +429,7 @@ Demo tests:
 
 ### Phase 4: Renderer Core and Backend Contract
 
-**Description:** Replace `TextCore` plus implicit `anytype` calls with an explicit renderer core and backend contract.
+**Description:** Replace the legacy renderer core plus implicit `anytype` calls with an explicit renderer core and backend contract.
 
 **Acceptance criteria:**
 
@@ -631,5 +633,5 @@ Demo tests:
 ## Open Questions
 
 - Whether `Transform` should expose only rigid transforms or also affine transforms. Current PGA path is rigid; broader affine support would change shader math.
-- Whether `CoverageBlobV4` should keep 16-bit quantized texels or move to mixed 16/32-bit sections. Keep 16-bit unless CPU reference tests prove it causes unavoidable artifacts.
+- Whether `CoverageBlob` should keep 16-bit quantized texels or move to mixed 16/32-bit sections. Keep 16-bit unless CPU reference tests prove it causes unavoidable artifacts.
 - Whether h-band dedupe should be implemented in the first rewrite or left as a post-correctness optimization. Default answer: leave it post-correctness.

@@ -1,18 +1,11 @@
-// shaders/slug_task.slang
+// shaders/entries/slug_task.slang
 // Task (amplification) shader: frustum cull glyphs and dispatch mesh workgroups.
 // Uses wave ballot for parallel compaction (no atomics).
 // Workgroup size: 32 threads, each handles one glyph.
 
 import pga;
 import abi;
-
-// --- Resource bindings ---
-
-[[vk::binding(1, 0)]]
-StructuredBuffer<GlyphCommand> commands;
-
-[[vk::push_constant]]
-PushConstants pc;
+import resources;
 
 // --- Payload to mesh shader ---
 

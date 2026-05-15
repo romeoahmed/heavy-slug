@@ -18,15 +18,15 @@ struct hs_metal_frame_slot {
 };
 
 struct hs_metal_context {
-    id<MTLDevice> device;
-    id<MTLCommandQueue> command_queue;
-    id<MTLRenderPipelineState> pipeline_state;
-    CAMetalLayer *layer;
+    __unsafe_unretained id<MTLDevice> device;
+    __unsafe_unretained id<MTLCommandQueue> command_queue;
+    __strong id<MTLRenderPipelineState> pipeline_state;
+    __unsafe_unretained CAMetalLayer *layer;
     hs_metal_frame_slot frame_slots[kFrameSlotCount];
 };
 
 struct hs_metal_buffer {
-    id<MTLBuffer> buffer;
+    __strong id<MTLBuffer> buffer;
 };
 
 static void write_error(char *buffer, size_t len, NSString *message) {
