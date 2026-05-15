@@ -212,6 +212,11 @@ pub const Blob = struct {
 pub const GpuDraw = struct {
     handle: *c.hb_gpu_draw_t,
 
+    pub const Encoded = struct {
+        blob: Blob,
+        extents: GlyphExtents,
+    };
+
     pub fn create() !GpuDraw {
         const draw = c.hb_gpu_draw_create_or_fail() orelse return error.HarfBuzzAllocationFailed;
         return .{ .handle = draw };
@@ -227,16 +232,13 @@ pub const GpuDraw = struct {
     }
 
     /// Encode the accumulated drawing into a Slug-format blob.
-    pub fn encode(self: GpuDraw) !Blob {
-        const blob = c.hb_gpu_draw_encode(self.handle) orelse return error.HarfBuzzAllocationFailed;
-        return .{ .handle = blob };
-    }
-
-    /// Get the bounding box extents of the drawn glyph.
-    pub fn getExtents(self: GpuDraw) GlyphExtents {
+    pub fn encode(self: GpuDraw) !Encoded {
         var extents: GlyphExtents = undefined;
-        c.hb_gpu_draw_get_extents(self.handle, &extents);
-        return extents;
+        const blob = c.hb_gpu_draw_encode(self.handle, &extents) orelse return error.HarfBuzzAllocationFailed;
+        return .{
+            .blob = .{ .handle = blob },
+            .extents = extents,
+        };
     }
 
     /// Reset for encoding the next glyph. Reuse the same GpuDraw object.
@@ -279,15 +281,14 @@ test "GpuDraw: encode glyph produces non-empty blob" {
     defer draw.destroy();
     draw.drawGlyph(font, glyph_id);
 
-    const blob = try draw.encode();
-    defer blob.destroy();
+    const encoded = try draw.encode();
+    defer encoded.blob.destroy();
 
     // Blob should have data (the Slug-encoded glyph)
-    try std.testing.expect(blob.getLength() > 0);
-    try std.testing.expect(blob.getData().len > 0);
+    try std.testing.expect(encoded.blob.getLength() > 0);
+    try std.testing.expect(encoded.blob.getData().len > 0);
 
     // Extents should have non-zero dimensions for 'A'
-    const extents = draw.getExtents();
-    try std.testing.expect(extents.width != 0);
-    try std.testing.expect(extents.height != 0);
+    try std.testing.expect(encoded.extents.width != 0);
+    try std.testing.expect(encoded.extents.height != 0);
 }

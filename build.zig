@@ -372,7 +372,7 @@ fn buildHarfbuzz(
 
     lib.root_module.addCSourceFiles(.{
         .root = hb_dep.path("src"),
-        .files = &.{ "hb-gpu-draw.cc", "hb-gpu-shaders.cc" },
+        .files = &.{ "hb-gpu.cc", "hb-gpu-draw.cc", "hb-gpu-paint.cc" },
         .flags = &.{ "-DHAVE_FREETYPE=1", "-DHAVE_HB_GPU=1", "-fno-exceptions", "-fno-rtti" },
     });
 

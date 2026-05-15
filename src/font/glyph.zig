@@ -55,13 +55,11 @@ pub const FontContext = struct {
     pub fn encodeGlyph(self: *FontContext, glyph_id: u32) !EncodedGlyph {
         self.gpu_draw.drawGlyph(self.hb_font, glyph_id);
         errdefer self.gpu_draw.reset();
-        const blob = try self.gpu_draw.encode();
-        const extents = self.gpu_draw.getExtents();
-        self.gpu_draw.reset();
+        const encoded = try self.gpu_draw.encode();
         return .{
-            .data = blob.getData(),
-            .extents = extents,
-            .blob = blob,
+            .data = encoded.blob.getData(),
+            .extents = encoded.extents,
+            .blob = encoded.blob,
         };
     }
 

@@ -2,23 +2,23 @@
     .name = .heavy_slug,
     .version = "1.2.0",
     .fingerprint = 0x8b00ed40afcead90,
-    .minimum_zig_version = "0.16.0-dev.3144+ac6fb0b59",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .freetype_src = .{
             .url = "https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.gz",
             .hash = "N-V-__8AAJo-LAHFNfa0p0oMQqmwlBEAZMOeo03azXgrKLTT",
         },
         .harfbuzz_src = .{
-            .url = "https://github.com/harfbuzz/harfbuzz/releases/download/14.1.0/harfbuzz-14.1.0.tar.xz",
-            .hash = "N-V-__8AAJ5J4QV1Qw46kP_V9eNRdRVk9Cp65YNLuECHurpK",
+            .url = "https://github.com/harfbuzz/harfbuzz/releases/download/14.2.0/harfbuzz-14.2.0.tar.xz",
+            .hash = "N-V-__8AANNd5gWPznhuFRVWGtfvc83FAFweN1R__C1J_BaG",
         },
         .vulkan = .{
-            .url = "git+https://github.com/Snektron/vulkan-zig#b3086a867a47bb10e66a987a38115a43056b60f7",
-            .hash = "vulkan-0.0.0-r7Ytx99oAwDmJu0XtvukW_bSYnAv1PpbPO9ZFwsjcPPO",
+            .url = "git+https://github.com/Snektron/vulkan-zig.git#b496a6a561ffbbeb530b0f9ed4e059f88c0723a5",
+            .hash = "vulkan-0.0.0-r7Ytx7N9AwD7IZt5_XNHtkJ4G9qY0pCH-cpcOsbL8wzD",
         },
         .vulkan_headers = .{
-            .url = "git+https://github.com/KhronosGroup/Vulkan-Headers#f6a6f7ab165cedbfa2a7d0c93fe27a2d01ce09c8",
-            .hash = "N-V-__8AAC1ZbAIG2kVq3iPpAWaOlDTQ3MOyOyQQR0o_-9ez",
+            .url = "git+https://github.com/KhronosGroup/Vulkan-Headers.git#8cfaaa1d4deedc865e52a42e654c5ec0d7d75eb0",
+            .hash = "N-V-__8AAGfhdwLcch-RCImEQbiTe8n0-ZfevT6sXEEfSuKT",
         },
         .glfw_src = .{
             .url = "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip",
