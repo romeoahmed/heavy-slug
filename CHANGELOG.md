@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **CI rewritten** (`.github/workflows/test.yaml`): replaced `mlugg/setup-zig` and `humbletim/install-vulkan-sdk` (outdated Node.js) with bash scripts (`.github/scripts/setup-zig.sh`, `setup-slang.sh`) that download Zig master via `jq` from `ziglang.org/download/index.json` and latest Slang from GitHub releases; full Vulkan SDK no longer needed -- headers come through zig build dependencies
+- **CI rewritten** (`.github/workflows/test.yaml`): replaced third-party setup actions with bash scripts (`.github/scripts/setup-zig.sh`, `setup-slang.sh`) that resolve Zig from `build.zig.zon`, stable/latest/master, or an explicit version and resolve Slang from latest or an explicit release; `workflow_dispatch` inputs can override Zig and Slang versions manually
 - **Layered CI caching**: `actions/cache@v5` with four layers -- Zig/Slang binaries (explicit restore/save, survives build failures), Zig global packages (keyed on `build.zig.zon`), Zig local build artifacts (keyed on source hash, separate keys for test vs release)
 - **GLFW marked lazy** (`build.zig.zon`): `.lazy = true` prevents Zig from eagerly fetching GLFW when building without `-Ddemo=true`
 
