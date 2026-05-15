@@ -113,6 +113,13 @@ hs_metal_context *hs_metal_context_create(
         pipeline_desc.meshFunction = mesh_function;
         pipeline_desc.fragmentFunction = fragment_function;
         pipeline_desc.colorAttachments[0].pixelFormat = layer.pixelFormat;
+        pipeline_desc.colorAttachments[0].blendingEnabled = YES;
+        pipeline_desc.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
+        pipeline_desc.colorAttachments[0].alphaBlendOperation = MTLBlendOperationAdd;
+        pipeline_desc.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
+        pipeline_desc.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+        pipeline_desc.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+        pipeline_desc.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
 
         NSError *pipeline_error = nil;
         id<MTLRenderPipelineState> pipeline_state =
