@@ -1,6 +1,7 @@
 const std = @import("std");
 const ft = @import("ft.zig");
 const hb = @import("hb.zig");
+const outline = @import("outline.zig");
 
 /// Result of encoding a single glyph for GPU upload.
 pub const EncodedGlyph = struct {
@@ -17,14 +18,19 @@ pub const EncodedGlyph = struct {
 };
 
 /// Font context for text shaping and glyph encoding.
-/// Holds an FT_Face + hb_font_t + reusable hb_gpu_draw_t.
+/// Holds an FT_Face + hb_font_t + reusable outline encoder.
 pub const FontContext = struct {
     ft_face: ft.Face,
     hb_font: hb.Font,
-    gpu_draw: hb.GpuDraw,
+    outline_encoder: outline.Encoder,
 
     /// Load a font from a file path at the given pixel size.
-    pub fn init(ft_lib: ft.Library, path: [*:0]const u8, size_px: u32) !FontContext {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        ft_lib: ft.Library,
+        path: [*:0]const u8,
+        size_px: u32,
+    ) !FontContext {
         const face = try ft.Face.init(ft_lib, path);
         errdefer face.deinit();
 
@@ -33,18 +39,18 @@ pub const FontContext = struct {
         const font = try hb.Font.createFromFtFace(face.rawHandle());
         errdefer font.destroy();
 
-        const gpu_draw = try hb.GpuDraw.create();
-        errdefer gpu_draw.destroy();
+        const outline_encoder = try outline.Encoder.init(allocator);
+        errdefer outline_encoder.deinit();
 
         return .{
             .ft_face = face,
             .hb_font = font,
-            .gpu_draw = gpu_draw,
+            .outline_encoder = outline_encoder,
         };
     }
 
     pub fn deinit(self: *FontContext) void {
-        self.gpu_draw.destroy();
+        self.outline_encoder.deinit();
         self.hb_font.destroy();
         self.ft_face.deinit();
         self.* = undefined;
@@ -53,9 +59,7 @@ pub const FontContext = struct {
     /// Encode a single glyph into a Slug-format blob for GPU upload.
     /// The returned EncodedGlyph owns the blob — caller must call .destroy().
     pub fn encodeGlyph(self: *FontContext, glyph_id: u32) !EncodedGlyph {
-        self.gpu_draw.drawGlyph(self.hb_font, glyph_id);
-        errdefer self.gpu_draw.reset();
-        const encoded = try self.gpu_draw.encode();
+        const encoded = try self.outline_encoder.encodeGlyph(self.hb_font, glyph_id);
         return .{
             .data = encoded.blob.getData(),
             .extents = encoded.extents,
@@ -88,7 +92,7 @@ test "FontContext: load font and encode glyph" {
     const ft_lib = try ft.Library.init();
     defer ft_lib.deinit();
 
-    var ctx = FontContext.init(ft_lib, test_font_path, 32) catch return;
+    var ctx = FontContext.init(std.testing.allocator, ft_lib, test_font_path, 32) catch return;
     defer ctx.deinit();
 
     // Shape to get a valid glyph ID for 'A' (auto-detect direction/script)
@@ -104,11 +108,31 @@ test "FontContext: load font and encode glyph" {
     try std.testing.expect(encoded.extents.width != 0);
 }
 
+test "FontContext: preserves native CFF cubic segments" {
+    const ft_lib = try ft.Library.init();
+    defer ft_lib.deinit();
+
+    var ctx = FontContext.init(std.testing.allocator, ft_lib, test_font_path, 32) catch return;
+    defer ctx.deinit();
+
+    const buf = try ctx.shapeText("S", null, null);
+    defer buf.destroy();
+    const glyph_id = buf.getGlyphInfos()[0].codepoint;
+
+    const encoded = try ctx.encodeGlyph(glyph_id);
+    defer encoded.destroy();
+
+    const has_cubic = for (ctx.outline_encoder.builder.segments.items) |segment| {
+        if (segment.kind == .cubic) break true;
+    } else false;
+    try std.testing.expect(has_cubic);
+}
+
 test "FontContext: shape multi-glyph string" {
     const ft_lib = try ft.Library.init();
     defer ft_lib.deinit();
 
-    var ctx = FontContext.init(ft_lib, test_font_path, 32) catch return;
+    var ctx = FontContext.init(std.testing.allocator, ft_lib, test_font_path, 32) catch return;
     defer ctx.deinit();
 
     const buf = try ctx.shapeText("Hello", null, null);

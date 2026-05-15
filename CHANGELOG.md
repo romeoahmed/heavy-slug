@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** `FontContext.init` now takes an explicit allocator for the Zig-native outline encoder.
+- **Glyph encoding now owns its blob format** by using HarfBuzz draw callbacks directly instead of `hb_gpu_draw_encode`, preserving native quadratic and CFF cubic segments.
+- **Cubic rendering regularized** by splitting cubic outlines at axis extrema and inflection points, preserving monotone control polygons after quantization, and using safeguarded Newton iteration with strict crossing tests in the fragment shader.
+- **Glyph cache keys are variation-aware** with a reserved variation hash field for future variable-font instances.
+- **Shaders understand segment tags** so glyph blobs can route quadratic and cubic segments independently.
 - **CI expanded** to run tests and ReleaseFast builds on both `ubuntu-latest` and `macos-26`, including `-Dvulkan=true` on Ubuntu and `-Dmetal=true` on macOS ARM64.
 - **Tool setup scripts hardened** to infer runner platforms, resolve Zig packages from the official download index, and match Slang release tarballs exactly.
 

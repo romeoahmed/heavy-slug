@@ -89,8 +89,9 @@ void meshMain(
     float2 worldPos = motor.apply(emPos);
     float4 clipPos = mul(pc.proj, float4(worldPos, 0.0, 1.0));
 
-    // Em-space texture coordinate (undilated range for accurate sampling).
-    float2 texcoord = emMin + corner * emSize;
+    // Em-space sample coordinate. This must match the dilated screen-space
+    // quad, otherwise edge fragments evaluate coverage at the wrong location.
+    float2 texcoord = emPos;
 
     VertexOutput v;
     v.position = clipPos;

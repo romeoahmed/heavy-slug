@@ -4,6 +4,8 @@ const pool_mod = @import("pool.zig");
 pub const CacheKey = struct {
     font_id: u32,
     glyph_id: u32,
+    /// Hash of variation-axis coordinates. Zero means the font's default instance.
+    variation_key: u64 = 0,
 };
 
 const Tier = enum { hot, cold };

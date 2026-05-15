@@ -1,6 +1,6 @@
 # heavy-slug
 
-`heavy-slug` is a Zig 0.16 GPU text rendering library built around the [Slug algorithm](https://jcgt.org/published/0006/02/02/). It shapes Unicode text with HarfBuzz, encodes glyph outlines into GPU-friendly Slug blobs, and renders exact quadratic Bezier coverage through opt-in mesh-shader backends.
+`heavy-slug` is a Zig 0.16 GPU text rendering library built around the [Slug algorithm](https://jcgt.org/published/0006/02/02/). It shapes Unicode text with HarfBuzz, encodes native quadratic and cubic glyph outlines into GPU-friendly Slug blobs, and renders coverage through opt-in mesh-shader backends.
 
 The core library is intentionally small: it owns fonts, shaping, glyph encoding, cache/pool management, and backend-neutral command generation. Applications provide GPU contexts. GLFW is used only by demos.
 
@@ -8,6 +8,7 @@ The core library is intentionally small: it owns fonts, shaping, glyph encoding,
 
 - Resolution-independent text rendering without CPU rasterization or texture atlases.
 - FreeType 2.14.3 and HarfBuzz 14.2.0 built from pinned source packages.
+- Native CFF cubic outline capture through HarfBuzz draw callbacks, regularized into monotone cubic spans for shader coverage.
 - Vulkan SPIR-V 1.6 backend for Windows/Linux with `VK_EXT_mesh_shader`.
 - macOS Metal 4 backend using Slang-generated MSL and external Metal host objects.
 - Shared shader ABI generated from Slang reflection by `tools/layout_gen.zig`.
@@ -126,7 +127,7 @@ All third-party source dependencies are pinned in `build.zig.zon`.
 | Dependency | Purpose |
 | --- | --- |
 | FreeType | Font loading |
-| HarfBuzz | Unicode shaping and hb-gpu glyph encoding |
+| HarfBuzz | Unicode shaping and native glyph outline callbacks |
 | vulkan-zig | Vulkan binding generation |
 | Vulkan-Headers | `vk.xml` registry for generated bindings |
 | GLFW | Demo-only window and input |

@@ -32,6 +32,8 @@ struct PushConstants  // 80 bytes — matches descriptors.zig
 static const float UNITS_PER_EM = 4.0;  // HB_GPU_UNITS_PER_EM
 static const float INV_UNITS_PER_EM = 1.0 / UNITS_PER_EM;  // 0.25 (reciprocal for fast multiply)
 static const uint  HEADER_LEN = 2;       // texels 0-1 are header
+static const uint  BLOB_VERSION = 2;
+static const uint  CURVE_TEXEL_LEN = 3;
 
 // --- Task/mesh workgroup size ---
 // Both slug_task.slang and slug_mesh.slang import this constant to keep
@@ -66,44 +68,28 @@ struct BlobReader
         return float4(readTexel(index)) * INV_UNITS_PER_EM;
     }
 
-    // Decode a biased offset from int16: stored as (offset - 32768).
-    uint decodeOffset(int encoded)
-    {
-        return uint(encoded) + 32768u;
-    }
-
-    // Read blob header: glyph bounds + band counts.
-    void readHeader(out float4 bounds, out int2 bandCounts)
+    // Read Coverage V2 blob header: glyph bounds, curve count, and contour direction.
+    void readHeader(out float4 bounds, out uint curveCount, out float fillSign, out uint curveBase)
     {
         int4 t0 = readTexel(0);  // (min_x, min_y, max_x, max_y)
-        int4 t1 = readTexel(1);  // (num_hbands, num_vbands, x_scale, y_scale)
+        int4 t1 = readTexel(1);  // (curve_count, version, fill_sign, curve_base)
         bounds = float4(t0) * INV_UNITS_PER_EM;
-        bandCounts = int2(t1.x, t1.y);
-        // t1.b (x_scale) and t1.a (y_scale) are font design units; not needed by band lookup.
+        curveCount = uint(max(t1.x, 0));
+        fillSign = t1.z < 0 ? -1.0 : 1.0;
+        curveBase = uint(max(t1.w, 0));
     }
 
-    // Read a band header at the given texel index.
-    // descOffset: start of curve index list sorted by max coordinate descending
-    //             (use for forward iteration with early-exit when max < sample - 0.5px).
-    // ascOffset:  start of curve index list sorted by min coordinate ascending
-    //             (use for reverse iteration with early-exit when min > sample + 0.5px).
-    // split:      coordinate separating which list has fewer curves for this sample.
-    void readBandHeader(uint texelIndex, out uint curveCount, out uint descOffset,
-                        out uint ascOffset, out float split)
+    void readCurve(uint curveBase, uint curveIndex, out float2 p0, out float2 p1,
+                   out float2 p2, out float2 p3, out float4 bbox)
     {
-        int4 t = readTexel(texelIndex);
-        curveCount = uint(t.x);
-        descOffset = decodeOffset(t.y);
-        ascOffset  = decodeOffset(t.z);
-        split      = float(t.w) * INV_UNITS_PER_EM;
-    }
-
-    // Read a curve index entry: returns decoded offset to curve data.
-    uint readCurveIndex(uint texelIndex)
-    {
-        int4 t = readTexel(texelIndex);
-        // t.gba are always zero per encoder spec; only .r contains the offset.
-        return decodeOffset(t.x);
+        uint off = curveBase + curveIndex * CURVE_TEXEL_LEN;
+        float4 a = readTexelF(off);
+        float4 b = readTexelF(off + 1);
+        bbox = readTexelF(off + 2); // min_x, max_x, min_y, max_y
+        p0 = a.xy;
+        p1 = a.zw;
+        p2 = b.xy;
+        p3 = b.zw;
     }
 };
 

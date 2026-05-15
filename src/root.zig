@@ -25,7 +25,7 @@ test "integration: shape text and encode all unique glyphs" {
     const ft_lib = try font.ft.Library.init();
     defer ft_lib.deinit();
 
-    var ctx = try font.FontContext.init(ft_lib, test_font_path, 32);
+    var ctx = try font.FontContext.init(std.testing.allocator, ft_lib, test_font_path, 32);
     defer ctx.deinit();
 
     const buf = try ctx.shapeText("Heavy Slug", null, null);
@@ -63,7 +63,7 @@ test "integration: multiple texts through same FontContext" {
     const ft_lib = try font.ft.Library.init();
     defer ft_lib.deinit();
 
-    var ctx = try font.FontContext.init(ft_lib, test_font_path, 24);
+    var ctx = try font.FontContext.init(std.testing.allocator, ft_lib, test_font_path, 24);
     defer ctx.deinit();
 
     const texts = [_][]const u8{ "Hello", "World", "Zig" };
@@ -185,7 +185,7 @@ test "integration: motor positions shaped glyphs monotonically" {
     const ft_lib = try font.ft.Library.init();
     defer ft_lib.deinit();
 
-    var ctx = try font.FontContext.init(ft_lib, test_font_path, 24);
+    var ctx = try font.FontContext.init(std.testing.allocator, ft_lib, test_font_path, 24);
     defer ctx.deinit();
 
     const buf = try ctx.shapeText("Hello World", null, null);

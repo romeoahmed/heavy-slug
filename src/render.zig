@@ -162,7 +162,7 @@ pub const TextCore = struct {
         const entry = try self.allocator.create(FontEntry);
         errdefer self.allocator.destroy(entry);
 
-        entry.* = .{ .ctx = try glyph_mod.FontContext.init(self.ft_library, path, size_px) };
+        entry.* = .{ .ctx = try glyph_mod.FontContext.init(self.allocator, self.ft_library, path, size_px) };
         errdefer entry.ctx.deinit();
 
         const id = self.next_font_id;

@@ -3,6 +3,7 @@
 pub const ft = @import("ft.zig");
 pub const hb = @import("hb.zig");
 pub const glyph = @import("glyph.zig");
+pub const outline = @import("outline.zig");
 
 pub const Library = ft.Library;
 pub const Face = ft.Face;
@@ -14,4 +15,5 @@ test {
     _ = ft;
     _ = hb;
     _ = glyph;
+    _ = outline;
 }

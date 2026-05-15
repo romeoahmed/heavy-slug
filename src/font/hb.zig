@@ -1,6 +1,6 @@
 const std = @import("std");
 const ft = @import("ft.zig");
-const c = ft.c;
+pub const c = ft.c;
 
 pub const Error = error{
     HarfBuzzBufferCreateFailed,

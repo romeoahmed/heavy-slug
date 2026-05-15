@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-`heavy-slug` is a Zig 0.16 GPU text rendering library. The core module is `src/root.zig`; it exports font shaping, HarfBuzz GPU glyph encoding, PGA math, cache/pool utilities, and backend-neutral render orchestration from `src/render.zig`. The core does not own a GPU context or depend on GLFW.
+`heavy-slug` is a Zig 0.16 GPU text rendering library. The core module is `src/root.zig`; it exports font shaping, HarfBuzz-backed native outline encoding, PGA math, cache/pool utilities, and backend-neutral render orchestration from `src/render.zig`. The core does not own a GPU context or depend on GLFW.
 
 Backend modules are opt-in. `src/vulkan/` provides `heavy_slug_vulkan` for Vulkan SPIR-V 1.6 mesh shaders. `src/metal/` provides `heavy_slug_metal` for macOS Metal 4 and accepts externally provided Metal device, command queue, and layer objects. Demo-only code lives in `src/demo/`; GLFW and Cocoa window setup must stay there. Shaders are in `shaders/`, and `tools/layout_gen.zig` generates GPU ABI structs from Slang reflection. Test assets live in `assets/`.
 
