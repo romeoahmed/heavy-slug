@@ -350,7 +350,7 @@ test "render: TextCore appends shaped glyph commands and caches blobs" {
     var core = try TextCore.init(std.testing.allocator, .{ .max_glyphs_per_frame = 16 });
     defer core.deinit();
 
-    var pool: [4096]u8 = undefined;
+    var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
     var commands: [16]TestCommand = undefined;
 
@@ -372,7 +372,7 @@ test "render: TextCore skips empty glyph commands while preserving cache entry" 
     var core = try TextCore.init(std.testing.allocator, .{ .max_glyphs_per_frame = 4 });
     defer core.deinit();
 
-    var pool: [4096]u8 = undefined;
+    var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
     var commands: [4]TestCommand = undefined;
 
@@ -389,7 +389,7 @@ test "render: TextCore enforces command capacity after skipping empty glyphs" {
     var core = try TextCore.init(std.testing.allocator, .{ .max_glyphs_per_frame = 1 });
     defer core.deinit();
 
-    var pool: [4096]u8 = undefined;
+    var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
     var commands: [1]TestCommand = undefined;
 

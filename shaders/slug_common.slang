@@ -31,9 +31,10 @@ struct PushConstants  // 80 bytes — matches descriptors.zig
 
 static const float UNITS_PER_EM = 4.0;  // HB_GPU_UNITS_PER_EM
 static const float INV_UNITS_PER_EM = 1.0 / UNITS_PER_EM;  // 0.25 (reciprocal for fast multiply)
-static const uint  HEADER_LEN = 2;       // texels 0-1 are header
-static const uint  BLOB_VERSION = 2;
+static const uint  HEADER_LEN = 4;       // texels 0-3 are header
+static const uint  BLOB_VERSION = 3;
 static const uint  CURVE_TEXEL_LEN = 3;
+static const uint  CURVE_IDS_PER_TEXEL = 4;
 
 // --- Task/mesh workgroup size ---
 // Both slug_task.slang and slug_mesh.slang import this constant to keep
@@ -68,15 +69,33 @@ struct BlobReader
         return float4(readTexel(index)) * INV_UNITS_PER_EM;
     }
 
-    // Read Coverage V2 blob header: glyph bounds, curve count, and contour direction.
-    void readHeader(out float4 bounds, out uint curveCount, out float fillSign, out uint curveBase)
+    // Read Coverage V3 blob header: curves plus optional h-band candidate index.
+    void readHeader(
+        out float4 bounds,
+        out uint curveCount,
+        out float fillSign,
+        out uint curveBase,
+        out int bandMin,
+        out uint bandCount,
+        out float bandHeight,
+        out uint bandBase,
+        out uint idBase,
+        out uint idCount)
     {
         int4 t0 = readTexel(0);  // (min_x, min_y, max_x, max_y)
         int4 t1 = readTexel(1);  // (curve_count, version, fill_sign, curve_base)
+        int4 t2 = readTexel(2);  // (band_min, band_count, band_height, band_base)
+        int4 t3 = readTexel(3);  // (id_base, id_count, unused, unused)
         bounds = float4(t0) * INV_UNITS_PER_EM;
         curveCount = uint(max(t1.x, 0));
         fillSign = t1.z < 0 ? -1.0 : 1.0;
         curveBase = uint(max(t1.w, 0));
+        bandMin = t2.x;
+        bandCount = uint(max(t2.y, 0));
+        bandHeight = max(float(t2.z) * INV_UNITS_PER_EM, INV_UNITS_PER_EM);
+        bandBase = uint(max(t2.w, 0));
+        idBase = uint(max(t3.x, 0));
+        idCount = uint(max(t3.y, 0));
     }
 
     void readCurve(uint curveBase, uint curveIndex, out float2 p0, out float2 p1,
@@ -90,6 +109,21 @@ struct BlobReader
         p1 = a.zw;
         p2 = b.xy;
         p3 = b.zw;
+    }
+
+    void readBand(uint bandBase, uint bandIndex, out uint idStart, out uint bandIdCount)
+    {
+        int4 band = readTexel(bandBase + bandIndex);
+        idStart = uint(max(band.x, 0));
+        bandIdCount = uint(max(band.y, 0));
+    }
+
+    uint readCurveId(uint idBase, uint idIndex)
+    {
+        int4 ids = readTexel(idBase + idIndex / CURVE_IDS_PER_TEXEL);
+        uint lane = idIndex % CURVE_IDS_PER_TEXEL;
+        int id = lane == 0 ? ids.x : (lane == 1 ? ids.y : (lane == 2 ? ids.z : ids.w));
+        return uint(max(id, 0));
     }
 };
 

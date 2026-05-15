@@ -12,9 +12,12 @@ pub const Error = error{
 
 const units_per_em = 4.0;
 const max_cubic_prepare_depth = 8;
-const header_len = 2;
-const blob_version = 2;
+const header_len = 4;
+const blob_version = 3;
 const curve_texel_len = 3;
+const hband_height = 4.0;
+const hband_height_q = @as(i16, @intFromFloat(hband_height * units_per_em));
+const curve_ids_per_texel = 4;
 
 pub const SegmentKind = enum(i16) {
     quad = 0,
@@ -436,7 +439,19 @@ pub fn encodeSegments(
     const min_y_q = try quantizeDown(min_y_f);
     const max_x_q = try quantizeUp(max_x_f);
     const max_y_q = try quantizeUp(max_y_f);
-    const total_len = try addU32(header_len, try mulU32(@intCast(curves.len), curve_texel_len));
+
+    var hbands = try HBandIndex.init(allocator, curves, min_y_q, max_y_q);
+    defer hbands.deinit(allocator);
+
+    const curve_base: u32 = header_len;
+    const band_base = try addU32(curve_base, try mulU32(@intCast(curves.len), curve_texel_len));
+    const id_base = try addU32(band_base, hbands.band_count);
+    const id_texel_count = divCeilU32(hbands.id_count, curve_ids_per_texel);
+    const total_len = try addU32(id_base, id_texel_count);
+
+    if (band_base > std.math.maxInt(i16) or id_base > std.math.maxInt(i16)) {
+        return error.GlyphOffsetOverflow;
+    }
 
     var texels = try std.ArrayListUnmanaged(Texel).initCapacity(allocator, total_len);
     defer texels.deinit(allocator);
@@ -447,10 +462,22 @@ pub fn encodeSegments(
         .r = @intCast(curves.len),
         .g = blob_version,
         .b = fillSignCubics(curves),
-        .a = header_len,
+        .a = @intCast(curve_base),
+    };
+    texels.items[2] = .{
+        .r = @intCast(hbands.band_min),
+        .g = @intCast(hbands.band_count),
+        .b = hband_height_q,
+        .a = @intCast(band_base),
+    };
+    texels.items[3] = .{
+        .r = @intCast(id_base),
+        .g = @intCast(hbands.id_count),
+        .b = 0,
+        .a = 0,
     };
 
-    var data_texel: u32 = header_len;
+    var data_texel: u32 = curve_base;
     for (curves) |curve| {
         texels.items[data_texel] = .{
             .r = try quantize(curve.p0.x),
@@ -475,6 +502,36 @@ pub fn encodeSegments(
         data_texel += 1;
     }
 
+    std.debug.assert(data_texel == band_base);
+
+    for (0..@intCast(hbands.band_count)) |band_i| {
+        const start = hbands.band_starts[band_i];
+        const count = hbands.band_counts[band_i];
+        if (start > std.math.maxInt(i16) or count > std.math.maxInt(i16)) {
+            return error.GlyphOffsetOverflow;
+        }
+        texels.items[data_texel] = .{
+            .r = @intCast(start),
+            .g = @intCast(count),
+            .b = 0,
+            .a = 0,
+        };
+        data_texel += 1;
+    }
+
+    std.debug.assert(data_texel == id_base);
+
+    for (0..@intCast(id_texel_count)) |texel_i| {
+        const id_i = texel_i * curve_ids_per_texel;
+        texels.items[data_texel] = .{
+            .r = idAtOrZero(hbands.ids, id_i),
+            .g = idAtOrZero(hbands.ids, id_i + 1),
+            .b = idAtOrZero(hbands.ids, id_i + 2),
+            .a = idAtOrZero(hbands.ids, id_i + 3),
+        };
+        data_texel += 1;
+    }
+
     std.debug.assert(data_texel == total_len);
 
     const bytes = std.mem.sliceAsBytes(texels.items);
@@ -486,6 +543,103 @@ pub fn encodeSegments(
         null,
     ) orelse return error.HarfBuzzAllocationFailed;
     return .{ .handle = blob };
+}
+
+const HBandIndex = struct {
+    band_min: i32,
+    band_count: u32,
+    id_count: u32,
+    band_starts: []u32,
+    band_counts: []u32,
+    ids: []i16,
+
+    fn init(
+        allocator: std.mem.Allocator,
+        curves: []const Cubic,
+        min_y_q: i16,
+        max_y_q: i16,
+    ) Error!HBandIndex {
+        const band_min = bandIndex(min_y_q);
+        const band_max = bandIndex(max_y_q);
+        const band_count_i32 = band_max - band_min + 1;
+        if (band_count_i32 <= 0 or band_count_i32 > std.math.maxInt(i16)) {
+            return error.GlyphOffsetOverflow;
+        }
+        const band_count: u32 = @intCast(band_count_i32);
+
+        const band_counts = try allocator.alloc(u32, band_count);
+        errdefer allocator.free(band_counts);
+        @memset(band_counts, 0);
+
+        for (curves) |curve| {
+            const range = try curveBandRange(curve, band_min);
+            for (range.lo..range.hi + 1) |band_i| {
+                band_counts[band_i] += 1;
+            }
+        }
+
+        const band_starts = try allocator.alloc(u32, band_count);
+        errdefer allocator.free(band_starts);
+
+        var id_count: u32 = 0;
+        for (band_counts, 0..) |count, i| {
+            band_starts[i] = id_count;
+            id_count = try addU32(id_count, count);
+        }
+        if (id_count > std.math.maxInt(i16)) return error.GlyphOffsetOverflow;
+
+        const ids = try allocator.alloc(i16, id_count);
+        errdefer allocator.free(ids);
+
+        const cursors = try allocator.dupe(u32, band_starts);
+        defer allocator.free(cursors);
+
+        for (curves, 0..) |curve, curve_i| {
+            const range = try curveBandRange(curve, band_min);
+            for (range.lo..range.hi + 1) |band_i| {
+                const id_i = cursors[band_i];
+                ids[id_i] = @intCast(curve_i);
+                cursors[band_i] += 1;
+            }
+        }
+
+        return .{
+            .band_min = band_min,
+            .band_count = band_count,
+            .id_count = id_count,
+            .band_starts = band_starts,
+            .band_counts = band_counts,
+            .ids = ids,
+        };
+    }
+
+    fn deinit(self: *HBandIndex, allocator: std.mem.Allocator) void {
+        allocator.free(self.band_starts);
+        allocator.free(self.band_counts);
+        allocator.free(self.ids);
+        self.* = undefined;
+    }
+};
+
+fn curveBandRange(curve: Cubic, band_min: i32) Error!struct { lo: usize, hi: usize } {
+    const min_y = try quantizeDown(curve.minY());
+    const max_y = try quantizeUp(curve.maxY());
+    const lo_i32 = bandIndex(min_y) - band_min;
+    const hi_i32 = bandIndex(max_y) - band_min;
+    if (lo_i32 < 0 or hi_i32 < lo_i32) return error.GlyphOffsetOverflow;
+    return .{ .lo = @intCast(lo_i32), .hi = @intCast(hi_i32) };
+}
+
+fn bandIndex(y_q: i16) i32 {
+    return @divFloor(@as(i32, y_q), @as(i32, hband_height_q));
+}
+
+fn divCeilU32(a: u32, b: u32) u32 {
+    return (a + b - 1) / b;
+}
+
+fn idAtOrZero(ids: []const i16, index: usize) i16 {
+    return if (index < ids.len) ids[index] else 0;
 }
 
 fn samePoint(a: Point, b: Point) bool {
@@ -729,7 +883,7 @@ test "OutlineBuilder: prepared cubic control polygons stay monotone after quanti
     }
 }
 
-test "encodeSegments: writes Coverage V2 cubic curve list" {
+test "encodeSegments: writes Coverage V3 cubic curve list" {
     const segments = [_]Segment{
         .{
             .kind = .quad,
@@ -753,7 +907,7 @@ test "encodeSegments: writes Coverage V2 cubic curve list" {
     try std.testing.expectEqual(@as(i16, 2), texels[1].r);
     try std.testing.expectEqual(@as(i16, blob_version), texels[1].g);
     try std.testing.expectEqual(@as(i16, header_len), texels[1].a);
-    try std.testing.expectEqual(@as(usize, header_len + segments.len * curve_texel_len), texels.len);
+    try std.testing.expect(texels.len > header_len + segments.len * curve_texel_len);
 
     const first_curve = texels[header_len..][0..curve_texel_len];
     try std.testing.expectEqual(@as(i16, 0), first_curve[0].r);
@@ -762,6 +916,40 @@ test "encodeSegments: writes Coverage V2 cubic curve list" {
     try std.testing.expectEqual(@as(i16, 3), first_curve[0].a);
     try std.testing.expectEqual(@as(i16, 1), first_curve[1].r);
     try std.testing.expectEqual(@as(i16, 4), first_curve[1].g);
+}
+
+test "encodeSegments: writes h-band candidate index after curves" {
+    const segments = [_]Segment{
+        lineSegment(.{ .x = 0, .y = 0 }, .{ .x = 1, .y = 1 }),
+        lineSegment(.{ .x = 1, .y = 1 }, .{ .x = 2, .y = 2 }),
+    };
+
+    const blob = try encodeSegments(std.testing.allocator, &segments);
+    defer blob.destroy();
+
+    const texels = std.mem.bytesAsSlice(Texel, blob.getData());
+    const curve_base: usize = @intCast(texels[1].a);
+    const band_min = texels[2].r;
+    const band_count: usize = @intCast(texels[2].g);
+    const band_height = texels[2].b;
+    const band_base: usize = @intCast(texels[2].a);
+    const id_base: usize = @intCast(texels[3].r);
+    const id_count = texels[3].g;
+
+    try std.testing.expectEqual(@as(usize, header_len), curve_base);
+    try std.testing.expectEqual(@as(i16, 0), band_min);
+    try std.testing.expectEqual(@as(usize, 1), band_count);
+    try std.testing.expectEqual(@as(i16, hband_height_q), band_height);
+    try std.testing.expectEqual(curve_base + segments.len * curve_texel_len, band_base);
+    try std.testing.expectEqual(@as(i16, 2), id_count);
+
+    const band = texels[band_base];
+    try std.testing.expectEqual(@as(i16, 0), band.r);
+    try std.testing.expectEqual(@as(i16, 2), band.g);
+
+    const ids = texels[id_base];
+    try std.testing.expectEqual(@as(i16, 0), ids.r);
+    try std.testing.expectEqual(@as(i16, 1), ids.g);
 }
 
 test "encodeSegments: stores glyph fill direction in header" {

@@ -390,13 +390,105 @@ float resolveCoverage(float signedArea, float fillSign, float detSign, uint flag
     return coverage;
 }
 
+float integrateCurveFromBlob(
+    BlobReader blob,
+    uint curveBase,
+    uint curveIndex,
+    float2 renderCoord,
+    float2 dx,
+    float2 dy,
+    float invDet)
+{
+    float2 p0g, p1g, p2g, p3g;
+    float4 bbox;
+    blob.readCurve(curveBase, curveIndex, p0g, p1g, p2g, p3g, bbox);
+
+    Cubic curve;
+    curve.p0 = toPixelLocal(p0g, renderCoord, dx, dy, invDet);
+    curve.p1 = toPixelLocal(p1g, renderCoord, dx, dy, invDet);
+    curve.p2 = toPixelLocal(p2g, renderCoord, dx, dy, invDet);
+    curve.p3 = toPixelLocal(p3g, renderCoord, dx, dy, invDet);
+
+    return integrateCurve(curve);
+}
+
+float integrateFullScan(
+    BlobReader blob,
+    uint curveBase,
+    uint curveCount,
+    float2 renderCoord,
+    float2 dx,
+    float2 dy,
+    float invDet)
+{
+    float signedArea = 0.0;
+    for (uint ci = 0; ci < curveCount; ci++)
+    {
+        signedArea += integrateCurveFromBlob(blob, curveBase, ci, renderCoord, dx, dy, invDet);
+    }
+    return signedArea;
+}
+
+bool conservativeHBandRange(
+    float2 renderCoord,
+    float2 dx,
+    float invDet,
+    float4 bounds,
+    out float minY,
+    out float maxY)
+{
+    minY = bounds.y;
+    maxY = bounds.w;
+
+    float nx = -dx.y * invDet;
+    float ny = dx.x * invDet;
+
+    if (abs(ny) <= kCoverageEpsilon)
+    {
+        float ly0 = nx * (bounds.x - renderCoord.x);
+        float ly1 = nx * (bounds.z - renderCoord.x);
+        float stripMin = min(ly0, ly1);
+        float stripMax = max(ly0, ly1);
+        if (stripMax < -0.5 || stripMin > 0.5)
+            return false;
+
+        minY = bounds.y;
+        maxY = bounds.w;
+        return true;
+    }
+
+    float y00 = renderCoord.y + (-0.5 - nx * (bounds.x - renderCoord.x)) / ny;
+    float y01 = renderCoord.y + (-0.5 - nx * (bounds.z - renderCoord.x)) / ny;
+    float y10 = renderCoord.y + ( 0.5 - nx * (bounds.x - renderCoord.x)) / ny;
+    float y11 = renderCoord.y + ( 0.5 - nx * (bounds.z - renderCoord.x)) / ny;
+    minY = max(bounds.y, min(min(y00, y01), min(y10, y11)) - kCoverageEpsilon);
+    maxY = min(bounds.w, max(max(y00, y01), max(y10, y11)) + kCoverageEpsilon);
+    return maxY >= minY;
+}
+
 float slugRender(BlobReader blob, float2 renderCoord, uint flags)
 {
     float4 bounds;
     uint curveCount;
     float fillSign;
     uint curveBase;
-    blob.readHeader(bounds, curveCount, fillSign, curveBase);
+    int bandMin;
+    uint bandCount;
+    float bandHeight;
+    uint bandBase;
+    uint idBase;
+    uint idCount;
+    blob.readHeader(
+        bounds,
+        curveCount,
+        fillSign,
+        curveBase,
+        bandMin,
+        bandCount,
+        bandHeight,
+        bandBase,
+        idBase,
+        idCount);
     if (curveCount == 0)
         return 0.0;
 
@@ -410,19 +502,35 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
     float detSign = det < 0.0 ? -1.0 : 1.0;
     float signedArea = 0.0;
 
-    for (uint ci = 0; ci < curveCount; ci++)
+    float candidateMinY;
+    float candidateMaxY;
+    if (!conservativeHBandRange(renderCoord, dx, invDet, bounds, candidateMinY, candidateMaxY))
+        return 0.0;
+
+    int firstBand = int(floor(candidateMinY / bandHeight)) - bandMin;
+    int lastBand = int(floor(candidateMaxY / bandHeight)) - bandMin;
+
+    if (bandCount > 0 && firstBand == lastBand && firstBand >= 0 && uint(firstBand) < bandCount)
     {
-        float2 p0g, p1g, p2g, p3g;
-        float4 bbox;
-        blob.readCurve(curveBase, ci, p0g, p1g, p2g, p3g, bbox);
+        uint idStart;
+        uint bandIdCount;
+        blob.readBand(bandBase, uint(firstBand), idStart, bandIdCount);
+        for (uint i = 0; i < bandIdCount; i++)
+        {
+            uint idIndex = idStart + i;
+            if (idIndex >= idCount)
+                break;
 
-        Cubic curve;
-        curve.p0 = toPixelLocal(p0g, renderCoord, dx, dy, invDet);
-        curve.p1 = toPixelLocal(p1g, renderCoord, dx, dy, invDet);
-        curve.p2 = toPixelLocal(p2g, renderCoord, dx, dy, invDet);
-        curve.p3 = toPixelLocal(p3g, renderCoord, dx, dy, invDet);
-
-        signedArea += integrateCurve(curve);
+            uint curveIndex = blob.readCurveId(idBase, idIndex);
+            if (curveIndex < curveCount)
+            {
+                signedArea += integrateCurveFromBlob(blob, curveBase, curveIndex, renderCoord, dx, dy, invDet);
+            }
+        }
+    }
+    else
+    {
+        signedArea = integrateFullScan(blob, curveBase, curveCount, renderCoord, dx, dy, invDet);
     }
 
     return resolveCoverage(signedArea, fillSign, detSign, flags);
