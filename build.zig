@@ -17,7 +17,7 @@ pub fn build(b: *std.Build) void {
     // --- Shader compilation: Slang -> SPIR-V ---
     const shader_step = b.step("shaders", "Compile Slang shaders to SPIR-V");
 
-    const task_spv = compileSlangShader(b, "slug_task.spv", "shaders/slug_task.slang", "taskMain", "amplification", "spvGroupNonUniformBallot");
+    const task_spv = compileSlangShader(b, "slug_task.spv", "shaders/slug_task.slang", "taskMain", "amplification", "spvGroupNonUniform+spvGroupNonUniformBallot");
     const mesh_spv = compileSlangShader(b, "slug_mesh.spv", "shaders/slug_mesh.slang", "meshMain", "mesh", "");
     const frag_spv = compileSlangShader(b, "slug_fragment.spv", "shaders/slug_fragment.slang", "fragmentMain", "fragment", "");
 
@@ -160,7 +160,7 @@ fn generateReflectionJson(b: *std.Build) std.Build.LazyPath {
     cmd.addArgs(&.{ "-entry", "taskMain" });
     cmd.addArgs(&.{ "-stage", "amplification" });
     cmd.addArgs(&.{ "-target", "spirv" });
-    cmd.addArgs(&.{ "-profile", "spirv_1_6+spvGroupNonUniformBallot" });
+    cmd.addArgs(&.{ "-profile", "spirv_1_6+spvGroupNonUniform+spvGroupNonUniformBallot" });
     cmd.addArgs(&.{"-matrix-layout-column-major"});
     cmd.addArgs(&.{ "-I", "shaders" });
     cmd.addArgs(&.{"-O2"});

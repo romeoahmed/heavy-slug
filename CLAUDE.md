@@ -144,7 +144,7 @@ Dispatch struct fields use **C names** (`vkCreateInstance`). Wrapper methods use
 
 ## Shaders
 
-**Compilation** -- `zig build shaders` -> `zig-out/shaders/*.spv` via `slangc`. Flags: `-profile spirv_1_6 -matrix-layout-column-major -I shaders -O2`. The task shader additionally requires `+spvGroupNonUniformBallot` for wave ballot intrinsics. Slang compiles all entry points to `"main"` in SPIR-V regardless of source-level function name -- pipeline code must use `p_name = "main"`.
+**Compilation** -- `zig build shaders` -> `zig-out/shaders/*.spv` via `slangc`. Flags: `-profile spirv_1_6 -matrix-layout-column-major -I shaders -O2`. The task shader additionally requires `+spvGroupNonUniform+spvGroupNonUniformBallot` for wave ballot intrinsics. Slang compiles all entry points to `"main"` in SPIR-V regardless of source-level function name -- pipeline code must use `p_name = "main"`.
 
 **Shared constants** -- `slug_common.slang` defines `kTaskGroupSize = 32` (task/mesh workgroup size), `UNITS_PER_EM` / `INV_UNITS_PER_EM`, and `HEADER_LEN`. Both `slug_task.slang` and `slug_mesh.slang` import `slug_common` to keep `TaskPayload` array sizes in sync.
 
