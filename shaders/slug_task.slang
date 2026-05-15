@@ -24,6 +24,9 @@ struct TaskPayload
 };
 
 groupshared TaskPayload s_payload;
+#if HEAVY_SLUG_METAL
+groupshared uint s_survivorCount;
+#endif
 
 // XY frustum test: check if a clip-space AABB is at least partially visible.
 // Divides by w for correctness with both orthographic and perspective projections.
@@ -69,7 +72,34 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
         alive = isVisible(c0, c1, c2, c3);
     }
 
-    // Wave ballot compaction — no atomics, no shared memory contention.
+#if HEAVY_SLUG_METAL
+    // Slang's Metal target supports mesh/task stages, but wave ballot
+    // intrinsics are not currently available for Metal object functions.
+    // Use one atomic counter per taskgroup for the Metal path.
+    if (gtid == 0) s_survivorCount = 0;
+    GroupMemoryBarrierWithGroupSync();
+
+    uint survivorCount = 0;
+    uint localIdx = 0;
+    if (alive)
+    {
+        InterlockedAdd(s_survivorCount, 1, localIdx);
+        s_payload.glyphIndices[localIdx] = glyphIndex;
+
+        float ms = cmd.motor.x * cmd.motor.x + cmd.motor.y * cmd.motor.y;
+        float2 halfDim = pc.viewport_dim * 0.5;
+        float2 ppe = float2(
+            length(float2(pc.proj[0][0] * halfDim.x, pc.proj[1][0] * halfDim.y)),
+            length(float2(pc.proj[0][1] * halfDim.x, pc.proj[1][1] * halfDim.y))
+        );
+        s_payload.motorScales[localIdx] = ms;
+        s_payload.emPerPixels[localIdx] = 1.0 / (ppe * ms);
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+    survivorCount = s_survivorCount;
+#else
+    // Wave ballot compaction - no atomics, no shared memory contention.
     uint survivorCount = WaveActiveCountBits(alive);
     uint localIdx = WavePrefixCountBits(alive);
 
@@ -89,6 +119,7 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
     }
 
     GroupMemoryBarrierWithGroupSync();
+#endif
 
     if (gtid == 0)
     {

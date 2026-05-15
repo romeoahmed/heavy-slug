@@ -18,10 +18,21 @@ const SpirvShaders = struct {
     module: *std.Build.Module,
 };
 
+const MetalShaders = struct {
+    task: std.Build.LazyPath,
+    mesh: std.Build.LazyPath,
+    fragment: std.Build.LazyPath,
+    module: *std.Build.Module,
+};
+
 const VulkanBackend = struct {
     module: *std.Build.Module,
     bindings: *std.Build.Module,
     headers: *std.Build.Dependency,
+};
+
+const MetalBackend = struct {
+    module: *std.Build.Module,
 };
 
 pub fn build(b: *std.Build) void {
@@ -32,11 +43,16 @@ pub fn build(b: *std.Build) void {
     const demo_backend = resolveDemoBackend(target.result.os.tag, demo_backend_opt);
     const build_vulkan = (b.option(bool, "vulkan", "Build the Vulkan SPIR-V 1.6 backend module") orelse false) or
         (build_demo and demo_backend == .vulkan_spirv16);
+    const build_metal = (b.option(bool, "metal", "Build the Metal 4 backend module") orelse false) or
+        (build_demo and demo_backend == .metal4);
 
     // --- Shader compilation: Slang -> SPIR-V ---
     const shader_step = b.step("shaders", "Compile Slang shaders to SPIR-V");
     const spirv = buildSpirvShaders(b);
     addShaderInstallSteps(b, shader_step, spirv);
+    const metal_shader_step = b.step("metal-shaders", "Compile Slang shaders to Metal source");
+    const metal_shaders = buildMetalShaders(b);
+    addMetalShaderInstallSteps(b, metal_shader_step, metal_shaders);
 
     // --- Library module ---
     const mod = b.addModule("heavy_slug", .{
@@ -76,6 +92,10 @@ pub fn build(b: *std.Build) void {
     if (vulkan_backend) |backend| {
         test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = backend.module })).step);
     }
+    const metal_backend = if (build_metal) buildMetalBackend(b, target, mod, metal_shaders) else null;
+    if (metal_backend) |backend| {
+        test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = backend.module })).step);
+    }
 
     // --- Demo executable (opt-in via -Ddemo) ---
     if (build_demo) {
@@ -88,7 +108,7 @@ pub fn build(b: *std.Build) void {
                 vulkan_backend.?,
                 use_lto,
             ) orelse return,
-            .metal4 => buildMetalDemo(b, target, optimize),
+            .metal4 => buildMetalDemo(b, target, optimize, mod, metal_backend.?, use_lto) orelse return,
         };
 
         b.installArtifact(exe);
@@ -157,6 +177,29 @@ fn buildSpirvShaders(b: *std.Build) SpirvShaders {
     };
 }
 
+fn buildMetalShaders(b: *std.Build) MetalShaders {
+    const task_msl = compileSlangMetalShader(b, "slug_task.metal", "shaders/slug_task.slang", "taskMain", "amplification");
+    const mesh_msl = compileSlangMetalShader(b, "slug_mesh.metal", "shaders/slug_mesh.slang", "meshMain", "mesh");
+    const frag_msl = compileSlangMetalShader(b, "slug_fragment.metal", "shaders/slug_fragment.slang", "fragmentMain", "fragment");
+
+    const shader_wf = b.addWriteFiles();
+    _ = shader_wf.addCopyFile(task_msl, "slug_task.metal");
+    _ = shader_wf.addCopyFile(mesh_msl, "slug_mesh.metal");
+    _ = shader_wf.addCopyFile(frag_msl, "slug_fragment.metal");
+    const msl_zig = shader_wf.add("metal_shaders.zig",
+        \\pub const task: []const u8 = @embedFile("slug_task.metal");
+        \\pub const mesh: []const u8 = @embedFile("slug_mesh.metal");
+        \\pub const fragment: []const u8 = @embedFile("slug_fragment.metal");
+    );
+
+    return .{
+        .task = task_msl,
+        .mesh = mesh_msl,
+        .fragment = frag_msl,
+        .module = b.addModule("metal_shaders", .{ .root_source_file = msl_zig }),
+    };
+}
+
 fn addShaderInstallSteps(
     b: *std.Build,
     shader_step: *std.Build.Step,
@@ -165,6 +208,19 @@ fn addShaderInstallSteps(
     const install_task = b.addInstallFile(spirv.task, "shaders/slug_task.spv");
     const install_mesh = b.addInstallFile(spirv.mesh, "shaders/slug_mesh.spv");
     const install_frag = b.addInstallFile(spirv.fragment, "shaders/slug_fragment.spv");
+    shader_step.dependOn(&install_task.step);
+    shader_step.dependOn(&install_mesh.step);
+    shader_step.dependOn(&install_frag.step);
+}
+
+fn addMetalShaderInstallSteps(
+    b: *std.Build,
+    shader_step: *std.Build.Step,
+    metal_shaders: MetalShaders,
+) void {
+    const install_task = b.addInstallFile(metal_shaders.task, "shaders/slug_task.metal");
+    const install_mesh = b.addInstallFile(metal_shaders.mesh, "shaders/slug_mesh.metal");
+    const install_frag = b.addInstallFile(metal_shaders.fragment, "shaders/slug_fragment.metal");
     shader_step.dependOn(&install_task.step);
     shader_step.dependOn(&install_mesh.step);
     shader_step.dependOn(&install_frag.step);
@@ -206,6 +262,27 @@ fn buildVulkanBackend(
         .bindings = vulkan_zig,
         .headers = vk_headers.?,
     };
+}
+
+fn buildMetalBackend(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    core_mod: *std.Build.Module,
+    metal_shaders: MetalShaders,
+) MetalBackend {
+    const reflection_json = generateReflectionJson(b);
+    const gpu_structs_zig = generateGpuStructs(b, reflection_json);
+    const gpu_structs_mod = b.addModule("gpu_structs", .{ .root_source_file = gpu_structs_zig });
+
+    const mod = b.addModule("heavy_slug_metal", .{
+        .root_source_file = b.path("src/metal/root.zig"),
+        .target = target,
+    });
+    mod.addImport("heavy_slug", core_mod);
+    mod.addImport("metal_shaders", metal_shaders.module);
+    mod.addImport("gpu_structs", gpu_structs_mod);
+
+    return .{ .module = mod };
 }
 
 fn buildVulkanDemo(
@@ -253,15 +330,44 @@ fn buildMetalDemo(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-) *std.Build.Step.Compile {
-    return b.addExecutable(.{
+    core_mod: *std.Build.Module,
+    backend: MetalBackend,
+    use_lto: bool,
+) ?*std.Build.Step.Compile {
+    const exe = b.addExecutable(.{
         .name = "heavy_slug_metal4",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/demo/metal4_main.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "heavy_slug", .module = core_mod },
+                .{ .name = "heavy_slug_metal", .module = backend.module },
+            },
         }),
     });
+
+    const glfw_dep = b.lazyDependency("glfw_src", .{}) orelse return null;
+    const glfw_lib = buildGlfw(b, glfw_dep, null, target, optimize);
+    exe.root_module.linkLibrary(glfw_lib);
+    exe.root_module.addIncludePath(glfw_dep.path("include"));
+    exe.root_module.addIncludePath(b.path("src/metal"));
+    exe.root_module.link_libcpp = true;
+    exe.root_module.linkFramework("Cocoa", .{});
+    exe.root_module.linkFramework("QuartzCore", .{});
+    exe.root_module.linkFramework("Metal", .{});
+    exe.root_module.linkFramework("Foundation", .{});
+    exe.root_module.addCSourceFiles(.{
+        .root = b.path("src/metal"),
+        .files = &.{"bridge.mm"},
+        .flags = &.{ "-std=c++17", "-fobjc-arc" },
+    });
+
+    if (use_lto) {
+        glfw_lib.lto = .thin;
+    }
+
+    return exe;
 }
 
 fn compileSlangShader(
@@ -274,6 +380,7 @@ fn compileSlangShader(
 ) std.Build.LazyPath {
     const cmd = b.addSystemCommand(&.{"slangc"});
     cmd.addFileArg(b.path(source));
+    cmd.addArgs(&.{"-DHEAVY_SLUG_METAL=0"});
     cmd.addArgs(&.{ "-entry", entry });
     cmd.addArgs(&.{ "-stage", stage });
     cmd.addArgs(&.{ "-target", "spirv" });
@@ -289,9 +396,31 @@ fn compileSlangShader(
     return cmd.addOutputFileArg(name);
 }
 
+fn compileSlangMetalShader(
+    b: *std.Build,
+    name: []const u8,
+    source: []const u8,
+    entry: []const u8,
+    stage: []const u8,
+) std.Build.LazyPath {
+    const cmd = b.addSystemCommand(&.{"slangc"});
+    cmd.addFileArg(b.path(source));
+    cmd.addArgs(&.{"-DHEAVY_SLUG_METAL=1"});
+    cmd.addArgs(&.{ "-entry", entry });
+    cmd.addArgs(&.{ "-stage", stage });
+    cmd.addArgs(&.{ "-target", "metal" });
+    cmd.addArgs(&.{ "-capability", "metallib_4_0" });
+    cmd.addArgs(&.{"-matrix-layout-column-major"});
+    cmd.addArgs(&.{ "-I", "shaders" });
+    cmd.addArgs(&.{"-O2"});
+    cmd.addArg("-o");
+    return cmd.addOutputFileArg(name);
+}
+
 fn generateReflectionJson(b: *std.Build) std.Build.LazyPath {
     const cmd = b.addSystemCommand(&.{"slangc"});
     cmd.addFileArg(b.path("shaders/slug_task.slang"));
+    cmd.addArgs(&.{"-DHEAVY_SLUG_METAL=0"});
     cmd.addArgs(&.{ "-entry", "taskMain" });
     cmd.addArgs(&.{ "-stage", "amplification" });
     cmd.addArgs(&.{ "-target", "spirv" });
@@ -324,7 +453,7 @@ fn generateGpuStructs(
 fn buildGlfw(
     b: *std.Build,
     glfw_dep: *std.Build.Dependency,
-    vk_headers: *std.Build.Dependency,
+    vk_headers: ?*std.Build.Dependency,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) *std.Build.Step.Compile {
@@ -340,7 +469,9 @@ fn buildGlfw(
 
     lib.root_module.addIncludePath(glfw_dep.path("include"));
     lib.root_module.addIncludePath(glfw_dep.path("src"));
-    lib.root_module.addIncludePath(vk_headers.path("include"));
+    if (vk_headers) |headers| {
+        lib.root_module.addIncludePath(headers.path("include"));
+    }
 
     const os = target.result.os.tag;
     const platform_flags: []const []const u8 = switch (os) {
@@ -409,6 +540,25 @@ fn buildGlfw(
                 },
                 .flags = platform_flags,
             });
+        },
+        .macos => {
+            lib.root_module.addCSourceFiles(.{
+                .root = glfw_dep.path(""),
+                .files = &.{
+                    "src/cocoa_init.m",
+                    "src/cocoa_joystick.m",
+                    "src/cocoa_monitor.m",
+                    "src/cocoa_window.m",
+                    "src/nsgl_context.m",
+                    "src/cocoa_time.c",
+                    "src/posix_module.c",
+                    "src/posix_thread.c",
+                },
+                .flags = platform_flags,
+            });
+            lib.root_module.linkFramework("Cocoa", .{});
+            lib.root_module.linkFramework("IOKit", .{});
+            lib.root_module.linkFramework("CoreFoundation", .{});
         },
         else => {},
     }

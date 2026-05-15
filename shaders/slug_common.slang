@@ -45,12 +45,13 @@ static const uint kTaskGroupSize = 32;
 struct BlobReader
 {
     ByteAddressBuffer buf;
+    uint base;
 
     // Read one RGBA16I texel at the given index.
     // Returns 4 int16 values sign-extended to int32.
     int4 readTexel(uint index)
     {
-        uint2 raw = buf.Load2(index * 8);
+        uint2 raw = buf.Load2(base + index * 8);
         return int4(
             bitfieldExtract(int(raw.x),  0, 16),
             bitfieldExtract(int(raw.x), 16, 16),

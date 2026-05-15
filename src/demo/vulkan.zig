@@ -7,6 +7,32 @@ const vk = @import("vulkan");
 const glfw = @import("glfw.zig");
 const gpu_context = @import("heavy_slug_vulkan").context;
 
+// Vulkan-related GLFW functions are declared as manual externs to avoid
+// including vulkan.h, which would conflict with vulkan-zig types.
+extern fn glfwGetInstanceProcAddress(instance: vk.Instance, procname: [*:0]const u8) vk.PfnVoidFunction;
+extern fn glfwCreateWindowSurface(instance: vk.Instance, window: glfw.Window, allocator: ?*const anyopaque, surface: *vk.SurfaceKHR) vk.Result;
+
+fn getRequiredInstanceExtensions() []const [*:0]const u8 {
+    const c = @cImport({
+        @cDefine("GLFW_INCLUDE_NONE", "");
+        @cInclude("GLFW/glfw3.h");
+    });
+    var count: u32 = 0;
+    const exts = c.glfwGetRequiredInstanceExtensions(&count) orelse return &.{};
+    return @ptrCast(exts[0..count]);
+}
+
+fn getInstanceProcAddress(instance: vk.Instance, name: [*:0]const u8) vk.PfnVoidFunction {
+    return glfwGetInstanceProcAddress(instance, name);
+}
+
+fn createSurface(instance: vk.Instance, window: glfw.Window) glfw.Error!vk.SurfaceKHR {
+    var surface: vk.SurfaceKHR = undefined;
+    const result = glfwCreateWindowSurface(instance, window, null, &surface);
+    if (result != .success) return error.SurfaceCreationFailed;
+    return surface;
+}
+
 // ============================================================
 // Dispatch types
 // ============================================================
@@ -111,8 +137,8 @@ pub const GraphicsContext = struct {
 
     pub fn init(window: glfw.Window, allocator: std.mem.Allocator) !GraphicsContext {
         // 1. Load base dispatch and create instance
-        const base = BaseDispatch.load(glfw.getInstanceProcAddress);
-        const glfw_exts = glfw.getRequiredInstanceExtensions();
+        const base = BaseDispatch.load(getInstanceProcAddress);
+        const glfw_exts = getRequiredInstanceExtensions();
         const app_info = vk.ApplicationInfo{
             .p_application_name = "heavy-slug demo",
             .application_version = 0,
@@ -127,11 +153,11 @@ pub const GraphicsContext = struct {
         }, null);
 
         // 2. Load dispatch tables
-        const demo_idisp = DemoInstanceDispatch.load(instance, glfw.getInstanceProcAddress);
-        const lib_idisp = gpu_context.InstanceDispatch.load(instance, glfw.getInstanceProcAddress);
+        const demo_idisp = DemoInstanceDispatch.load(instance, getInstanceProcAddress);
+        const lib_idisp = gpu_context.InstanceDispatch.load(instance, getInstanceProcAddress);
 
         // 3. Create surface
-        const surface = try glfw.createSurface(instance, window);
+        const surface = try createSurface(instance, window);
 
         // 4. Pick physical device
         var dev_count: u32 = 0;

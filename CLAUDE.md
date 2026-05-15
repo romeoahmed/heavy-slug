@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-**heavy-slug** -- Zig 0.16.0 text rendering library. Core API (`src/root.zig`) covers font shaping, HarfBuzz GPU glyph encoding, cache/pool utilities, and PGA math without importing Vulkan. The opt-in Vulkan SPIR-V 1.6 backend is `src/vulkan/root.zig` / module `heavy_slug_vulkan`.
+**heavy-slug** -- Zig 0.16.0 text rendering library. Core API (`src/root.zig`) covers font shaping, HarfBuzz GPU glyph encoding, cache/pool utilities, and PGA math without importing a graphics API. Opt-in backends are `heavy_slug_vulkan` (`src/vulkan/root.zig`) for Vulkan SPIR-V 1.6 and `heavy_slug_metal` (`src/metal/root.zig`) for macOS Metal 4.
 
 ## Commands
 
@@ -8,15 +8,18 @@
 zig fmt src/ tools/                    # format
 zig build                              # configure core library
 zig build -Dvulkan=true                # configure Vulkan backend module
+zig build -Dmetal=true                 # configure Metal backend module
 zig build test                         # run library + layout_gen tests
 zig build test -Dvulkan=true           # run core + Vulkan backend tests
+zig build test -Dmetal=true            # run core + Metal backend API tests
 zig build shaders                      # compile Slang -> SPIR-V only
+zig build metal-shaders                # compile Slang -> Metal 4 MSL
 zig build -Doptimize=ReleaseFast       # release build (ThinLTO on C deps)
 zig build run -Ddemo=true -Ddemo-backend=vulkan_spirv16 [-- args] # Windows/Linux Vulkan demo
 zig build run -Ddemo=true -Ddemo-backend=metal4 [-- args]         # macOS Metal 4 entry point
 ```
 
-`-Ddemo=false` (default) avoids demo-only dependencies. `-Dvulkan=true` or `-Ddemo=true -Ddemo-backend=vulkan_spirv16` lazy-loads `vulkan` and `vulkan_headers`; the Vulkan demo also lazy-loads GLFW. `demo-backend=auto` selects Vulkan SPIR-V 1.6 on Windows/Linux and the Metal 4 entry point on macOS. Release builds enable ThinLTO on C static libraries (FreeType, HarfBuzz, GLFW) for cross-language optimization. Zig executables cannot use LTO due to unresolved compiler-rt/musl symbols in the ThinLTO link pipeline.
+`-Ddemo=false` (default) avoids demo-only dependencies. `-Dvulkan=true` or `-Ddemo=true -Ddemo-backend=vulkan_spirv16` lazy-loads `vulkan` and `vulkan_headers`; `-Dmetal=true` builds only the Zig Metal API module. Demo builds lazy-load GLFW. `demo-backend=auto` selects Vulkan SPIR-V 1.6 on Windows/Linux and Metal 4 on macOS. The Metal demo uses GLFW's Cocoa native access from an ObjC++ bridge; Zig calls only a stable C ABI. Release builds enable ThinLTO on C static libraries (FreeType, HarfBuzz, GLFW) for cross-language optimization. Zig executables cannot use LTO due to unresolved compiler-rt/musl symbols in the ThinLTO link pipeline.
 
 ## Commits
 
@@ -48,9 +51,14 @@ src/
   math/
     pga.zig           -- Cl(2,0,1) Motor/Point, @Vector(4,f32) SIMD internals
   demo/
-    glfw.zig          -- GLFW 3.4 wrapper with manual Vulkan externs
+    glfw.zig          -- GLFW 3.4 wrapper
     vulkan.zig        -- Demo Vulkan bootstrap: instance, device, swapchain, frame sync
-    metal4_main.zig   -- macOS Metal 4 demo entry point scaffold
+    metal4_main.zig   -- macOS Metal 4 demo entry point
+  metal/
+    root.zig          -- Metal backend API: Context, TextRenderer aliases
+    renderer.zig      -- TextRenderer using a single Metal glyph-pool buffer
+    bridge.h          -- C ABI between Zig and Metal host code
+    bridge.mm         -- ObjC++ GLFW Cocoa + CAMetalLayer + Metal mesh pipeline
 shaders/
   pga.slang           -- Motor struct (mirrors pga.zig)
   slug_common.slang   -- GlyphCommand, PushConstants, BlobReader, kTaskGroupSize
@@ -61,7 +69,7 @@ tools/
   layout_gen.zig      -- build tool: slangc reflection JSON -> extern struct definitions
 ```
 
-**Demo** -- `src/main.zig` is an interactive text viewer (hb-gpu-demo style): pan, zoom, right-drag rotation with momentum, dark mode (B), reset (R), FPS counter. Requires GPU with `VK_EXT_mesh_shader`. ESC to exit.
+**Demo** -- `src/main.zig` is the interactive Vulkan text viewer (hb-gpu-demo style): pan, zoom, right-drag rotation with momentum, dark mode (B), reset (R), FPS counter. Requires GPU with `VK_EXT_mesh_shader`. `src/demo/metal4_main.zig` is the macOS Metal 4 Slug renderer demo. ESC exits both.
 
 ## Dependencies
 
@@ -147,13 +155,23 @@ Dispatch struct fields use **C names** (`vkCreateInstance`). Wrapper methods use
 
 **Stats** -- Comptime-conditional `Stats` struct (`cache_hits`, `cache_misses`, `evictions`, `descriptors_flushed`, `glyphs_submitted`, `pool_free_blocks`). In `Debug` mode, counters are incremented per-frame and available via `stats.log()`. In `ReleaseFast` / `ReleaseSmall` / `ReleaseSafe`, `Stats` is an empty struct with no-op methods -- zero overhead.
 
+## Metal Patterns
+
+**Boundary** -- Zig owns Slug shaping, cache, pool allocation, and command encoding. ObjC++ owns CAMetalLayer setup, runtime MSL compilation, Metal buffers, pipeline creation, command submission, and the GLFW-to-Cocoa convenience bridge. Keep that boundary as the C ABI in `src/metal/bridge.h`; do not expose ObjC or C++ types to Zig. Prefer `Context.initForCocoaWindow` for reusable backend integration and `Context.initForGlfwWindow` for the demo.
+
+**Glyph storage** -- Vulkan uses bindless storage-buffer descriptors and stores descriptor slots in `GlyphCommand.descriptor_index`. Metal uses one shared glyph-pool buffer and stores the byte offset in the same field. `BlobReader.base` makes the shader ABI shared across backends.
+
+**Shader ABI** -- Metal MSL is generated by Slang with `-target metal -capability metallib_4_0 -DHEAVY_SLUG_METAL=1`. Generated bindings are object/mesh `commands [[buffer(0)]]`, object/mesh push constants `[[buffer(1)]]`, and fragment `glyphPool [[buffer(0)]]`. The bridge must bind those exact indices.
+
 ## Shaders
 
 **Compilation** -- `zig build shaders` -> `zig-out/shaders/*.spv` via `slangc`. Flags: `-profile spirv_1_6 -matrix-layout-column-major -I shaders -O2`. The task shader additionally requires `+spvGroupNonUniform+spvGroupNonUniformBallot` for wave ballot intrinsics. Slang compiles all entry points to `"main"` in SPIR-V regardless of source-level function name -- pipeline code must use `p_name = "main"`.
 
 **Shared constants** -- `slug_common.slang` defines `kTaskGroupSize = 32` (task/mesh workgroup size), `UNITS_PER_EM` / `INV_UNITS_PER_EM`, and `HEADER_LEN`. Both `slug_task.slang` and `slug_mesh.slang` import `slug_common` to keep `TaskPayload` array sizes in sync.
 
-**Task shader** -- Wave ballot compaction (`WaveActiveCountBits` / `WavePrefixCountBits`) replaces serial `InterlockedAdd` atomics. Precomputes per-glyph dilation values (`motorScales`, `emPerPixels`) into the extended `TaskPayload` so the mesh shader avoids redundant `sqrt` ops.
+**Task shader** -- Wave ballot compaction (`WaveActiveCountBits` / `WavePrefixCountBits`) replaces serial `InterlockedAdd` atomics on the SPIR-V path. Precomputes per-glyph dilation values (`motorScales`, `emPerPixels`) into the extended `TaskPayload` so the mesh shader avoids redundant `sqrt` ops.
+
+**Metal target** -- `zig build metal-shaders` compiles with `-target metal -capability metallib_4_0 -DHEAVY_SLUG_METAL=1`. The Metal task path uses a taskgroup atomic counter because Slang's Metal object stage does not expose the wave ballot intrinsics used by the SPIR-V path. The fragment shader lowers `fwidth(x)` to `abs(ddx(x)) + abs(ddy(x))` for Metal.
 
 **Mesh shader** -- Reads precomputed `emPerPixels[gid]` from the task payload instead of recomputing dilation locally. One workgroup = one glyph = 4 vertices + 2 triangles.
 

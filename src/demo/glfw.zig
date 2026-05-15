@@ -1,18 +1,9 @@
 //! Thin GLFW wrapper for the demo executable.
-//! Vulkan-related GLFW functions are declared as manual externs to avoid
-//! including vulkan.h (which would conflict with vulkan-zig types).
-
-const vk = @import("vulkan");
 
 const c = @cImport({
     @cDefine("GLFW_INCLUDE_NONE", "");
     @cInclude("GLFW/glfw3.h");
 });
-
-// --- Manual Vulkan externs (avoids vulkan.h type conflicts) ---
-
-extern fn glfwGetInstanceProcAddress(instance: vk.Instance, procname: [*:0]const u8) vk.PfnVoidFunction;
-extern fn glfwCreateWindowSurface(instance: vk.Instance, window: *c.GLFWwindow, allocator: ?*const anyopaque, surface: *vk.SurfaceKHR) vk.Result;
 
 // --- Public API ---
 
@@ -61,28 +52,6 @@ pub fn getFramebufferSize(window: Window) [2]u32 {
     var h: c_int = 0;
     c.glfwGetFramebufferSize(window, &w, &h);
     return .{ @intCast(w), @intCast(h) };
-}
-
-/// Returns the Vulkan instance extensions required by GLFW.
-/// The returned slice points to GLFW-managed static memory — valid until
-/// `terminate()` is called. Do not free the slice or the string pointers.
-pub fn getRequiredInstanceExtensions() []const [*:0]const u8 {
-    var count: u32 = 0;
-    const exts = c.glfwGetRequiredInstanceExtensions(&count) orelse return &.{};
-    // GLFW guarantees all returned extension names are null-terminated C strings.
-    return @ptrCast(exts[0..count]);
-}
-
-/// Loader function compatible with vulkan-zig's dispatch .load() methods.
-pub fn getInstanceProcAddress(instance: vk.Instance, name: [*:0]const u8) vk.PfnVoidFunction {
-    return glfwGetInstanceProcAddress(instance, name);
-}
-
-pub fn createSurface(instance: vk.Instance, window: Window) Error!vk.SurfaceKHR {
-    var surface: vk.SurfaceKHR = undefined;
-    const result = glfwCreateWindowSurface(instance, window, null, &surface);
-    if (result != .success) return error.SurfaceCreationFailed;
-    return surface;
 }
 
 pub fn getTime() f64 {

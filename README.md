@@ -1,13 +1,13 @@
 # heavy-slug
 
-GPU text rendering library for Zig, implementing the [Slug algorithm](https://jcgt.org/published/0006/02/02/) (Eric Lengyel) for exact quadratic Bezier coverage. Renders text entirely on the GPU using Vulkan 1.4 mesh shaders -- no CPU rasterization, no texture atlases.
+GPU text rendering library for Zig, implementing the [Slug algorithm](https://jcgt.org/published/0006/02/02/) (Eric Lengyel) for exact quadratic Bezier coverage. Renders text entirely on the GPU through opt-in Vulkan SPIR-V 1.6 or macOS Metal 4 mesh-shader backends -- no CPU rasterization, no texture atlases.
 
 ## How it works
 
 1. **Shape** -- HarfBuzz performs Unicode text shaping (bidi, ligatures, kerning)
 2. **Encode** -- HarfBuzz GPU encodes glyph outlines into Slug-format blobs (quadratic Bezier bands)
-3. **Cache** -- Two-tier glyph cache (hot/cold LRU) with promotion queue maps glyphs to bindless storage buffer descriptors
-4. **Dispatch** -- Task shader frustum-culls via wave ballot, mesh shader emits dilated quads from precomputed payload, fragment shader evaluates exact coverage per-pixel
+3. **Cache** -- Two-tier glyph cache (hot/cold LRU) with promotion queue maps glyphs to backend storage
+4. **Dispatch** -- Task/object shader frustum-culls glyphs, mesh shader emits dilated quads from precomputed payload, fragment shader evaluates exact coverage per-pixel
 
 No intermediate bitmaps. Glyphs are resolution-independent and render crisply at any zoom level.
 
@@ -16,6 +16,7 @@ No intermediate bitmaps. Glyphs are resolution-independent and render crisply at
 - **Build**: Zig 0.16.0
 - **Core module**: FreeType + HarfBuzz are built from source
 - **Vulkan backend**: `slangc` on `PATH`, Vulkan 1.4 with `VK_EXT_mesh_shader` and `VK_EXT_robustness2`
+- **Metal backend**: macOS with a Metal mesh-shader capable GPU, GLFW Cocoa support, and `slangc` on `PATH`
 
 ## Quick start
 
@@ -31,13 +32,16 @@ zig build test -Dvulkan=true
 
 # Windows/Linux Vulkan demo
 zig build run -Ddemo=true -Ddemo-backend=vulkan_spirv16
+
+# macOS Metal 4 demo
+zig build run -Ddemo=true -Ddemo-backend=metal4
 ```
 
-The Windows/Linux demo renders lorem ipsum text with pan (left-drag), zoom (scroll), rotation (right-drag with momentum), dark mode (**B**), reset (**R**), and an FPS counter. Press **ESC** to exit. macOS selects the Metal 4 demo entry point; the Metal renderer is not implemented yet.
+The Windows/Linux demo renders lorem ipsum text with pan (left-drag), zoom (scroll), rotation (right-drag with momentum), dark mode (**B**), reset (**R**), and an FPS counter. The macOS demo creates a GLFW Cocoa window, compiles Slang-generated Metal 4 MSL at runtime, and drives a Metal mesh pipeline through a small ObjC++ bridge. Press **ESC** to exit.
 
 ## Usage
 
-`heavy_slug` is the core module. It provides font shaping, glyph encoding, and PGA math without importing Vulkan. The Vulkan renderer is a separate opt-in module, `heavy_slug_vulkan`.
+`heavy_slug` is the core module. It provides font shaping, glyph encoding, cache/pool utilities, and PGA math without importing a graphics API. Renderers are backend modules: `heavy_slug_vulkan` for Vulkan SPIR-V 1.6 and `heavy_slug_metal` for macOS Metal 4.
 
 ```zig
 const heavy_slug = @import("heavy_slug");
@@ -67,6 +71,18 @@ try text_renderer.drawText(font, "Hello, world!", pga.Motor.fromTranslation(100,
 text_renderer.flush(cmd_buf, projection_matrix, .{ viewport_w, viewport_h });
 ```
 
+The Metal API follows the same ownership pattern. Create a context from a native `NSWindow` with `initForCocoaWindow`, or use `initForGlfwWindow` in the demo:
+
+```zig
+const heavy_slug_metal = @import("heavy_slug_metal");
+
+var ctx = try heavy_slug_metal.Context.initForGlfwWindow(@ptrCast(window));
+defer ctx.deinit();
+
+var text_renderer = try heavy_slug_metal.TextRenderer.init(ctx, allocator, .{});
+defer text_renderer.deinit();
+```
+
 Glyph positioning uses 2D PGA motors (`Motor`) -- compose translations, rotations, and transforms with a single type that maps directly to GPU memory.
 
 ## Architecture
@@ -87,10 +103,18 @@ src/
     descriptors.zig   -- Bindless descriptor table with batched writes, auto-generated GPU structs
     pipeline.zig      -- Mesh shader pipeline, embedded SPIR-V
     renderer.zig      -- TextRenderer: the public rendering API
+  metal/
+    root.zig          -- Metal backend API
+    renderer.zig      -- TextRenderer backed by a Metal glyph-pool buffer
+    bridge.h          -- C ABI for Zig -> Metal host bridge
+    bridge.mm         -- ObjC++ Cocoa + CAMetalLayer + Metal mesh pipeline
   math/
     pga.zig           -- 2D PGA motors, SIMD via @Vector(4,f32)
+  demo/
+    glfw.zig          -- GLFW wrapper
+    metal4_main.zig   -- macOS Metal 4 demo entry point
 shaders/
-    slug_task.slang   -- Task shader: frustum cull + wave ballot compaction
+    slug_task.slang   -- Task/object shader: frustum cull + compaction
     slug_mesh.slang   -- Mesh shader: dilated quad from precomputed payload
     slug_fragment.slang -- Fragment shader: Slug band coverage
     slug_common.slang -- Shared types, constants, BlobReader
@@ -112,7 +136,7 @@ All compiled from source by `zig build` -- no system packages required.
 | [vulkan-zig](https://github.com/Snektron/vulkan-zig) | pinned upstream | Vulkan binding generation |
 | [GLFW](https://www.glfw.org/) | 3.4 | Window + input (demo only) |
 
-`vulkan`, `vulkan_headers`, and `glfw_src` are lazy dependencies. Vulkan packages are fetched only for `-Dvulkan=true` or Windows/Linux demo builds; GLFW is fetched only for that demo path. `zig build shaders` only requires `slangc`.
+`vulkan`, `vulkan_headers`, and `glfw_src` are lazy dependencies. Vulkan packages are fetched only for `-Dvulkan=true` or Windows/Linux demo builds; GLFW is fetched only for demo builds. Metal uses system frameworks through the ObjC++ bridge. Shader build steps require `slangc`.
 
 ## Building
 
@@ -120,11 +144,14 @@ All compiled from source by `zig build` -- no system packages required.
 zig build                             # library (debug)
 zig build -Doptimize=ReleaseFast      # library (release, ThinLTO on C deps)
 zig build -Dvulkan=true               # configure the Vulkan backend module
+zig build -Dmetal=true                # configure the Metal backend module
 zig build test                        # library + build tool tests
 zig build test -Dvulkan=true          # core + Vulkan backend tests
-zig build shaders                     # compile Slang -> SPIR-V only
+zig build test -Dmetal=true           # core + Metal backend tests
+zig build shaders                     # compile Slang -> SPIR-V
+zig build metal-shaders               # compile Slang -> Metal 4 MSL
 zig build run -Ddemo=true -Ddemo-backend=vulkan_spirv16  # Windows/Linux Vulkan demo
-zig build run -Ddemo=true -Ddemo-backend=metal4          # macOS Metal 4 demo entry point
+zig build run -Ddemo=true -Ddemo-backend=metal4          # macOS Metal 4 demo
 ```
 
 ## License

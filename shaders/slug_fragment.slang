@@ -7,8 +7,13 @@ import slug_common;
 
 // --- Resource bindings ---
 
+#if HEAVY_SLUG_METAL
+[[vk::binding(0, 0)]]
+ByteAddressBuffer glyphPool : register(t0);
+#else
 [[vk::binding(0, 0)]]
 ByteAddressBuffer glyphBlobs[];
+#endif
 
 // --- Interpolants from mesh shader ---
 
@@ -119,7 +124,12 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
         return 0.0;
 
     // Pixel dimensions in em-space.
-    float2 emsPerPixel = fwidth(renderCoord);
+    float2 emsPerPixel =
+#if HEAVY_SLUG_METAL
+        abs(ddx(renderCoord)) + abs(ddy(renderCoord));
+#else
+        fwidth(renderCoord);
+#endif
     float2 pixelsPerEm = 1.0 / emsPerPixel;
 
     // Compute band indices from render coordinates.
@@ -228,7 +238,13 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
 float4 fragmentMain(FragmentInput input) : SV_Target
 {
     BlobReader blob;
+#if HEAVY_SLUG_METAL
+    blob.buf = glyphPool;
+    blob.base = input.descriptorIndex;
+#else
     blob.buf = glyphBlobs[input.descriptorIndex];
+    blob.base = 0;
+#endif
 
     float coverage = slugRender(blob, input.texcoord, input.flags);
     return input.color * coverage;
