@@ -1,57 +1,48 @@
 const std = @import("std");
 
+const DemoBackend = enum {
+    auto,
+    vulkan_spirv16,
+    metal4,
+};
+
+const ResolvedDemoBackend = enum {
+    vulkan_spirv16,
+    metal4,
+};
+
+const SpirvShaders = struct {
+    task: std.Build.LazyPath,
+    mesh: std.Build.LazyPath,
+    fragment: std.Build.LazyPath,
+    module: *std.Build.Module,
+};
+
+const VulkanBackend = struct {
+    module: *std.Build.Module,
+    bindings: *std.Build.Module,
+    headers: *std.Build.Dependency,
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const build_demo = b.option(bool, "demo", "Build demo executable (requires GLFW)") orelse false;
-
-    // --- Vulkan bindings: generate from Vulkan-Headers vk.xml ---
-    const registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml");
-    const vk_gen = b.dependency("vulkan", .{}).artifact("vulkan-zig-generator");
-    const vk_generate_cmd = b.addRunArtifact(vk_gen);
-    vk_generate_cmd.addFileArg(registry);
-    const vulkan_zig = b.addModule("vulkan-zig", .{
-        .root_source_file = vk_generate_cmd.addOutputFileArg("vk.zig"),
-    });
+    const build_demo = b.option(bool, "demo", "Build demo executable") orelse false;
+    const demo_backend_opt = b.option(DemoBackend, "demo-backend", "Demo backend: auto, vulkan_spirv16, metal4") orelse .auto;
+    const demo_backend = resolveDemoBackend(target.result.os.tag, demo_backend_opt);
+    const build_vulkan = (b.option(bool, "vulkan", "Build the Vulkan SPIR-V 1.6 backend module") orelse false) or
+        (build_demo and demo_backend == .vulkan_spirv16);
 
     // --- Shader compilation: Slang -> SPIR-V ---
     const shader_step = b.step("shaders", "Compile Slang shaders to SPIR-V");
-
-    const task_spv = compileSlangShader(b, "slug_task.spv", "shaders/slug_task.slang", "taskMain", "amplification", "spvGroupNonUniform+spvGroupNonUniformBallot");
-    const mesh_spv = compileSlangShader(b, "slug_mesh.spv", "shaders/slug_mesh.slang", "meshMain", "mesh", "");
-    const frag_spv = compileSlangShader(b, "slug_fragment.spv", "shaders/slug_fragment.slang", "fragmentMain", "fragment", "");
-
-    const shader_wf = b.addWriteFiles();
-    _ = shader_wf.addCopyFile(task_spv, "slug_task.spv");
-    _ = shader_wf.addCopyFile(mesh_spv, "slug_mesh.spv");
-    _ = shader_wf.addCopyFile(frag_spv, "slug_fragment.spv");
-    const spv_zig = shader_wf.add("spv.zig",
-        \\pub const task: []align(4) const u8 = @alignCast(@embedFile("slug_task.spv"));
-        \\pub const mesh: []align(4) const u8 = @alignCast(@embedFile("slug_mesh.spv"));
-        \\pub const fragment: []align(4) const u8 = @alignCast(@embedFile("slug_fragment.spv"));
-    );
-    const shader_spv_mod = b.addModule("shader_spv", .{ .root_source_file = spv_zig });
-
-    const install_task = b.addInstallFile(task_spv, "shaders/slug_task.spv");
-    const install_mesh = b.addInstallFile(mesh_spv, "shaders/slug_mesh.spv");
-    const install_frag = b.addInstallFile(frag_spv, "shaders/slug_fragment.spv");
-    shader_step.dependOn(&install_task.step);
-    shader_step.dependOn(&install_mesh.step);
-    shader_step.dependOn(&install_frag.step);
-
-    // --- GPU struct generation: slangc reflection -> extern struct definitions ---
-    const reflection_json = generateReflectionJson(b);
-    const gpu_structs_zig = generateGpuStructs(b, reflection_json);
-    const gpu_structs_mod = b.addModule("gpu_structs", .{ .root_source_file = gpu_structs_zig });
+    const spirv = buildSpirvShaders(b);
+    addShaderInstallSteps(b, shader_step, spirv);
 
     // --- Library module ---
     const mod = b.addModule("heavy_slug", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
     });
-    mod.addImport("vulkan", vulkan_zig);
-    mod.addImport("shader_spv", shader_spv_mod);
-    mod.addImport("gpu_structs", gpu_structs_mod);
 
     // --- C libraries (library deps only: FreeType + HarfBuzz) ---
     const ft_dep = b.dependency("freetype_src", .{});
@@ -66,7 +57,7 @@ pub fn build(b: *std.Build) void {
     // --- ThinLTO for C libraries in release mode ---
     // Applied to C static libs only. Zig executables with -flto=thin trigger
     // unresolved compiler-rt/musl symbols (frexpf, isnan, __DENORM, etc.)
-    // during linking -- a known Zig limitation as of 0.16.0-dev.
+    // during linking -- a known Zig limitation observed in the 0.16 toolchain.
     const use_lto = optimize != .Debug;
     if (use_lto) {
         ft_lib.lto = .thin;
@@ -81,37 +72,24 @@ pub fn build(b: *std.Build) void {
         .target = b.graph.host,
     }) })).step);
 
-    // --- Demo executable (opt-in via -Ddemo, default true) ---
+    const vulkan_backend = if (build_vulkan) buildVulkanBackend(b, target, mod, spirv) orelse return else null;
+    if (vulkan_backend) |backend| {
+        test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = backend.module })).step);
+    }
+
+    // --- Demo executable (opt-in via -Ddemo) ---
     if (build_demo) {
-        const exe = b.addExecutable(.{
-            .name = "heavy_slug",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/main.zig"),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "heavy_slug", .module = mod },
-                    .{ .name = "vulkan", .module = vulkan_zig },
-                },
-            }),
-        });
-
-        // GLFW (demo-only dependency, lazy in build.zig.zon)
-        const glfw_dep = b.lazyDependency("glfw_src", .{}) orelse return;
-        const glfw_lib = buildGlfw(b, glfw_dep, target, optimize);
-        exe.root_module.linkLibrary(glfw_lib);
-        exe.root_module.addIncludePath(glfw_dep.path("include"));
-
-        if (target.result.os.tag == .linux) {
-            exe.root_module.linkSystemLibrary("wayland-client", .{});
-            exe.root_module.linkSystemLibrary("wayland-cursor", .{});
-            exe.root_module.linkSystemLibrary("wayland-egl", .{});
-            exe.root_module.linkSystemLibrary("xkbcommon", .{});
-        }
-
-        if (use_lto) {
-            glfw_lib.lto = .thin;
-        }
+        const exe = switch (demo_backend) {
+            .vulkan_spirv16 => buildVulkanDemo(
+                b,
+                target,
+                optimize,
+                mod,
+                vulkan_backend.?,
+                use_lto,
+            ) orelse return,
+            .metal4 => buildMetalDemo(b, target, optimize),
+        };
 
         b.installArtifact(exe);
 
@@ -127,6 +105,163 @@ pub fn build(b: *std.Build) void {
         // Demo executable tests
         test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = exe.root_module })).step);
     }
+}
+
+fn resolveDemoBackend(
+    os: std.Target.Os.Tag,
+    requested: DemoBackend,
+) ResolvedDemoBackend {
+    const resolved: ResolvedDemoBackend = switch (requested) {
+        .auto => switch (os) {
+            .windows, .linux => .vulkan_spirv16,
+            .macos => .metal4,
+            else => std.process.fatal("unsupported demo target OS: {s}", .{@tagName(os)}),
+        },
+        .vulkan_spirv16 => .vulkan_spirv16,
+        .metal4 => .metal4,
+    };
+
+    switch (resolved) {
+        .vulkan_spirv16 => switch (os) {
+            .windows, .linux => {},
+            else => std.process.fatal("demo-backend=vulkan_spirv16 is supported on Windows/Linux targets; {s} selects the Metal 4 demo path", .{@tagName(os)}),
+        },
+        .metal4 => if (os != .macos) {
+            std.process.fatal("demo-backend=metal4 is supported only on macOS targets", .{});
+        },
+    }
+
+    return resolved;
+}
+
+fn buildSpirvShaders(b: *std.Build) SpirvShaders {
+    const task_spv = compileSlangShader(b, "slug_task.spv", "shaders/slug_task.slang", "taskMain", "amplification", "spvGroupNonUniform+spvGroupNonUniformBallot");
+    const mesh_spv = compileSlangShader(b, "slug_mesh.spv", "shaders/slug_mesh.slang", "meshMain", "mesh", "");
+    const frag_spv = compileSlangShader(b, "slug_fragment.spv", "shaders/slug_fragment.slang", "fragmentMain", "fragment", "");
+
+    const shader_wf = b.addWriteFiles();
+    _ = shader_wf.addCopyFile(task_spv, "slug_task.spv");
+    _ = shader_wf.addCopyFile(mesh_spv, "slug_mesh.spv");
+    _ = shader_wf.addCopyFile(frag_spv, "slug_fragment.spv");
+    const spv_zig = shader_wf.add("spv.zig",
+        \\pub const task: []align(4) const u8 = @alignCast(@embedFile("slug_task.spv"));
+        \\pub const mesh: []align(4) const u8 = @alignCast(@embedFile("slug_mesh.spv"));
+        \\pub const fragment: []align(4) const u8 = @alignCast(@embedFile("slug_fragment.spv"));
+    );
+
+    return .{
+        .task = task_spv,
+        .mesh = mesh_spv,
+        .fragment = frag_spv,
+        .module = b.addModule("shader_spv", .{ .root_source_file = spv_zig }),
+    };
+}
+
+fn addShaderInstallSteps(
+    b: *std.Build,
+    shader_step: *std.Build.Step,
+    spirv: SpirvShaders,
+) void {
+    const install_task = b.addInstallFile(spirv.task, "shaders/slug_task.spv");
+    const install_mesh = b.addInstallFile(spirv.mesh, "shaders/slug_mesh.spv");
+    const install_frag = b.addInstallFile(spirv.fragment, "shaders/slug_fragment.spv");
+    shader_step.dependOn(&install_task.step);
+    shader_step.dependOn(&install_mesh.step);
+    shader_step.dependOn(&install_frag.step);
+}
+
+fn buildVulkanBackend(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    core_mod: *std.Build.Module,
+    spirv: SpirvShaders,
+) ?VulkanBackend {
+    const vk_headers = b.lazyDependency("vulkan_headers", .{});
+    const vk_dep = b.lazyDependency("vulkan", .{});
+    if (vk_headers == null or vk_dep == null) return null;
+
+    const registry = vk_headers.?.path("registry/vk.xml");
+    const vk_gen = vk_dep.?.artifact("vulkan-zig-generator");
+    const vk_generate_cmd = b.addRunArtifact(vk_gen);
+    vk_generate_cmd.addFileArg(registry);
+    const vulkan_zig = b.addModule("vulkan-zig", .{
+        .root_source_file = vk_generate_cmd.addOutputFileArg("vk.zig"),
+    });
+
+    const reflection_json = generateReflectionJson(b);
+    const gpu_structs_zig = generateGpuStructs(b, reflection_json);
+    const gpu_structs_mod = b.addModule("gpu_structs", .{ .root_source_file = gpu_structs_zig });
+
+    const mod = b.addModule("heavy_slug_vulkan", .{
+        .root_source_file = b.path("src/vulkan/root.zig"),
+        .target = target,
+    });
+    mod.addImport("heavy_slug", core_mod);
+    mod.addImport("vulkan", vulkan_zig);
+    mod.addImport("shader_spv", spirv.module);
+    mod.addImport("gpu_structs", gpu_structs_mod);
+
+    return .{
+        .module = mod,
+        .bindings = vulkan_zig,
+        .headers = vk_headers.?,
+    };
+}
+
+fn buildVulkanDemo(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    core_mod: *std.Build.Module,
+    backend: VulkanBackend,
+    use_lto: bool,
+) ?*std.Build.Step.Compile {
+    const exe = b.addExecutable(.{
+        .name = "heavy_slug",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "heavy_slug", .module = core_mod },
+                .{ .name = "heavy_slug_vulkan", .module = backend.module },
+                .{ .name = "vulkan", .module = backend.bindings },
+            },
+        }),
+    });
+
+    const glfw_dep = b.lazyDependency("glfw_src", .{}) orelse return null;
+    const glfw_lib = buildGlfw(b, glfw_dep, backend.headers, target, optimize);
+    exe.root_module.linkLibrary(glfw_lib);
+    exe.root_module.addIncludePath(glfw_dep.path("include"));
+
+    if (target.result.os.tag == .linux) {
+        exe.root_module.linkSystemLibrary("wayland-client", .{});
+        exe.root_module.linkSystemLibrary("wayland-cursor", .{});
+        exe.root_module.linkSystemLibrary("wayland-egl", .{});
+        exe.root_module.linkSystemLibrary("xkbcommon", .{});
+    }
+
+    if (use_lto) {
+        glfw_lib.lto = .thin;
+    }
+
+    return exe;
+}
+
+fn buildMetalDemo(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Step.Compile {
+    return b.addExecutable(.{
+        .name = "heavy_slug_metal4",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/demo/metal4_main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
 }
 
 fn compileSlangShader(
@@ -189,11 +324,10 @@ fn generateGpuStructs(
 fn buildGlfw(
     b: *std.Build,
     glfw_dep: *std.Build.Dependency,
+    vk_headers: *std.Build.Dependency,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
 ) *std.Build.Step.Compile {
-    const vk_headers = b.dependency("vulkan_headers", .{});
-
     const lib = b.addLibrary(.{
         .name = "glfw",
         .linkage = .static,

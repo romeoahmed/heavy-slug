@@ -2,20 +2,22 @@
 
 ## Project Structure & Module Organization
 
-`heavy-slug` is a Zig GPU text rendering library. The public module is `src/root.zig`, with the demo entry point in `src/main.zig`. Core code is grouped by domain: `src/font/` wraps FreeType and HarfBuzz, `src/gpu/` contains Vulkan context, descriptors, pipeline, cache, pool, and renderer code, and `src/math/` contains PGA motor math. Demo-specific Vulkan and GLFW helpers live in `src/demo/`. Slang shaders are in `shaders/`; `tools/layout_gen.zig` generates Zig GPU structs from Slang reflection. Test assets currently live in `assets/`, especially `assets/Inter-Regular.otf`.
+`heavy-slug` is a Zig text rendering library split into a core module and an opt-in Vulkan backend. The public core module is `src/root.zig`; it exports `font`, `pga`, `cache`, and `pool` without importing Vulkan. Vulkan SPIR-V 1.6 code lives in `src/vulkan/` and is exposed as `heavy_slug_vulkan` when built with `-Dvulkan=true` or the Windows/Linux demo backend. Demo entry points live in `src/main.zig` for Vulkan and `src/demo/metal4_main.zig` for the macOS Metal 4 path. Slang shaders are in `shaders/`; `tools/layout_gen.zig` generates Zig GPU structs from Slang reflection. Test assets live in `assets/`.
 
 ## Build, Test, and Development Commands
 
-- `zig build` builds the library, compiles shaders, generates Vulkan bindings, and builds C dependencies.
+- `zig build` configures the core library and builds core C dependencies when a compile/test step needs them.
 - `zig build -Doptimize=ReleaseFast` builds an optimized release library with ThinLTO on C static libraries.
+- `zig build -Dvulkan=true` enables the Vulkan backend module and lazy-loads Vulkan packages.
 - `zig build shaders` compiles Slang shaders to SPIR-V only.
 - `zig build test` runs library and `tools/layout_gen.zig` tests.
-- `zig build -Ddemo=true` builds the interactive demo and fetches GLFW.
-- `zig build run -Ddemo=true` runs the demo; requires Vulkan 1.4 with mesh shader support and `slangc` on `PATH`.
+- `zig build test -Dvulkan=true` also runs Vulkan backend tests.
+- `zig build run -Ddemo=true -Ddemo-backend=vulkan_spirv16` runs the Windows/Linux Vulkan demo; requires Vulkan 1.4 mesh shaders and `slangc`.
+- `zig build run -Ddemo=true -Ddemo-backend=metal4` selects the macOS Metal 4 demo entry point.
 
 ## Coding Style & Naming Conventions
 
-Run `zig fmt src/ tools/` before submitting changes. Use idiomatic Zig naming: files and modules are lowercase, public types use `PascalCase`, functions and fields use `camelCase`, and constants use descriptive lower_snake or existing local style. Keep shader struct layouts driven by Slang reflection; do not hand-edit generated GPU structs. Prefer small domain modules over broad utility files.
+Run `zig fmt src/ tools/` before submitting changes. Use idiomatic Zig naming: files and modules are lowercase, public types use `PascalCase`, functions and fields use `camelCase`, and constants use descriptive lower_snake or existing local style. Keep shader struct layouts driven by Slang reflection; do not hand-edit generated GPU structs. Keep backend-specific APIs under `src/vulkan/` or `src/demo/`, not the core root module.
 
 ## Testing Guidelines
 
@@ -27,4 +29,4 @@ Recent history uses Conventional Commit-style prefixes such as `build:`, `docs:`
 
 ## Security & Configuration Tips
 
-Dependencies are pinned in `build.zig.zon`; update them with `zig fetch --save <url>`. Keep `glfw_src` lazy so normal library builds avoid demo-only downloads. Do not commit generated `zig-out/` artifacts.
+Dependencies are pinned in `build.zig.zon`; update them with `zig fetch --save <url>`. Keep `vulkan`, `vulkan_headers`, and `glfw_src` lazy so normal core builds avoid backend-only downloads. Do not commit generated `zig-out/` artifacts.

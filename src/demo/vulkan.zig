@@ -5,7 +5,7 @@
 const std = @import("std");
 const vk = @import("vulkan");
 const glfw = @import("glfw.zig");
-const gpu_context = @import("heavy_slug").gpu_context;
+const gpu_context = @import("heavy_slug_vulkan").context;
 
 // ============================================================
 // Dispatch types

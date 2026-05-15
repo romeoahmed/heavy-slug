@@ -1,14 +1,15 @@
 const std = @import("std");
 const vk = @import("vulkan");
+const heavy_slug = @import("heavy_slug");
 const gpu_context = @import("context.zig");
 const descriptors = @import("descriptors.zig");
 const pipeline_mod = @import("pipeline.zig");
-const pool_mod = @import("pool.zig");
-const cache_mod = @import("cache.zig");
-const ft = @import("../font/ft.zig");
-const hb = @import("../font/hb.zig");
-const glyph_mod = @import("../font/glyph.zig");
-const pga = @import("../math/pga.zig");
+const pool_mod = heavy_slug.pool;
+const cache_mod = heavy_slug.cache;
+const ft = heavy_slug.font.ft;
+const hb = heavy_slug.font.hb;
+const glyph_mod = heavy_slug.font.glyph;
+const pga = heavy_slug.pga;
 
 fn emBoxFromExtents(ext: hb.GlyphExtents) cache_mod.EmBox {
     const x0: f32 = @floatFromInt(ext.x_bearing);

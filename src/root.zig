@@ -1,37 +1,28 @@
-//! heavy_slug — GPU text rendering library.
+//! heavy_slug core API: font shaping, glyph encoding, and math.
 
 const std = @import("std");
-const ft = @import("font/ft.zig");
-const hb = @import("font/hb.zig");
-const glyph = @import("font/glyph.zig");
+pub const font = @import("font/root.zig");
 pub const pga = @import("math/pga.zig");
-pub const gpu_context = @import("gpu/context.zig");
-const descriptors = @import("gpu/descriptors.zig");
-const pool = @import("gpu/pool.zig");
-const cache = @import("gpu/cache.zig");
-const pipeline = @import("gpu/pipeline.zig");
-pub const renderer = @import("gpu/renderer.zig");
+pub const cache = @import("cache/glyph.zig");
+pub const pool = @import("cache/pool.zig");
+
+pub const FontContext = font.FontContext;
+pub const EncodedGlyph = font.EncodedGlyph;
 
 const test_font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
 
 test {
-    _ = ft;
-    _ = hb;
-    _ = glyph;
+    _ = font;
     _ = pga;
-    _ = gpu_context;
-    _ = descriptors;
     _ = pool;
     _ = cache;
-    _ = pipeline;
-    _ = renderer;
 }
 
 test "integration: shape text and encode all unique glyphs" {
-    const ft_lib = try ft.Library.init();
+    const ft_lib = try font.ft.Library.init();
     defer ft_lib.deinit();
 
-    var ctx = try glyph.FontContext.init(ft_lib, test_font_path, 32);
+    var ctx = try font.FontContext.init(ft_lib, test_font_path, 32);
     defer ctx.deinit();
 
     const buf = try ctx.shapeText("Heavy Slug", null, null);
@@ -66,10 +57,10 @@ test "integration: shape text and encode all unique glyphs" {
 }
 
 test "integration: multiple texts through same FontContext" {
-    const ft_lib = try ft.Library.init();
+    const ft_lib = try font.ft.Library.init();
     defer ft_lib.deinit();
 
-    var ctx = try glyph.FontContext.init(ft_lib, test_font_path, 24);
+    var ctx = try font.FontContext.init(ft_lib, test_font_path, 24);
     defer ctx.deinit();
 
     const texts = [_][]const u8{ "Hello", "World", "Zig" };
@@ -188,10 +179,10 @@ test "integration: removeFont reclaims all pool and cache resources" {
 }
 
 test "integration: motor positions shaped glyphs monotonically" {
-    const ft_lib = try ft.Library.init();
+    const ft_lib = try font.ft.Library.init();
     defer ft_lib.deinit();
 
-    var ctx = try glyph.FontContext.init(ft_lib, test_font_path, 24);
+    var ctx = try font.FontContext.init(ft_lib, test_font_path, 24);
     defer ctx.deinit();
 
     const buf = try ctx.shapeText("Hello World", null, null);

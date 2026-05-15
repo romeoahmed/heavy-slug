@@ -1,21 +1,22 @@
 # CLAUDE.md
 
-**heavy-slug** -- Zig 0.16.0-dev GPU text renderer using the Slug algorithm (Eric Lengyel) for exact quadratic Bezier coverage via Vulkan 1.4 `VK_EXT_mesh_shader`. Shaders compiled from Slang to SPIR-V 1.6. Library: `src/root.zig`. Demo: `src/main.zig`.
+**heavy-slug** -- Zig 0.16.0 text rendering library. Core API (`src/root.zig`) covers font shaping, HarfBuzz GPU glyph encoding, cache/pool utilities, and PGA math without importing Vulkan. The opt-in Vulkan SPIR-V 1.6 backend is `src/vulkan/root.zig` / module `heavy_slug_vulkan`.
 
 ## Commands
 
 ```bash
 zig fmt src/ tools/                    # format
-zig build                              # build library (shaders + C deps)
-zig build -Ddemo=true                  # build library + demo executable
-zig build run -Ddemo=true [-- args]    # run demo
+zig build                              # configure core library
+zig build -Dvulkan=true                # configure Vulkan backend module
 zig build test                         # run library + layout_gen tests
-zig build test -Ddemo=true             # run all tests (library + demo)
+zig build test -Dvulkan=true           # run core + Vulkan backend tests
 zig build shaders                      # compile Slang -> SPIR-V only
 zig build -Doptimize=ReleaseFast       # release build (ThinLTO on C deps)
+zig build run -Ddemo=true -Ddemo-backend=vulkan_spirv16 [-- args] # Windows/Linux Vulkan demo
+zig build run -Ddemo=true -Ddemo-backend=metal4 [-- args]         # macOS Metal 4 entry point
 ```
 
-`-Ddemo=false` (default) builds library only -- GLFW is not fetched or compiled. `-Ddemo=true` adds the demo executable, GLFW, run step, and demo tests. Release builds enable ThinLTO on C static libraries (FreeType, HarfBuzz, GLFW) for cross-language optimization. Zig executables cannot use LTO due to unresolved compiler-rt/musl symbols (`frexpf`, `isnan`, `__DENORM`, `wmemchr`, etc.) in the ThinLTO link pipeline (Zig 0.16.0-dev limitation, confirmed on `0.16.0-dev.3144`).
+`-Ddemo=false` (default) avoids demo-only dependencies. `-Dvulkan=true` or `-Ddemo=true -Ddemo-backend=vulkan_spirv16` lazy-loads `vulkan` and `vulkan_headers`; the Vulkan demo also lazy-loads GLFW. `demo-backend=auto` selects Vulkan SPIR-V 1.6 on Windows/Linux and the Metal 4 entry point on macOS. Release builds enable ThinLTO on C static libraries (FreeType, HarfBuzz, GLFW) for cross-language optimization. Zig executables cannot use LTO due to unresolved compiler-rt/musl symbols in the ThinLTO link pipeline.
 
 ## Commits
 
@@ -28,17 +29,20 @@ Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 
 ```
 src/
-  root.zig            -- public API re-exports (pga, gpu_context, renderer)
-  main.zig            -- demo executable
+  root.zig            -- core API re-exports (font, pga, cache, pool)
+  main.zig            -- Windows/Linux Vulkan demo executable
   font/
+    root.zig          -- font API barrel
     ft.zig            -- FreeType wrapper: Library, Face, rawHandle
     hb.zig            -- HarfBuzz wrapper: Buffer, Font, GpuDraw, Blob
     glyph.zig         -- FontContext (ft+hb+gpu_draw), EncodedGlyph
-  gpu/
+  cache/
+    glyph.zig         -- GlyphCache: hot/cold two-tier LRU, promotion queue
+    pool.zig          -- PoolAllocator: bump + sorted best-fit free-list with coalescing
+  vulkan/
+    root.zig          -- Vulkan backend API: Context, TextRenderer, dispatch aliases
     context.zig       -- VulkanContext, DeviceDispatch, InstanceDispatch, feature validation
     descriptors.zig   -- DescriptorTable (batched writes), auto-generated GlyphCommand/PushConstants
-    pool.zig          -- PoolAllocator: bump + sorted best-fit free-list with coalescing
-    cache.zig         -- GlyphCache: hot/cold two-tier LRU, promotion queue, same-frame dedup
     pipeline.zig      -- Mesh+fragment pipeline, embedded SPIR-V, dynamic rendering
     renderer.zig      -- TextRenderer: init/deinit, loadFont, begin/drawText/flush, Stats
   math/
@@ -46,6 +50,7 @@ src/
   demo/
     glfw.zig          -- GLFW 3.4 wrapper with manual Vulkan externs
     vulkan.zig        -- Demo Vulkan bootstrap: instance, device, swapchain, frame sync
+    metal4_main.zig   -- macOS Metal 4 demo entry point scaffold
 shaders/
   pga.slang           -- Motor struct (mirrors pga.zig)
   slug_common.slang   -- GlyphCommand, PushConstants, BlobReader, kTaskGroupSize
@@ -62,10 +67,10 @@ tools/
 
 | Key | Package | Purpose |
 |-----|---------|---------|
-| `vulkan` | Snektron/vulkan-zig | Vulkan bindings generator |
-| `vulkan_headers` | KhronosGroup/Vulkan-Headers 1.4.349 | `registry/vk.xml` |
+| `vulkan` | Snektron/vulkan-zig | Vulkan bindings generator (lazy) |
+| `vulkan_headers` | KhronosGroup/Vulkan-Headers 1.4.349 | `registry/vk.xml` (lazy) |
 | `freetype_src` | FreeType 2.14.3 | Font loading |
-| `harfbuzz_src` | HarfBuzz 14.1.0 | Unicode shaping + HarfBuzz GPU |
+| `harfbuzz_src` | HarfBuzz 14.2.0 | Unicode shaping + HarfBuzz GPU |
 | `glfw_src` | GLFW 3.4 | Window + Vulkan surface (demo only) |
 
 Add/update: `zig fetch --save <url>` -- hashes are pinned automatically.
@@ -88,7 +93,7 @@ const vulkan_zig = b.addModule("vulkan-zig", .{
 // Define struct with ?vk.PfnXxx = null fields, then:
 vk.DeviceWrapperWithCustomDispatch(HeavySlugDispatch)
 ```
-Dispatch struct fields use **C names** (`vkCreateInstance`). Wrapper methods use **camelCase** (`createInstance`). See `src/gpu/context.zig`.
+Dispatch struct fields use **C names** (`vkCreateInstance`). Wrapper methods use **camelCase** (`createInstance`). See `src/vulkan/context.zig`.
 
 **Bool32** -- vulkan-zig `Bool32` is an enum. Use `.true`/`.false` for struct fields (not `vk.TRUE`/`vk.FALSE`). Use `vk.TRUE` only for comparison contexts like `waitForFences`.
 
@@ -170,7 +175,7 @@ Dispatch struct fields use **C names** (`vkCreateInstance`). Wrapper methods use
 
 **Integration tests** -- 8 cross-module integration tests in `src/root.zig` covering font pipeline (shape+encode, buffer reuse), cache+pool coordination (eviction, promotion, removeFont), and motor+font positioning (monotonic advance, composeTranslation equivalence, unitize drift recovery). All run without a live Vulkan device.
 
-## Zig 0.16.0-dev Notes
+## Zig 0.16.0 Notes
 
 - `b.addLibrary(.{ .linkage = .static })` -- `b.addStaticLibrary()` was removed
 - `std.heap.DebugAllocator` -- `GeneralPurposeAllocator` was renamed

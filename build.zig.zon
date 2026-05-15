@@ -15,10 +15,12 @@
         .vulkan = .{
             .url = "git+https://github.com/Snektron/vulkan-zig.git#b496a6a561ffbbeb530b0f9ed4e059f88c0723a5",
             .hash = "vulkan-0.0.0-r7Ytx7N9AwD7IZt5_XNHtkJ4G9qY0pCH-cpcOsbL8wzD",
+            .lazy = true,
         },
         .vulkan_headers = .{
             .url = "git+https://github.com/KhronosGroup/Vulkan-Headers.git#8cfaaa1d4deedc865e52a42e654c5ec0d7d75eb0",
             .hash = "N-V-__8AAGfhdwLcch-RCImEQbiTe8n0-ZfevT6sXEEfSuKT",
+            .lazy = true,
         },
         .glfw_src = .{
             .url = "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip",
@@ -30,5 +32,8 @@
         "build.zig",
         "build.zig.zon",
         "src",
+        "shaders",
+        "tools",
+        "assets",
     },
 }

@@ -1,9 +1,10 @@
 const std = @import("std");
 const heavy_slug = @import("heavy_slug");
+const heavy_slug_vulkan = @import("heavy_slug_vulkan");
 const glfw = @import("demo/glfw.zig");
 const demo_vk = @import("demo/vulkan.zig");
 const pga = heavy_slug.pga;
-const renderer_mod = heavy_slug.renderer;
+const renderer_mod = heavy_slug_vulkan.renderer;
 
 const lorem_lines = [_][]const u8{
     "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nullam tincidunt nibh",
