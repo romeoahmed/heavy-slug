@@ -3,7 +3,7 @@
 import abi;
 
 [[vk::binding(0, 0)]]
-ByteAddressBuffer glyphBlobs[];
+ByteAddressBuffer glyphPool;
 
 [[vk::binding(1, 0)]]
 StructuredBuffer<GlyphCommand> commands;

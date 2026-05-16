@@ -14,7 +14,7 @@
 
 struct hs_demo_metal_host {
     __strong id<MTLDevice> device;
-    __strong id<MTLCommandQueue> command_queue;
+    __strong id<MTL4CommandQueue> command_queue;
     __strong CAMetalLayer *layer;
 };
 
@@ -41,9 +41,9 @@ hs_demo_metal_host *hs_demo_metal_host_create(
             return nullptr;
         }
 
-        id<MTLCommandQueue> command_queue = [device newCommandQueue];
+        id<MTL4CommandQueue> command_queue = [device newMTL4CommandQueue];
         if (!command_queue) {
-            write_error(error_buffer, error_buffer_len, @"newCommandQueue returned nil");
+            write_error(error_buffer, error_buffer_len, @"newMTL4CommandQueue returned nil");
             return nullptr;
         }
 

@@ -21,7 +21,7 @@ const frames_in_flight = 3;
 pub const HostObjects = extern struct {
     /// Borrowed id<MTLDevice>; must outlive Context.
     device: *anyopaque,
-    /// Borrowed id<MTLCommandQueue>; must belong to device.
+    /// Borrowed id<MTL4CommandQueue>; must belong to device.
     command_queue: *anyopaque,
     /// Borrowed CAMetalLayer with device and pixelFormat already configured.
     layer: *anyopaque,

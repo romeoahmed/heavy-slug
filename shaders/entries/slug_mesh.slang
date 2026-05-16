@@ -56,13 +56,8 @@ void addShaderStat(uint index, uint value)
 BlobReader glyphBlob(uint glyphRef)
 {
     BlobReader blob;
-#if HEAVY_SLUG_METAL
     blob.buf = glyphPool;
     blob.base = glyphRef;
-#else
-    blob.buf = glyphBlobs[NonUniformResourceIndex(glyphRef)];
-    blob.base = 0;
-#endif
     return blob;
 }
 

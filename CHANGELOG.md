@@ -18,10 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Slang sources are split into `shaders/core/` and `shaders/entries/`** so shared modules and entry points have distinct ownership.
 - **Build logic split into `build/` modules** for dependency resolution, C libraries, shader compilation, backend modules, and demos.
 - **Root compatibility aliases removed** for old font/cache/pool/render paths; consumers should use top-level public types or explicit `heavy_slug.core.*` modules.
-- **README rewritten** as the canonical project overview with architecture, algorithm, backend boundaries, diagnostics, CI, and explicit credit to the Slug algorithm.
+- **README rewritten** as a richer canonical project overview with architecture, native cubic analytics, task/mesh shader culling, backend boundaries, diagnostics, CI, and explicit credit to the Slug algorithm.
 - **Shader resource bindings split by backend** under `shaders/backend_vulkan/` and `shaders/backend_metal/`.
 - **`GlyphStore` extracted** so cache metadata, byte-pool allocations, and deferred retirements have a single private owner.
 - **Vulkan command storage is now frame-ring buffered** and protected by completed `FrameToken` tracking before slot reuse.
+- **Vulkan glyph resources now use a single storage-buffer pool plus byte-offset `GlyphRef` values** instead of per-glyph bindless storage-buffer descriptor slots.
+- **Vulkan backend requirements simplified** to Vulkan 1.4 plus `VK_EXT_mesh_shader`; `VK_EXT_robustness2`, null descriptors, descriptor indexing, and update-after-bind are no longer required.
+- **Metal backend migrated to the Metal 4 core API** with host-supplied `MTL4CommandQueue`, per-frame `MTL4CommandAllocator`, `MTL4Compiler` pipeline creation, and per-frame `MTL4ArgumentTable` resource binding.
 - **Breaking:** `FontContext` was removed; font loading, shaping, and glyph encoding now live behind `FontSystem`, `LoadedFont`, `ShapePlan`, and `GlyphEncoder`.
 - **Glyph encoding now owns its blob format** by using HarfBuzz draw callbacks directly instead of `hb_gpu_draw_encode`, then raising all outline primitives into cubic spans.
 - **Cubic rendering regularized** by splitting cubic outlines at axis extrema and inflection points, preserving monotone control polygons after quantization, and using safeguarded Newton iteration with strict crossing tests in the fragment shader.
@@ -39,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Legacy source roots** `src/font/`, `src/cache/`, `src/render.zig`, `src/vulkan/`, and `src/metal/`; consumers now use top-level public types or explicit `heavy_slug.core.*` modules.
 - **Historical refactor planning docs** under `docs/`; the maintained architecture and algorithm overview now lives in `README.md`.
 - **Repository-local VS Code settings** (`.vscode/`) so editor configuration stays user-local.
+- **Unused Vulkan descriptor-slot allocator and descriptor limit validation** after the backend moved to single-pool glyph blob addressing.
 
 ## [2.0.0] - 2026-05-15
 

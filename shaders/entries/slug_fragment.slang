@@ -302,13 +302,8 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
 float4 fragmentMain(FragmentInput input) : SV_Target
 {
     BlobReader blob;
-#if HEAVY_SLUG_METAL
     blob.buf = glyphPool;
     blob.base = input.glyphRef;
-#else
-    blob.buf = glyphBlobs[NonUniformResourceIndex(input.glyphRef)];
-    blob.base = 0;
-#endif
 
     float coverage = slugRender(blob, input.texcoord, input.flags);
     return input.color * coverage;

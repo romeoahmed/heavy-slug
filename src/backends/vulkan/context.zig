@@ -7,10 +7,8 @@ const heavy_slug = @import("heavy_slug");
 const mesh_limits = heavy_slug.gpu.mesh_limits;
 
 /// Device extensions that callers must enable on the VkDevice.
-/// Descriptor indexing is validated through Vulkan 1.2 feature structs.
 const required_extensions = [_][*:0]const u8{
     "VK_EXT_mesh_shader",
-    "VK_EXT_robustness2",
 };
 
 /// Instance commands needed for device capability queries.
@@ -67,7 +65,6 @@ pub const VulkanContext = struct {
     physical_device: vk.PhysicalDevice,
     api_version: u32,
     memory_properties: vk.PhysicalDeviceMemoryProperties,
-    descriptor_indexing_properties: vk.PhysicalDeviceDescriptorIndexingProperties,
     mesh_shader_properties: vk.PhysicalDeviceMeshShaderPropertiesEXT,
 
     /// Required device extensions. Enable all of these in VkDeviceCreateInfo.
@@ -114,20 +111,14 @@ pub const VulkanContext = struct {
         try validateDeviceProperties(properties2.properties.api_version, mesh_properties);
 
         var mesh_features = vk.PhysicalDeviceMeshShaderFeaturesEXT{};
-        var robustness_features = vk.PhysicalDeviceRobustness2FeaturesEXT{
-            .p_next = @ptrCast(&mesh_features),
-        };
         var vk14_features = vk.PhysicalDeviceVulkan14Features{
-            .p_next = @ptrCast(&robustness_features),
+            .p_next = @ptrCast(&mesh_features),
         };
         var vk13_features = vk.PhysicalDeviceVulkan13Features{
             .p_next = @ptrCast(&vk14_features),
         };
-        var vk12_features = vk.PhysicalDeviceVulkan12Features{
-            .p_next = @ptrCast(&vk13_features),
-        };
         var features2 = vk.PhysicalDeviceFeatures2{
-            .p_next = @ptrCast(&vk12_features),
+            .p_next = @ptrCast(&vk13_features),
             .features = .{},
         };
         instance_dispatch.getPhysicalDeviceFeatures2(physical_device, &features2);
@@ -137,18 +128,6 @@ pub const VulkanContext = struct {
         }
         if (mesh_features.task_shader == .false or mesh_features.mesh_shader == .false) {
             return FeatureError.MeshShaderNotSupported;
-        }
-        if (robustness_features.null_descriptor == .false) {
-            return FeatureError.Robustness2NotSupported;
-        }
-        if (vk12_features.descriptor_indexing == .false or
-            vk12_features.descriptor_binding_storage_buffer_update_after_bind == .false or
-            vk12_features.descriptor_binding_update_unused_while_pending == .false or
-            vk12_features.descriptor_binding_partially_bound == .false or
-            vk12_features.runtime_descriptor_array == .false or
-            vk12_features.shader_storage_buffer_array_non_uniform_indexing == .false)
-        {
-            return FeatureError.DescriptorIndexingNotSupported;
         }
     }
 
@@ -168,11 +147,7 @@ pub const VulkanContext = struct {
     ) VulkanContext {
         const dispatch = DeviceDispatch.load(device, get_device_proc_addr);
         const mem_props = instance_dispatch.getPhysicalDeviceMemoryProperties(physical_device);
-        var descriptor_indexing_properties = std.mem.zeroes(vk.PhysicalDeviceDescriptorIndexingProperties);
-        descriptor_indexing_properties.s_type = .physical_device_descriptor_indexing_properties;
-        var mesh_shader_properties = vk.PhysicalDeviceMeshShaderPropertiesEXT{
-            .p_next = @ptrCast(&descriptor_indexing_properties),
-        };
+        var mesh_shader_properties = vk.PhysicalDeviceMeshShaderPropertiesEXT{};
         var properties2 = vk.PhysicalDeviceProperties2{
             .p_next = @ptrCast(&mesh_shader_properties),
             .properties = .{},
@@ -184,7 +159,6 @@ pub const VulkanContext = struct {
             .physical_device = physical_device,
             .api_version = properties2.properties.api_version,
             .memory_properties = mem_props,
-            .descriptor_indexing_properties = descriptor_indexing_properties,
             .mesh_shader_properties = mesh_shader_properties,
         };
     }
@@ -212,7 +186,6 @@ const HeavySlugDispatch = struct {
     vkBindBufferMemory: ?vk.PfnBindBufferMemory = null,
     vkMapMemory: ?vk.PfnMapMemory = null,
     vkUnmapMemory: ?vk.PfnUnmapMemory = null,
-    vkGetBufferDeviceAddress: ?vk.PfnGetBufferDeviceAddress = null,
     vkCmdBindPipeline: ?vk.PfnCmdBindPipeline = null,
     vkCmdBindDescriptorSets: ?vk.PfnCmdBindDescriptorSets = null,
     vkCmdPushConstants: ?vk.PfnCmdPushConstants = null,
@@ -232,9 +205,7 @@ pub const FeatureError = error{
     Vulkan14NotSupported,
     MeshShaderNotSupported,
     MeshShaderLimitsNotSupported,
-    Robustness2NotSupported,
     DynamicRenderingNotSupported,
-    DescriptorIndexingNotSupported,
     ExtensionNotSupported,
 };
 
@@ -256,18 +227,15 @@ test "HeavySlugInstanceDispatch has feature query commands" {
     }
 }
 
-test "required_device_extensions includes mesh shader and robustness2" {
+test "required_device_extensions includes mesh shader" {
     const exts = VulkanContext.required_device_extensions;
-    try std.testing.expect(exts.len >= 2);
+    try std.testing.expect(exts.len >= 1);
     var has_mesh = false;
-    var has_robustness = false;
     for (exts) |ext| {
         const slice = std.mem.span(ext);
         if (std.mem.eql(u8, slice, "VK_EXT_mesh_shader")) has_mesh = true;
-        if (std.mem.eql(u8, slice, "VK_EXT_robustness2")) has_robustness = true;
     }
     try std.testing.expect(has_mesh);
-    try std.testing.expect(has_robustness);
 }
 
 test "required_api_version is Vulkan 1.4" {

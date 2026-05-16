@@ -11,7 +11,6 @@ const pool_mod = heavy_slug.core.cache.byte_pool;
 
 pub const Error = error{
     NoSuitableMemoryType,
-    DescriptorSlotExhausted,
     FrameResourcesInUse,
 };
 
@@ -243,7 +242,6 @@ pub const Renderer = struct {
         var desc_table = try descriptors.DescriptorTable.init(
             ctx,
             allocator,
-            options.max_glyph_descriptors,
             frames_in_flight,
         );
         errdefer desc_table.deinit(allocator);
@@ -405,20 +403,11 @@ pub const Renderer = struct {
     pub fn uploadBlob(self: *Renderer, pool_alloc: pool_mod.Allocation, data: []const u8) !GlyphRef {
         const dst = self.pool_buffer.mapped[pool_alloc.offset..][0..data.len];
         @memcpy(dst, data);
-        const slot = self.descriptor_table.allocSlot() orelse
-            return Error.DescriptorSlotExhausted;
-        self.descriptor_table.updateSlot(
-            slot,
-            self.pool_buffer.buffer,
-            @as(vk.DeviceSize, pool_alloc.offset),
-            @as(vk.DeviceSize, data.len),
-        );
-        return GlyphRef.from(slot);
+        return GlyphRef.from(pool_alloc.offset);
     }
 
-    pub fn retireBlob(self: *Renderer, slot: GlyphRef) void {
-        self.descriptor_table.nullSlot(slot.value);
-        self.descriptor_table.freeSlot(slot.value);
+    pub fn retireBlob(self: *Renderer, _: GlyphRef) void {
+        _ = self;
     }
 
     /// Record GPU commands into the caller's command buffer.
@@ -456,6 +445,7 @@ pub const Renderer = struct {
         self.dispatch.cmdBindPipeline(cmd_buf, .graphics, self.pip.pipeline);
 
         const command_buffer = self.command_buffers[self.active_frame];
+        self.descriptor_table.updateGlyphPool(self.active_frame, self.pool_buffer.buffer, 0, self.pool_buffer.size);
         self.descriptor_table.updateCommandBuffer(self.active_frame, command_buffer.buffer, 0, command_buffer.size);
         if (backend_options.shader_stats) {
             const stats_buffer = self.shader_stats_buffers[self.active_frame];
@@ -543,7 +533,6 @@ fn readShaderStatsBuffer(buffer: MappedBuffer) heavy_slug.ShaderStats {
 
 test "RendererOptions has correct defaults" {
     const opts = RendererOptions{};
-    try std.testing.expectEqual(@as(u32, 65_536), opts.max_glyph_descriptors);
     try std.testing.expectEqual(@as(u32, 16_384), opts.max_glyphs_per_frame);
     try std.testing.expectEqual(@as(u32, 4_096), opts.hot_slab_count);
     try std.testing.expectEqual(@as(u32, 8_192), opts.cold_lru_count);

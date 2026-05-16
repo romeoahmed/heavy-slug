@@ -175,13 +175,9 @@ pub const GraphicsContext = struct {
             };
         }
 
-        // Feature chain (pNext traversal order): features2 -> vk12 -> vk13 -> vk14 -> mesh_shader -> robustness2.
+        // Feature chain (pNext traversal order): features2 -> vk13 -> vk14 -> mesh_shader.
         // Bool32 enum fields use .true/.false (not vk.TRUE/vk.FALSE).
-        var robustness2 = vk.PhysicalDeviceRobustness2FeaturesEXT{
-            .null_descriptor = .true,
-        };
         var mesh_shader = vk.PhysicalDeviceMeshShaderFeaturesEXT{
-            .p_next = @ptrCast(&robustness2),
             .task_shader = .true,
             .mesh_shader = .true,
         };
@@ -194,25 +190,14 @@ pub const GraphicsContext = struct {
             .synchronization_2 = .true,
             .maintenance_4 = .true,
         };
-        var vk12_features = vk.PhysicalDeviceVulkan12Features{
-            .p_next = @ptrCast(&vk13_features),
-            .descriptor_indexing = .true,
-            .descriptor_binding_partially_bound = .true,
-            .descriptor_binding_storage_buffer_update_after_bind = .true,
-            .descriptor_binding_update_unused_while_pending = .true,
-            .runtime_descriptor_array = .true,
-            .shader_storage_buffer_array_non_uniform_indexing = .true,
-            .buffer_device_address = .true,
-        };
         var features2 = vk.PhysicalDeviceFeatures2{
-            .p_next = @ptrCast(&vk12_features),
+            .p_next = @ptrCast(&vk13_features),
             .features = .{},
         };
 
         const all_device_exts = [_][*:0]const u8{
             "VK_KHR_swapchain",
             "VK_EXT_mesh_shader",
-            "VK_EXT_robustness2",
         };
 
         // pp_enabled_layer_names is *const *const u8 (non-optional in this vk.zig version).

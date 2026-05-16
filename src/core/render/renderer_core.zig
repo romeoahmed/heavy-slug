@@ -22,7 +22,6 @@ pub const Error = error{
 };
 
 pub const RendererOptions = struct {
-    max_glyph_descriptors: u32 = 65_536,
     max_glyphs_per_frame: u32 = 16_384,
     hot_slab_count: u32 = 4_096,
     cold_lru_count: u32 = 8_192,
@@ -426,7 +425,6 @@ test "render: FakeBackend satisfies backend contract" {
 
 test "RendererOptions mirrors current default capacities" {
     const opts = RendererOptions{};
-    try std.testing.expectEqual(@as(u32, 65_536), opts.max_glyph_descriptors);
     try std.testing.expectEqual(@as(u32, 16_384), opts.max_glyphs_per_frame);
 }
 

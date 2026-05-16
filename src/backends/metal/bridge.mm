@@ -10,9 +10,12 @@
 #include <string.h>
 
 static constexpr uint32_t kFrameSlotCount = 3;
+static constexpr uint32_t kArgumentBufferBindCount = HEAVY_SLUG_SHADER_STATS ? 4 : 3;
 
 struct hs_metal_frame_slot {
     dispatch_semaphore_t semaphore;
+    __strong id<MTL4CommandAllocator> allocator;
+    __strong id<MTL4ArgumentTable> argument_table;
     bool reserved;
     bool in_flight;
     bool failed;
@@ -21,7 +24,8 @@ struct hs_metal_frame_slot {
 
 struct hs_metal_context {
     __unsafe_unretained id<MTLDevice> device;
-    __unsafe_unretained id<MTLCommandQueue> command_queue;
+    __unsafe_unretained id<MTL4CommandQueue> command_queue;
+    __strong id<MTL4Compiler> compiler;
     __strong id<MTLRenderPipelineState> pipeline_state;
     __unsafe_unretained CAMetalLayer *layer;
     hs_metal_frame_slot frame_slots[kFrameSlotCount];
@@ -38,9 +42,10 @@ static void write_error(char *buffer, size_t len, NSString *message) {
 }
 
 static id<MTLLibrary> make_library(
-    id<MTLDevice> device,
+    id<MTL4Compiler> compiler,
     const char *source,
     size_t source_len,
+    NSString *name,
     char *error_buffer,
     size_t error_buffer_len) {
     NSString *source_string = [[NSString alloc]
@@ -54,13 +59,51 @@ static id<MTLLibrary> make_library(
 
     MTLCompileOptions *options = [MTLCompileOptions new];
     options.languageVersion = MTLLanguageVersion4_0;
+
+    MTL4LibraryDescriptor *descriptor = [MTL4LibraryDescriptor new];
+    descriptor.source = source_string;
+    descriptor.options = options;
+    descriptor.name = name;
+
     NSError *error = nil;
-    id<MTLLibrary> library = [device newLibraryWithSource:source_string options:options error:&error];
+    id<MTLLibrary> library = [compiler newLibraryWithDescriptor:descriptor error:&error];
     if (!library) {
         write_error(error_buffer, error_buffer_len, error.localizedDescription);
         return nil;
     }
     return library;
+}
+
+static MTL4LibraryFunctionDescriptor *function_descriptor(id<MTLLibrary> library, NSString *name) {
+    MTL4LibraryFunctionDescriptor *descriptor = [MTL4LibraryFunctionDescriptor new];
+    descriptor.library = library;
+    descriptor.name = name;
+    return descriptor;
+}
+
+static id<MTL4ArgumentTable> make_argument_table(
+    id<MTLDevice> device,
+    NSString *label,
+    char *error_buffer,
+    size_t error_buffer_len) {
+    MTL4ArgumentTableDescriptor *descriptor = [MTL4ArgumentTableDescriptor new];
+    descriptor.maxBufferBindCount = kArgumentBufferBindCount;
+    descriptor.maxTextureBindCount = 0;
+    descriptor.maxSamplerStateBindCount = 0;
+    descriptor.initializeBindings = YES;
+    descriptor.label = label;
+
+    NSError *error = nil;
+    id<MTL4ArgumentTable> table = [device newArgumentTableWithDescriptor:descriptor error:&error];
+    if (!table) {
+        write_error(error_buffer, error_buffer_len, error.localizedDescription);
+        return nil;
+    }
+    return table;
+}
+
+static void bind_buffer(id<MTL4ArgumentTable> table, hs_metal_buffer *buffer, NSUInteger index) {
+    [table setAddress:buffer->buffer.gpuAddress atIndex:index];
 }
 
 hs_metal_context *hs_metal_context_create(
@@ -85,9 +128,9 @@ hs_metal_context *hs_metal_context_create(
             return nullptr;
         }
 
-        id<MTLCommandQueue> command_queue = (__bridge id<MTLCommandQueue>)host.command_queue;
+        id<MTL4CommandQueue> command_queue = (__bridge id<MTL4CommandQueue>)host.command_queue;
         if (!command_queue) {
-            write_error(error_buffer, error_buffer_len, @"Metal context creation received a nil MTLCommandQueue");
+            write_error(error_buffer, error_buffer_len, @"Metal context creation received a nil MTL4CommandQueue");
             return nullptr;
         }
 
@@ -97,25 +140,27 @@ hs_metal_context *hs_metal_context_create(
             return nullptr;
         }
 
-        id<MTLLibrary> task_library = make_library(device, task_source, task_source_len, error_buffer, error_buffer_len);
-        if (!task_library) return nullptr;
-        id<MTLLibrary> mesh_library = make_library(device, mesh_source, mesh_source_len, error_buffer, error_buffer_len);
-        if (!mesh_library) return nullptr;
-        id<MTLLibrary> fragment_library = make_library(device, fragment_source, fragment_source_len, error_buffer, error_buffer_len);
-        if (!fragment_library) return nullptr;
-
-        id<MTLFunction> task_function = [task_library newFunctionWithName:@"taskMain"];
-        id<MTLFunction> mesh_function = [mesh_library newFunctionWithName:@"meshMain"];
-        id<MTLFunction> fragment_function = [fragment_library newFunctionWithName:@"fragmentMain"];
-        if (!task_function || !mesh_function || !fragment_function) {
-            write_error(error_buffer, error_buffer_len, @"failed to resolve taskMain, meshMain, or fragmentMain");
+        NSError *compiler_error = nil;
+        MTL4CompilerDescriptor *compiler_desc = [MTL4CompilerDescriptor new];
+        compiler_desc.label = @"heavy-slug compiler";
+        id<MTL4Compiler> compiler = [device newCompilerWithDescriptor:compiler_desc error:&compiler_error];
+        if (!compiler) {
+            write_error(error_buffer, error_buffer_len, compiler_error.localizedDescription);
             return nullptr;
         }
 
-        MTLMeshRenderPipelineDescriptor *pipeline_desc = [MTLMeshRenderPipelineDescriptor new];
-        pipeline_desc.objectFunction = task_function;
-        pipeline_desc.meshFunction = mesh_function;
-        pipeline_desc.fragmentFunction = fragment_function;
+        id<MTLLibrary> task_library = make_library(compiler, task_source, task_source_len, @"heavy-slug task", error_buffer, error_buffer_len);
+        if (!task_library) return nullptr;
+        id<MTLLibrary> mesh_library = make_library(compiler, mesh_source, mesh_source_len, @"heavy-slug mesh", error_buffer, error_buffer_len);
+        if (!mesh_library) return nullptr;
+        id<MTLLibrary> fragment_library = make_library(compiler, fragment_source, fragment_source_len, @"heavy-slug fragment", error_buffer, error_buffer_len);
+        if (!fragment_library) return nullptr;
+
+        MTL4MeshRenderPipelineDescriptor *pipeline_desc = [MTL4MeshRenderPipelineDescriptor new];
+        pipeline_desc.label = @"heavy-slug mesh pipeline";
+        pipeline_desc.objectFunctionDescriptor = function_descriptor(task_library, @"taskMain");
+        pipeline_desc.meshFunctionDescriptor = function_descriptor(mesh_library, @"meshMain");
+        pipeline_desc.fragmentFunctionDescriptor = function_descriptor(fragment_library, @"fragmentMain");
         pipeline_desc.maxTotalThreadsPerObjectThreadgroup = HS_METAL_TASK_THREADGROUP_SIZE;
         pipeline_desc.maxTotalThreadsPerMeshThreadgroup = HS_METAL_MESH_THREADGROUP_SIZE;
         pipeline_desc.requiredThreadsPerObjectThreadgroup = MTLSizeMake(HS_METAL_TASK_THREADGROUP_SIZE, 1, 1);
@@ -123,7 +168,7 @@ hs_metal_context *hs_metal_context_create(
         pipeline_desc.payloadMemoryLength = HS_METAL_TASK_PAYLOAD_BYTES;
         pipeline_desc.maxTotalThreadgroupsPerMeshGrid = HS_METAL_TASK_MAX_MESHLETS;
         pipeline_desc.colorAttachments[0].pixelFormat = layer.pixelFormat;
-        pipeline_desc.colorAttachments[0].blendingEnabled = YES;
+        pipeline_desc.colorAttachments[0].blendingState = MTL4BlendStateEnabled;
         pipeline_desc.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
         pipeline_desc.colorAttachments[0].alphaBlendOperation = MTLBlendOperationAdd;
         pipeline_desc.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
@@ -133,10 +178,9 @@ hs_metal_context *hs_metal_context_create(
 
         NSError *pipeline_error = nil;
         id<MTLRenderPipelineState> pipeline_state =
-            [device newRenderPipelineStateWithMeshDescriptor:pipeline_desc
-                                                     options:0
-                                                  reflection:nil
-                                                       error:&pipeline_error];
+            [compiler newRenderPipelineStateWithDescriptor:pipeline_desc
+                                       compilerTaskOptions:nil
+                                                     error:&pipeline_error];
         if (!pipeline_state) {
             write_error(error_buffer, error_buffer_len, pipeline_error.localizedDescription);
             return nullptr;
@@ -145,10 +189,25 @@ hs_metal_context *hs_metal_context_create(
         hs_metal_context *context = new hs_metal_context();
         context->device = device;
         context->command_queue = command_queue;
+        context->compiler = compiler;
         context->pipeline_state = pipeline_state;
         context->layer = layer;
         for (uint32_t i = 0; i < kFrameSlotCount; i++) {
             context->frame_slots[i].semaphore = dispatch_semaphore_create(1);
+            context->frame_slots[i].allocator = [device newCommandAllocator];
+            if (!context->frame_slots[i].allocator) {
+                write_error(error_buffer, error_buffer_len, @"newCommandAllocator returned nil");
+                delete context;
+                return nullptr;
+            }
+
+            NSString *label = [NSString stringWithFormat:@"heavy-slug argument table %u", i];
+            context->frame_slots[i].argument_table = make_argument_table(device, label, error_buffer, error_buffer_len);
+            if (!context->frame_slots[i].argument_table) {
+                delete context;
+                return nullptr;
+            }
+
             context->frame_slots[i].reserved = false;
             context->frame_slots[i].in_flight = false;
             context->frame_slots[i].failed = false;
@@ -182,6 +241,7 @@ int hs_metal_context_wait_frame_slot(
         return 0;
     }
 
+    [slot->allocator reset];
     slot->reserved = true;
     return 1;
 }
@@ -281,45 +341,65 @@ int hs_metal_context_draw(
             return 0;
         }
 
-        MTLRenderPassDescriptor *pass_desc = [MTLRenderPassDescriptor renderPassDescriptor];
+        MTL4RenderPassDescriptor *pass_desc = [MTL4RenderPassDescriptor new];
         pass_desc.colorAttachments[0].texture = drawable.texture;
         pass_desc.colorAttachments[0].loadAction = MTLLoadActionClear;
         pass_desc.colorAttachments[0].storeAction = MTLStoreActionStore;
         pass_desc.colorAttachments[0].clearColor = MTLClearColorMake(clear_r, clear_g, clear_b, clear_a);
 
-        id<MTLCommandBuffer> cb = [context->command_queue commandBuffer];
-        id<MTLRenderCommandEncoder> encoder = [cb renderCommandEncoderWithDescriptor:pass_desc];
+        id<MTL4CommandBuffer> cb = [context->device newCommandBuffer];
+        if (!cb) {
+            write_error(error_buffer, error_buffer_len, @"newCommandBuffer returned nil");
+            hs_metal_context_release_frame_slot(context, slot_index);
+            return 0;
+        }
+        [cb beginCommandBufferWithAllocator:slot->allocator];
+
+        id<MTL4RenderCommandEncoder> encoder = [cb renderCommandEncoderWithDescriptor:pass_desc];
+        if (!encoder) {
+            write_error(error_buffer, error_buffer_len, @"renderCommandEncoderWithDescriptor returned nil");
+            [cb endCommandBuffer];
+            hs_metal_context_release_frame_slot(context, slot_index);
+            return 0;
+        }
+
+        bind_buffer(slot->argument_table, glyph_pool, HS_METAL_BUFFER_GLYPH_POOL);
+        bind_buffer(slot->argument_table, commands, HS_METAL_BUFFER_COMMANDS);
+        bind_buffer(slot->argument_table, push_constants, HS_METAL_BUFFER_PUSH_CONSTANTS);
+        if (shader_stats) {
+            bind_buffer(slot->argument_table, shader_stats, HS_METAL_BUFFER_SHADER_STATS);
+        }
+
         [encoder setViewport:(MTLViewport){0, 0, (double)width, (double)height, 0, 1}];
         [encoder setRenderPipelineState:context->pipeline_state];
-        [encoder setObjectBuffer:commands->buffer offset:0 atIndex:HS_METAL_BUFFER_COMMANDS];
-        [encoder setObjectBuffer:push_constants->buffer offset:0 atIndex:HS_METAL_BUFFER_PUSH_CONSTANTS];
-        [encoder setMeshBuffer:glyph_pool->buffer offset:0 atIndex:HS_METAL_BUFFER_GLYPH_POOL];
-        [encoder setMeshBuffer:commands->buffer offset:0 atIndex:HS_METAL_BUFFER_COMMANDS];
-        [encoder setMeshBuffer:push_constants->buffer offset:0 atIndex:HS_METAL_BUFFER_PUSH_CONSTANTS];
-        [encoder setFragmentBuffer:glyph_pool->buffer offset:0 atIndex:HS_METAL_BUFFER_GLYPH_POOL];
-        if (shader_stats) {
-            [encoder setObjectBuffer:shader_stats->buffer offset:0 atIndex:HS_METAL_BUFFER_SHADER_STATS];
-            [encoder setMeshBuffer:shader_stats->buffer offset:0 atIndex:HS_METAL_BUFFER_SHADER_STATS];
-            [encoder setFragmentBuffer:shader_stats->buffer offset:0 atIndex:HS_METAL_BUFFER_SHADER_STATS];
-        }
+        [encoder setArgumentTable:slot->argument_table
+                         atStages:(MTLRenderStageObject | MTLRenderStageMesh | MTLRenderStageFragment)];
         [encoder drawMeshThreadgroups:MTLSizeMake(workgroup_count, 1, 1)
             threadsPerObjectThreadgroup:MTLSizeMake(HS_METAL_TASK_THREADGROUP_SIZE, 1, 1)
               threadsPerMeshThreadgroup:MTLSizeMake(HS_METAL_MESH_THREADGROUP_SIZE, 1, 1)];
         [encoder endEncoding];
-        [cb presentDrawable:drawable];
+        [cb endCommandBuffer];
+
+        MTL4CommitOptions *commit_options = [MTL4CommitOptions new];
         slot->reserved = false;
         slot->in_flight = true;
         slot->failed = false;
         slot->message = nil;
-        [cb addCompletedHandler:^(id<MTLCommandBuffer> command_buffer) {
-            if ([command_buffer status] == MTLCommandBufferStatusError) {
+        [commit_options addFeedbackHandler:^(id<MTL4CommitFeedback> feedback) {
+            NSError *error = feedback.error;
+            if (error) {
                 slot->failed = true;
-                slot->message = command_buffer.error.localizedDescription;
+                slot->message = error.localizedDescription;
             }
             slot->in_flight = false;
             dispatch_semaphore_signal(slot->semaphore);
         }];
-        [cb commit];
+
+        id<MTL4CommandBuffer> command_buffers[1] = { cb };
+        [context->command_queue waitForDrawable:drawable];
+        [context->command_queue commit:command_buffers count:1 options:commit_options];
+        [context->command_queue signalDrawable:drawable];
+        [drawable present];
         return 1;
     }
 }
