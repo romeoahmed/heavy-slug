@@ -4,7 +4,7 @@
 
 `heavy-slug` is a Zig 0.16 GPU text rendering library. The core module is `src/root.zig`; it exports stable public types from `src/core/` and keeps font, outline, blob, cache, math, and render orchestration under explicit `heavy_slug.core.*` or private modules. The core does not own a GPU context or depend on GLFW.
 
-Backend modules are opt-in. `src/backends/vulkan/` provides `heavy_slug_vulkan` for Vulkan SPIR-V 1.6 mesh shaders. `src/backends/metal/` provides `heavy_slug_metal` for macOS Metal 4 and accepts externally provided Metal device, command queue, and layer objects. Demo-only code lives in `src/demo/`; shared scene/input code is in `src/demo/common/`, and platform hosts stay under `src/demo/vulkan/` and `src/demo/metal/`. Shared Slang modules are in `shaders/core/`, entry points are in `shaders/entries/`, and `tools/layout_gen.zig` generates GPU ABI structs from Slang reflection. Architecture plans live in `docs/`.
+Backend modules are opt-in. `src/backends/vulkan/` provides `heavy_slug_vulkan` for Vulkan SPIR-V 1.6 mesh shaders. `src/backends/metal/` provides `heavy_slug_metal` for macOS Metal 4 and accepts externally provided Metal device, command queue, and layer objects. Demo-only code lives in `src/demo/`; shared scene/input code is in `src/demo/common/`, and platform hosts stay under `src/demo/vulkan/` and `src/demo/metal/`. Shared Slang modules are in `shaders/core/`, entry points are in `shaders/entries/`, and `tools/layout_gen.zig` generates GPU ABI structs from Slang reflection. `README.md` is the canonical high-level architecture and algorithm overview.
 
 ## Build, Test, and Development Commands
 
@@ -12,12 +12,13 @@ Backend modules are opt-in. `src/backends/vulkan/` provides `heavy_slug_vulkan` 
 - `zig build test` runs core and build-tool tests.
 - `zig build test -Dvulkan=true` also builds and tests the Vulkan backend.
 - `zig build test -Dmetal=true` also builds and tests the Metal backend on macOS.
+- `zig build test -Dvulkan=true -Dshader-stats=true` verifies the Vulkan backend with opt-in GPU shader counters.
+- `zig build test -Dmetal=true -Dshader-stats=true` verifies the Metal backend with opt-in GPU shader counters.
 - `zig build shaders` compiles Slang to SPIR-V 1.6.
 - `zig build metal-shaders` compiles Slang to Metal 4 MSL.
 - `zig build run -Ddemo=true -Ddemo-backend=vulkan_spirv16` runs the Windows/Linux Vulkan demo.
 - `zig build run -Ddemo=true -Ddemo-backend=metal4` runs the macOS Metal demo.
 - `zig build -Doptimize=ReleaseFast [-Dthinlto=auto|on|off]` builds release mode; `auto` enables ThinLTO only where Zig 0.16 can link it.
-- `zig build test -Dshader-stats=true [-Dvulkan=true|-Dmetal=true]` enables opt-in GPU shader counters for diagnostics.
 
 ## Coding Style & Naming Conventions
 

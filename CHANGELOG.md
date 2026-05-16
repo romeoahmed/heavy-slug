@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Breaking architecture refactor completed:** core public types, unit conversions, backend contracts, font/cache/render internals, and demo layout moved under the new `src/core/`, `src/gpu/`, `src/backends/`, and `src/demo/{common,vulkan,metal}/` structure described in `docs/architecture-refactor-spec.md`.
+- **Breaking architecture refactor completed:** core public types, unit conversions, backend contracts, font/cache/render internals, and demo layout moved under the new `src/core/`, `src/gpu/`, `src/backends/`, and `src/demo/{common,vulkan,metal}/` structure now summarized in `README.md`.
 - **Backend renderer API now exposes `Frame` and `Target` types** so demos submit text through an explicit begin/draw/submit frame boundary.
 - **Backend frame submission now returns `FrameToken`** and glyph/resource retirement is deferred until the backend reports completed tokens.
 - **Text submission now uses `TextRun`** on backend frames, and font loading uses `FontSource` plus `FontOptions`.
@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Slang sources are split into `shaders/core/` and `shaders/entries/`** so shared modules and entry points have distinct ownership.
 - **Build logic split into `build/` modules** for dependency resolution, C libraries, shader compilation, backend modules, and demos.
 - **Root compatibility aliases removed** for old font/cache/pool/render paths; consumers should use top-level public types or explicit `heavy_slug.core.*` modules.
-- **Traceability audit added** in `docs/refactor-traceability.md` to map every spec phase to implementation files and verification gates.
+- **README rewritten** as the canonical project overview with architecture, algorithm, backend boundaries, diagnostics, CI, and explicit credit to the Slug algorithm.
 - **Shader resource bindings split by backend** under `shaders/backend_vulkan/` and `shaders/backend_metal/`.
 - **`GlyphStore` extracted** so cache metadata, byte-pool allocations, and deferred retirements have a single private owner.
 - **Vulkan command storage is now frame-ring buffered** and protected by completed `FrameToken` tracking before slot reuse.
@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - **Legacy source roots** `src/font/`, `src/cache/`, `src/render.zig`, `src/vulkan/`, and `src/metal/`; consumers now use top-level public types or explicit `heavy_slug.core.*` modules.
+- **Historical refactor planning docs** under `docs/`; the maintained architecture and algorithm overview now lives in `README.md`.
 - **Repository-local VS Code settings** (`.vscode/`) so editor configuration stays user-local.
 
 ## [2.0.0] - 2026-05-15
