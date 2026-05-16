@@ -59,8 +59,8 @@ zig build -Doptimize=ReleaseFast
 - [Shader Layout](#shader-layout)
 - [Diagnostics](#diagnostics)
 - [Project Layout](#project-layout)
-- [Design Rules](#design-rules)
-- [Dependency Policy](#dependency-policy)
+- [Implementation Notes](#implementation-notes)
+- [Dependency Summary](#dependency-summary)
 - [CI](#ci)
 - [Credit](#credit)
 - [License](#license)
@@ -108,7 +108,7 @@ Task -> Mesh -> Fragment shaders
 | `heavy_slug` | Shaping, outline encoding, cache metadata, backend-neutral batches | GPU context, GLFW, swapchain |
 | `heavy_slug_vulkan` | Vulkan glyph pool, descriptors, pipeline, draw submission | Instance/window creation |
 | `heavy_slug_metal` | Metal 4 bridge objects, argument tables, pipeline, buffers | Cocoa/GLFW app lifecycle |
-| Demo code | Example GLFW hosts and scene input | Library API policy |
+| Demo code | Example GLFW hosts and scene input | Core library behavior |
 
 ## Build Dependencies
 
@@ -244,13 +244,9 @@ UTF-8 text
 | Vulkan | One glyph blob storage buffer; one frame-local `GlyphInstance[]`; optional shader stats buffer | Vulkan 1.4, SPIR-V 1.6, `VK_EXT_mesh_shader`, dynamic rendering |
 | Metal | Bridge-owned buffers; per-frame `MTL4ArgumentTable`; Metal residency set | Metal 4, `MTL4CommandQueue`, `MTL4CommandAllocator`, `MTL4Compiler`, `MTL4MeshRenderPipelineDescriptor` |
 
-Avoid reintroducing per-glyph Vulkan descriptors, descriptor indexing as the
-glyph addressing model, or `VK_EXT_descriptor_heap`. The current hot path is
-the single glyph-pool buffer plus `GlyphBlobRef` byte offsets.
-
-Avoid moving Metal submission back to legacy `MTLCommandQueue`,
-`MTLCommandBuffer`, or stage-specific buffer setters without a deliberate
-architecture decision.
+The current Vulkan hot path is the single glyph-pool buffer plus `GlyphBlobRef`
+byte offsets. The Metal backend follows the Metal 4 command and argument-table
+model rather than the older command-buffer and stage-specific setter model.
 
 ## Shader Layout
 
@@ -307,18 +303,20 @@ zig build test -Dmetal=true -Dshader-stats=true
 | `tools/layout_gen.zig` | Slang reflection to Zig extern structs. |
 | `assets/` | Repository test/demo assets. |
 
-## Design Rules
+## Implementation Notes
 
-- Preserve analytic coverage until the fragment shader.
-- Keep culling conservative.
-- Keep core backend-neutral and GLFW-free.
-- Keep GPU contexts, queues, swapchains, and frame completion in host code.
-- Keep glyph blobs in one backend-owned glyph-pool buffer.
-- Use `GlyphBlobRef` byte offsets instead of per-glyph descriptors.
-- Generate GPU ABI structs from Slang reflection.
-- Use build-system `addTranslateC()` modules for C headers.
+| Area | Current design |
+| --- | --- |
+| Coverage | Analytic outline coverage is preserved until the fragment shader. |
+| Culling | Task/mesh stages perform conservative work reduction. |
+| Core scope | The core is backend-neutral and GLFW-free. |
+| Host scope | Applications provide GPU contexts, queues, swapchains, and frame completion. |
+| Glyph resources | Cached glyph blobs live in one backend-owned glyph-pool buffer. |
+| Blob references | `GlyphBlobRef` values are byte offsets instead of descriptor slots. |
+| GPU ABI | GPU structs are generated from Slang reflection. |
+| C headers | C declarations are translated through build-system `addTranslateC()` modules. |
 
-## Dependency Policy
+## Dependency Summary
 
 | Dependency | Source | Lazy |
 | --- | --- | --- |
@@ -328,8 +326,8 @@ zig build test -Dmetal=true -Dshader-stats=true
 | Vulkan Headers | pinned Git dependency | Yes |
 | GLFW | pinned source archive | Yes |
 
-Update dependencies with `zig fetch --save <url>`. Do not commit generated
-`zig-out/`, `.zig-cache/`, or `zig-pkg/` artifacts.
+Generated local build outputs use the usual Zig paths: `zig-out/`,
+`.zig-cache/`, and `zig-pkg/`.
 
 ## CI
 
