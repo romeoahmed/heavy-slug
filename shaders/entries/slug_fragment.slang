@@ -12,11 +12,11 @@ struct FragmentInput
     float4 color       : COLOR;
 #if HEAVY_SLUG_METAL
     float2 texcoord    : TEXCOORD;
-    nointerpolation uint descriptorIndex : TEXCOORD1;
+    nointerpolation uint glyphRef : TEXCOORD1;
     nointerpolation uint flags           : TEXCOORD2;
 #else
     float2 texcoord    : TEXCOORD0;
-    nointerpolation uint descriptorIndex : TEXCOORD1;
+    nointerpolation uint glyphRef : TEXCOORD1;
     nointerpolation uint flags           : TEXCOORD2;
 #endif
 };
@@ -120,9 +120,9 @@ float4 fragmentMain(FragmentInput input) : SV_Target
     BlobReader blob;
 #if HEAVY_SLUG_METAL
     blob.buf = glyphPool;
-    blob.base = input.descriptorIndex;
+    blob.base = input.glyphRef;
 #else
-    blob.buf = glyphBlobs[input.descriptorIndex];
+    blob.buf = glyphBlobs[input.glyphRef];
     blob.base = 0;
 #endif
 

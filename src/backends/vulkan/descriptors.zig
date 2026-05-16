@@ -18,7 +18,7 @@ pub const PushConstants = gpu_structs.PushConstants;
 
 test "GlyphCommand is 64 bytes with correct field offsets" {
     try std.testing.expectEqual(@as(usize, 64), @sizeOf(GlyphCommand));
-    try std.testing.expectEqual(@as(usize, 48), @offsetOf(GlyphCommand, "descriptor_index"));
+    try std.testing.expectEqual(@as(usize, 48), @offsetOf(GlyphCommand, "glyph_ref"));
 }
 
 test "PushConstants is 80 bytes with correct field offsets" {

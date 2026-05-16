@@ -92,7 +92,7 @@ pub fn generateReflectionJson(b: *std.Build) std.Build.LazyPath {
     addSharedSlangArgs(cmd, "taskMain", "amplification", false);
     cmd.addArgs(&.{ "-target", "spirv" });
     cmd.addArgs(&.{ "-profile", "spirv_1_6+spvGroupNonUniform+spvGroupNonUniformBallot" });
-    addSharedIncludeAndOptArgs(cmd, .vulkan);
+    addSharedIncludeAndOptArgs(b, cmd, .vulkan);
     cmd.addArg("-o");
     _ = cmd.addOutputFileArg("reflection_task.spv");
     cmd.addArg("-reflection-json");
@@ -132,7 +132,7 @@ fn compileSlangSpirv(
     else
         "spirv_1_6";
     cmd.addArgs(&.{ "-profile", profile });
-    addSharedIncludeAndOptArgs(cmd, .vulkan);
+    addSharedIncludeAndOptArgs(b, cmd, .vulkan);
     cmd.addArg("-o");
     return cmd.addOutputFileArg(name);
 }
@@ -149,7 +149,7 @@ fn compileSlangMetal(
     addSharedSlangArgs(cmd, entry, stage, true);
     cmd.addArgs(&.{ "-target", "metal" });
     cmd.addArgs(&.{ "-capability", "metallib_4_0" });
-    addSharedIncludeAndOptArgs(cmd, .metal);
+    addSharedIncludeAndOptArgs(b, cmd, .metal);
     cmd.addArg("-o");
     return cmd.addOutputFileArg(name);
 }
@@ -167,7 +167,8 @@ fn addSharedSlangArgs(
 
 const ShaderBackend = enum { vulkan, metal };
 
-fn addSharedIncludeAndOptArgs(cmd: *std.Build.Step.Run, backend: ShaderBackend) void {
+fn addSharedIncludeAndOptArgs(b: *std.Build, cmd: *std.Build.Step.Run, backend: ShaderBackend) void {
+    addSlangImportInputs(b, cmd, backend);
     cmd.addArgs(&.{"-matrix-layout-column-major"});
     cmd.addArgs(&.{ "-I", "shaders" });
     cmd.addArgs(&.{ "-I", "shaders/core" });
@@ -177,4 +178,19 @@ fn addSharedIncludeAndOptArgs(cmd: *std.Build.Step.Run, backend: ShaderBackend) 
     } });
     cmd.addArgs(&.{ "-I", "shaders/entries" });
     cmd.addArgs(&.{"-O2"});
+}
+
+fn addSlangImportInputs(b: *std.Build, cmd: *std.Build.Step.Run, backend: ShaderBackend) void {
+    const core_inputs = [_][]const u8{
+        "shaders/core/abi.slang",
+        "shaders/core/coverage_blob.slang",
+        "shaders/core/coverage_integral.slang",
+        "shaders/core/hband.slang",
+        "shaders/core/pga.slang",
+    };
+    for (core_inputs) |path| cmd.addFileInput(b.path(path));
+    cmd.addFileInput(b.path(switch (backend) {
+        .vulkan => "shaders/backend_vulkan/resources.slang",
+        .metal => "shaders/backend_metal/resources.slang",
+    }));
 }

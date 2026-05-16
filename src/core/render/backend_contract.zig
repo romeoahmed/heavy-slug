@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub fn BackendContract(comptime Backend: type) void {
     comptime {
-        const Impl = backendImplType(Backend);
+        const Impl = BackendImpl(Backend);
         requireDecl(Impl, "GlyphRef");
         requireDecl(Impl, "FrameToken");
         requireDecl(Impl, "Command");
@@ -12,11 +12,16 @@ pub fn BackendContract(comptime Backend: type) void {
     }
 }
 
-fn backendImplType(comptime Backend: type) type {
+pub fn BackendImpl(comptime Backend: type) type {
     return switch (@typeInfo(Backend)) {
         .pointer => |ptr| ptr.child,
         else => Backend,
     };
+}
+
+pub fn CommandType(comptime Backend: type) type {
+    BackendContract(Backend);
+    return BackendImpl(Backend).Command;
 }
 
 fn requireDecl(comptime T: type, comptime name: []const u8) void {

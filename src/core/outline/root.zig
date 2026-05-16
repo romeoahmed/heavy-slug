@@ -7,8 +7,6 @@ pub const Point = stream.Point;
 pub const Segment = stream.Segment;
 pub const OutlineStream = stream.OutlineStream;
 pub const RegularizedCubicSpan = regularize.RegularizedCubicSpan;
-pub const CubicSpan = regularize.CubicSpan;
-pub const Cubic = encode.Cubic;
 
 test {
     _ = stream;

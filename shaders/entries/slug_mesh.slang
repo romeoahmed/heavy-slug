@@ -23,11 +23,11 @@ struct VertexOutput
     float4 color       : COLOR;
 #if HEAVY_SLUG_METAL
     float2 texcoord    : TEXCOORD;
-    nointerpolation uint descriptorIndex : TEXCOORD_1;
+    nointerpolation uint glyphRef : TEXCOORD_1;
     nointerpolation uint flags           : TEXCOORD_2;
 #else
     float2 texcoord    : TEXCOORD0;
-    nointerpolation uint descriptorIndex : TEXCOORD1;
+    nointerpolation uint glyphRef : TEXCOORD1;
     nointerpolation uint flags           : TEXCOORD2;
 #endif
 };
@@ -90,7 +90,7 @@ void meshMain(
     v.position = clipPos;
     v.color = cmd.color;
     v.texcoord = texcoord;
-    v.descriptorIndex = cmd.descriptor_index;
+    v.glyphRef = cmd.glyph_ref;
     v.flags = cmd.flags;
     verts[gtid] = v;
 

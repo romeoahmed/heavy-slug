@@ -10,9 +10,9 @@ pub const HostObjects = renderer.HostObjects;
 pub const Renderer = renderer.Renderer;
 pub const Frame = renderer.Frame;
 pub const Target = renderer.Target;
-pub const Options = renderer.Options;
-pub const RendererOptions = renderer.Options;
+pub const RendererOptions = renderer.RendererOptions;
 pub const FontHandle = renderer.FontHandle;
+pub const GlyphRef = Renderer.GlyphRef;
 pub const FrameToken = renderer.FrameToken;
 pub const Stats = renderer.Stats;
 

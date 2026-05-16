@@ -14,8 +14,7 @@ pub const Error = error{
     FrameResourcesInUse,
 };
 
-pub const Options = render.Options;
-pub const InitOptions = Options;
+pub const RendererOptions = render.RendererOptions;
 pub const FontHandle = render.FontHandle;
 pub const FrameToken = render.FrameToken;
 pub const max_frames_in_flight = frames_in_flight;
@@ -60,7 +59,7 @@ pub const Frame = struct {
         run: heavy_slug.TextRun,
     ) !void {
         if (self.submitted) return error.FrameAlreadySubmitted;
-        try self.renderer.core.appendRun(self.renderer, descriptors.GlyphCommand, &self.batch, run);
+        try self.renderer.core.appendRun(self.renderer, &self.batch, run);
     }
 
     pub fn submit(self: *Frame, target: Target) !render.FrameToken {
@@ -168,7 +167,7 @@ fn destroyMappedBuffer(self: MappedBuffer, device: vk.Device, dispatch: gpu_cont
 /// thread or externally synchronized. The renderer mutates shared state
 /// without synchronization.
 pub const Renderer = struct {
-    pub const GlyphRef = u32;
+    pub const GlyphRef = render.GlyphRef;
     pub const FrameToken = render.FrameToken;
     pub const Command = descriptors.GlyphCommand;
 
@@ -198,7 +197,7 @@ pub const Renderer = struct {
         ctx: gpu_context.VulkanContext,
         color_format: vk.Format,
         allocator: std.mem.Allocator,
-        options: InitOptions,
+        options: RendererOptions,
     ) !Renderer {
         const device = ctx.device;
         const dispatch = ctx.dispatch;
@@ -314,7 +313,7 @@ pub const Renderer = struct {
         return self.completed_frame;
     }
 
-    pub fn uploadBlob(self: *Renderer, pool_alloc: pool_mod.Allocation, data: []const u8) !u32 {
+    pub fn uploadBlob(self: *Renderer, pool_alloc: pool_mod.Allocation, data: []const u8) !GlyphRef {
         const dst = self.pool_buffer.mapped[pool_alloc.offset..][0..data.len];
         @memcpy(dst, data);
         const slot = self.descriptor_table.allocSlot() orelse
@@ -325,12 +324,12 @@ pub const Renderer = struct {
             @as(vk.DeviceSize, pool_alloc.offset),
             @as(vk.DeviceSize, data.len),
         );
-        return slot;
+        return GlyphRef.from(slot);
     }
 
-    pub fn retireBlob(self: *Renderer, slot: u32) void {
-        self.descriptor_table.nullSlot(slot);
-        self.descriptor_table.freeSlot(slot);
+    pub fn retireBlob(self: *Renderer, slot: GlyphRef) void {
+        self.descriptor_table.nullSlot(slot.value);
+        self.descriptor_table.freeSlot(slot.value);
     }
 
     /// Record GPU commands into the caller's command buffer.
@@ -436,8 +435,8 @@ pub const Renderer = struct {
     }
 };
 
-test "InitOptions has correct defaults" {
-    const opts = InitOptions{};
+test "RendererOptions has correct defaults" {
+    const opts = RendererOptions{};
     try std.testing.expectEqual(@as(u32, 65_536), opts.max_glyph_descriptors);
     try std.testing.expectEqual(@as(u32, 16_384), opts.max_glyphs_per_frame);
     try std.testing.expectEqual(@as(u32, 4_096), opts.hot_slab_count);

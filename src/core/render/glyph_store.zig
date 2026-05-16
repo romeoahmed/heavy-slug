@@ -5,9 +5,10 @@ const retirement_mod = @import("../cache/retirement.zig");
 const core_render = @import("renderer_core.zig");
 
 pub const FrameToken = u64;
+pub const GlyphRef = cache_mod.GlyphRef;
 
 pub const RetiredGlyph = struct {
-    ref: u32,
+    ref: GlyphRef,
     pool_alloc: pool_mod.Allocation,
 };
 
@@ -72,7 +73,7 @@ pub const GlyphStore = struct {
             backend: @TypeOf(backend),
 
             pub fn retire(retiree: *@This(), retired: RetiredGlyph) void {
-                if (retired.ref != std.math.maxInt(u32)) retiree.backend.retireBlob(retired.ref);
+                if (!retired.ref.isEmpty()) retiree.backend.retireBlob(retired.ref);
                 if (retired.pool_alloc.size > 0) retiree.store.pool_alloc.free(retired.pool_alloc);
             }
         };
@@ -82,7 +83,7 @@ pub const GlyphStore = struct {
     }
 
     pub fn deferEvicted(self: *GlyphStore, evicted: cache_mod.EvictedEntry) !void {
-        if (evicted.slot == std.math.maxInt(u32) and evicted.pool_alloc.size == 0) return;
+        if (evicted.slot.isEmpty() and evicted.pool_alloc.size == 0) return;
         try self.retirements.push(self.retire_after_token, .{
             .ref = evicted.slot,
             .pool_alloc = evicted.pool_alloc,
@@ -101,7 +102,7 @@ test "GlyphStore defers evicted resources until completed token" {
     const Retiree = struct {
         releases: u32 = 0,
 
-        pub fn retireBlob(self: *@This(), _: u32) void {
+        pub fn retireBlob(self: *@This(), _: GlyphRef) void {
             self.releases += 1;
         }
     };
@@ -109,7 +110,7 @@ test "GlyphStore defers evicted resources until completed token" {
 
     try store.deferEvicted(.{
         .key = .{ .font_id = 1, .glyph_id = 1 },
-        .slot = 9,
+        .slot = GlyphRef.from(9),
         .pool_alloc = .{ .offset = 0, .size = 0 },
     });
     store.retireCompleted(0, &retiree);

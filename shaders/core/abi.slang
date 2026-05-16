@@ -9,7 +9,7 @@ struct GlyphCommand
     float  em_y_min;
     float  em_x_max;
     float  em_y_max;
-    uint   descriptor_index;
+    uint   glyph_ref;
     uint   flags;
     uint2  _pad;
 };

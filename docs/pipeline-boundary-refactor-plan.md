@@ -36,7 +36,7 @@ The public root in `src/root.zig` exports stable types and still exposes `core` 
 
 `CoverageBlob` is an owned core type in `src/core/blob/format.zig`. Blob encoding lives in `src/core/blob/encode.zig` and accepts regularized cubic spans. `EncodedGlyph` owns a `CoverageBlob`; `hb.Blob` is not part of the core glyph/cache/upload boundary.
 
-`GlyphStore` owns cache metadata, byte-pool allocations, and deferred retirement. `TextBatch` in `src/core/render/text_batch.zig` is a borrowed fixed-capacity writer over backend-owned command memory and is used by both Vulkan and Metal frames.
+`GlyphStore` owns cache metadata, byte-pool allocations, typed `GlyphRef` values, and deferred retirement. `TextBatch` in `src/core/render/text_batch.zig` is a borrowed fixed-capacity writer over backend-owned command memory and is used by both Vulkan and Metal frames.
 
 Vulkan and Metal both expose `Renderer.beginFrame()`, `Frame.drawText()`, and `Frame.submit()`. The backend contract uses ownership-oriented `uploadBlob` and `retireBlob` methods, while command storage belongs to backend frames through `TextBatch`.
 
@@ -48,7 +48,7 @@ Shaders are already split into backend resource shims and shared coverage code. 
 - Treat `OutlineStream` as the only raw outline boundary. HarfBuzz callbacks should capture native move, line, quadratic, cubic, and close commands before regularization.
 - Treat `RegularizedCubicSpan` as the only geometry accepted by blob encoding. It should be already split for extrema, inflections, degenerates, and quantized monotonicity.
 - Keep full-scan analytic cubic coverage as the correctness path. H-band remains a conservative candidate index only.
-- Keep backend frames responsible for command storage and submission. `RendererCore` should append commands through a typed writer, not a raw pointer plus mutable glyph count.
+- Keep backend frames responsible for command storage and submission. `RendererCore` appends commands through `TextBatch(Backend.Command)` and derives the command type from the backend contract.
 - Preserve current build constraints: Zig 0.16, build-system `addTranslateC()`, lazy Vulkan/GLFW dependencies, and demo-only GLFW.
 
 ## Dependency Graph
@@ -243,7 +243,7 @@ public type cleanup
 **Description:** Make command generation an explicit append-only frame stage.
 
 **Tasks:**
-- Replace `RendererCore.appendRun(backend, Command, commands, run)` with a writer interface or fixed-capacity `TextBatch(Command)`.
+- Replace `RendererCore.appendRun(backend, Command, commands, run)` with a writer interface or fixed-capacity `TextBatch(Backend.Command)`.
 - Make `TextBatch` support borrowed mapped memory so it does not force `ArrayList` allocation.
 - Move glyph count and submit-state ownership from backend renderers into `BackendFrame` or `TextBatch`.
 - Keep `GlyphStore` responsible only for cache, byte pool, and deferred retirement.
@@ -274,7 +274,7 @@ public type cleanup
 
 **Tasks:**
 - Replace the current backend contract methods with names that describe ownership: `uploadBlob`, `retireBlob`, `beginBackendFrame`, or an equivalent frame writer contract.
-- Keep `GlyphRef` opaque to the core; document Vulkan descriptor-slot refs and Metal byte-offset refs only inside backend modules.
+- Keep `GlyphRef` typed and opaque to the core; document Vulkan descriptor-slot refs and Metal byte-offset refs only inside backend modules.
 - Ensure zero-glyph submit behavior releases or preserves frame slots consistently across backends.
 - Review Metal frame-slot completion and Vulkan `markFrameComplete()` expectations for matching lifetime semantics.
 
@@ -413,5 +413,6 @@ public type cleanup
 - `heavy_slug.core` and `heavy_slug.gpu` remain exported for expert/internal users; the stable root aliases remain the documented public path.
 - `ShapePlan` currently exposes typed direction/script properties. HarfBuzz feature-string support remains additive future work.
 - `CoverageBlob` owns `[]Texel` and exposes aligned bytes for upload.
+- `GlyphRef` is a typed core resource reference; Vulkan interprets its value as a descriptor slot, while Metal interprets it as a byte offset.
 - H-band dedupe for multi-band fragments remains out of scope until pixel-diff infrastructure exists; multi-band fragments still use full scan.
 - `FontContext` was removed. `FontSystem`, `LoadedFont`, `GlyphEncoder`, and `ShapePlan` carry its former responsibilities.

@@ -1,7 +1,7 @@
 const std = @import("std");
 const regularize = @import("regularize.zig");
 
-pub fn signedArea(spans: []const regularize.CubicSpan) f64 {
+pub fn signedArea(spans: []const regularize.RegularizedCubicSpan) f64 {
     var area: f64 = 0.0;
     for (spans) |span| {
         area += lineIntegral(span.p0, span.p1);
@@ -16,13 +16,13 @@ fn lineIntegral(a: regularize.Point, b: regularize.Point) f64 {
 }
 
 test "area: signed area distinguishes contour direction" {
-    const ccw = [_]regularize.CubicSpan{
+    const ccw = [_]regularize.RegularizedCubicSpan{
         regularize.lineAsCubic(.{ .x = 0, .y = 0 }, .{ .x = 1, .y = 0 }),
         regularize.lineAsCubic(.{ .x = 1, .y = 0 }, .{ .x = 1, .y = 1 }),
         regularize.lineAsCubic(.{ .x = 1, .y = 1 }, .{ .x = 0, .y = 1 }),
         regularize.lineAsCubic(.{ .x = 0, .y = 1 }, .{ .x = 0, .y = 0 }),
     };
-    const cw = [_]regularize.CubicSpan{
+    const cw = [_]regularize.RegularizedCubicSpan{
         regularize.lineAsCubic(.{ .x = 0, .y = 0 }, .{ .x = 0, .y = 1 }),
         regularize.lineAsCubic(.{ .x = 0, .y = 1 }, .{ .x = 1, .y = 1 }),
         regularize.lineAsCubic(.{ .x = 1, .y = 1 }, .{ .x = 1, .y = 0 }),

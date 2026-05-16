@@ -32,8 +32,6 @@ pub const RegularizedCubicSpan = struct {
     }
 };
 
-pub const CubicSpan = RegularizedCubicSpan;
-
 const max_cubic_prepare_depth = 8;
 const blob_units_per_pixel = blob_format.units_per_pixel;
 

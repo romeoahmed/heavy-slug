@@ -2,6 +2,7 @@ const std = @import("std");
 const format = @import("format.zig");
 const decode = @import("decode.zig");
 const hband = @import("hband.zig");
+const regularize = @import("../outline/regularize.zig");
 
 pub const CurveBounds = struct {
     min_x: i32,
@@ -176,7 +177,7 @@ fn lessThan(_: void, a: f64, b: f64) bool {
 
 test "reference: h-band candidates are a superset of full-scan y-overlap" {
     const encode = @import("encode.zig");
-    const EncodeCubic = encode.Cubic;
+    const EncodeCubic = regularize.RegularizedCubicSpan;
     const curves = [_]EncodeCubic{
         .{
             .p0 = .{ .x = 0, .y = 0 },
@@ -210,7 +211,7 @@ test "reference: h-band candidates are a superset of full-scan y-overlap" {
 
 test "reference: analytic point coverage handles filled contours" {
     const encode = @import("encode.zig");
-    const CubicForEncode = encode.Cubic;
+    const CubicForEncode = regularize.RegularizedCubicSpan;
     const square = [_]CubicForEncode{
         .{ .p0 = .{ .x = 0, .y = 0 }, .p1 = .{ .x = 1, .y = 0 }, .p2 = .{ .x = 2, .y = 0 }, .p3 = .{ .x = 3, .y = 0 } },
         .{ .p0 = .{ .x = 3, .y = 0 }, .p1 = .{ .x = 3, .y = 1 }, .p2 = .{ .x = 3, .y = 2 }, .p3 = .{ .x = 3, .y = 3 } },

@@ -15,7 +15,7 @@ pub const Error = error{
 };
 
 pub const Point = stream.Point;
-pub const Cubic = regularize.RegularizedCubicSpan;
+const RegularizedCubicSpan = regularize.RegularizedCubicSpan;
 
 pub const OutlineCapture = struct {
     stream: stream.OutlineStream,
@@ -70,7 +70,7 @@ pub const Encoder = struct {
     allocator: std.mem.Allocator,
     funcs: *c.hb_draw_funcs_t,
     capture: OutlineCapture,
-    spans: std.ArrayList(Cubic) = .empty,
+    spans: std.ArrayList(RegularizedCubicSpan) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) Error!Encoder {
         const funcs = c.hb_draw_funcs_create() orelse return error.HarfBuzzAllocationFailed;

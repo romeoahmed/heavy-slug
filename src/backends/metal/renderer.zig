@@ -73,8 +73,7 @@ pub const Error = error{
     MetalDrawFailed,
 };
 
-pub const Options = render.Options;
-pub const InitOptions = Options;
+pub const RendererOptions = render.RendererOptions;
 pub const FontHandle = render.FontHandle;
 pub const FrameToken = render.FrameToken;
 pub const Stats = render.Stats;
@@ -161,7 +160,7 @@ pub const Frame = struct {
         run: heavy_slug.TextRun,
     ) !void {
         if (self.submitted) return error.FrameAlreadySubmitted;
-        try self.renderer.core.appendRun(self.renderer, GlyphCommand, &self.batch, run);
+        try self.renderer.core.appendRun(self.renderer, &self.batch, run);
     }
 
     pub fn submit(self: *Frame, target: Target) !render.FrameToken {
@@ -174,7 +173,7 @@ pub const Frame = struct {
 };
 
 pub const Renderer = struct {
-    pub const GlyphRef = u32;
+    pub const GlyphRef = render.GlyphRef;
     pub const FrameToken = render.FrameToken;
     pub const Command = GlyphCommand;
 
@@ -192,7 +191,7 @@ pub const Renderer = struct {
     pub fn init(
         context: Context,
         allocator: std.mem.Allocator,
-        options: InitOptions,
+        options: RendererOptions,
     ) !Renderer {
         var core = try render.RendererCore.init(allocator, options);
         errdefer core.deinit();
@@ -282,13 +281,13 @@ pub const Renderer = struct {
         };
     }
 
-    pub fn uploadBlob(self: *Renderer, pool_alloc: pool_mod.Allocation, data: []const u8) !u32 {
+    pub fn uploadBlob(self: *Renderer, pool_alloc: pool_mod.Allocation, data: []const u8) !GlyphRef {
         const dst = self.pool_buffer.mapped[pool_alloc.offset..][0..data.len];
         @memcpy(dst, data);
-        return pool_alloc.offset;
+        return GlyphRef.from(pool_alloc.offset);
     }
 
-    pub fn retireBlob(self: *Renderer, _: u32) void {
+    pub fn retireBlob(self: *Renderer, _: GlyphRef) void {
         _ = self;
         // Metal stores glyph refs as byte offsets into one buffer; RendererCore
         // frees the paired pool allocation only after a completed frame token.

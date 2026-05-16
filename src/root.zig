@@ -24,6 +24,10 @@ const font = core.font;
 const cache = core.cache.glyph_cache;
 const pool = core.cache.byte_pool;
 
+fn testGlyphRef(value: u32) cache.GlyphRef {
+    return cache.GlyphRef.from(value);
+}
+
 test {
     _ = core;
     _ = pga;
@@ -103,10 +107,10 @@ test "integration: cache eviction reclaims pool space" {
 
     // Fill cold cache with pool-backed allocations
     const alloc_a = pa.alloc(100).?;
-    try gc.insertCold(.{ .font_id = 1, .glyph_id = 1 }, 0, alloc_a, dummy_box);
+    try gc.insertCold(.{ .font_id = 1, .glyph_id = 1 }, testGlyphRef(0), alloc_a, dummy_box);
 
     const alloc_b = pa.alloc(100).?;
-    try gc.insertCold(.{ .font_id = 1, .glyph_id = 2 }, 1, alloc_b, dummy_box);
+    try gc.insertCold(.{ .font_id = 1, .glyph_id = 2 }, testGlyphRef(1), alloc_b, dummy_box);
 
     // Cold is full -- evict LRU (alloc_a was inserted first)
     const evicted = gc.evictLru().?;
@@ -128,7 +132,7 @@ test "integration: cold-to-hot promotion preserves pool allocation" {
     const dummy_box = cache.EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
     const alloc = pa.alloc(200).?;
     const key = cache.CacheKey{ .font_id = 1, .glyph_id = 42 };
-    try gc.insertCold(key, 0, alloc, dummy_box);
+    try gc.insertCold(key, testGlyphRef(0), alloc, dummy_box);
 
     // Use for 2 consecutive frames to trigger promotion (promote_frames=2)
     gc.advanceFrame();
@@ -159,15 +163,15 @@ test "integration: removeFont reclaims all pool and cache resources" {
 
     // Font 1: one hot + two cold entries
     const alloc_1a = pa.alloc(128).?;
-    try gc.insertHot(.{ .font_id = 1, .glyph_id = 65 }, 0, alloc_1a, dummy_box);
+    try gc.insertHot(.{ .font_id = 1, .glyph_id = 65 }, testGlyphRef(0), alloc_1a, dummy_box);
     const alloc_1b = pa.alloc(128).?;
-    try gc.insertCold(.{ .font_id = 1, .glyph_id = 66 }, 1, alloc_1b, dummy_box);
+    try gc.insertCold(.{ .font_id = 1, .glyph_id = 66 }, testGlyphRef(1), alloc_1b, dummy_box);
     const alloc_1c = pa.alloc(128).?;
-    try gc.insertCold(.{ .font_id = 1, .glyph_id = 67 }, 2, alloc_1c, dummy_box);
+    try gc.insertCold(.{ .font_id = 1, .glyph_id = 67 }, testGlyphRef(2), alloc_1c, dummy_box);
 
     // Font 2: one cold entry
     const alloc_2 = pa.alloc(128).?;
-    try gc.insertCold(.{ .font_id = 2, .glyph_id = 65 }, 3, alloc_2, dummy_box);
+    try gc.insertCold(.{ .font_id = 2, .glyph_id = 65 }, testGlyphRef(3), alloc_2, dummy_box);
 
     try std.testing.expectEqual(@as(u32, 4), gc.count());
 

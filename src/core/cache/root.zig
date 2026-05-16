@@ -3,6 +3,7 @@ pub const byte_pool = @import("byte_pool.zig");
 pub const retirement = @import("retirement.zig");
 
 pub const GlyphCache = glyph_cache.GlyphCache;
+pub const GlyphRef = glyph_cache.GlyphRef;
 pub const CacheKey = glyph_cache.CacheKey;
 pub const CacheEntry = glyph_cache.CacheEntry;
 pub const EmBox = glyph_cache.EmBox;

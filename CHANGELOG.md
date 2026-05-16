@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Glyph cache keys are variation-aware** with a reserved variation hash field for future variable-font instances.
 - **CoverageBlob blobs gained an h-band candidate index** that accelerates common fragments while preserving the full-scan path as the correctness fallback.
 - **CoverageBlob header simplified** by removing the unused blob version field and related decoder checks.
+- **Glyph resource references are now typed as `GlyphRef`** and the GPU command ABI uses backend-neutral `glyph_ref` instead of Vulkan-specific descriptor naming.
+- **Shader build steps now track Slang import files** so ABI reflection and compiled shaders regenerate when shared modules change.
 - **Zig 0.16 API usage tightened** by replacing deprecated `std.ArrayListUnmanaged` aliases and old `std.mem.indexOf` calls.
 - **CI expanded** to run tests and ReleaseFast builds on both `ubuntu-latest` and `macos-26`, including `-Dvulkan=true` on Ubuntu and `-Dmetal=true` on macOS ARM64.
 - **Tool setup scripts hardened** to infer runner platforms, resolve Zig packages from the official download index, and match Slang release tarballs exactly.

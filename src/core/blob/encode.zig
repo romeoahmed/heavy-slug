@@ -3,7 +3,7 @@ const format = @import("format.zig");
 const decode = @import("decode.zig");
 const regularize = @import("../outline/regularize.zig");
 
-pub const Cubic = regularize.RegularizedCubicSpan;
+const RegularizedCubicSpan = regularize.RegularizedCubicSpan;
 
 pub const Error = error{
     GlyphTooLarge,
@@ -19,7 +19,7 @@ const curve_ids_per_texel = format.curve_ids_per_texel;
 const hband_height_q = format.hband_height_units;
 const blob_units_per_pixel = format.units_per_pixel;
 
-pub fn curves(allocator: std.mem.Allocator, source_curves: []const Cubic) Error!CoverageBlob {
+pub fn curves(allocator: std.mem.Allocator, source_curves: []const RegularizedCubicSpan) Error!CoverageBlob {
     if (source_curves.len == 0) return CoverageBlob.empty(allocator);
     if (source_curves.len > std.math.maxInt(i16)) return error.GlyphOffsetOverflow;
 
@@ -28,7 +28,7 @@ pub fn curves(allocator: std.mem.Allocator, source_curves: []const Cubic) Error!
     var max_x_f: f64 = -std.math.inf(f64);
     var max_y_f: f64 = -std.math.inf(f64);
 
-    const quantized_curves = try allocator.alloc(Cubic, source_curves.len);
+    const quantized_curves = try allocator.alloc(RegularizedCubicSpan, source_curves.len);
     defer allocator.free(quantized_curves);
 
     for (source_curves, 0..) |source_curve, i| {
@@ -135,7 +135,7 @@ const HBandIndex = struct {
 
     fn init(
         allocator: std.mem.Allocator,
-        curve_spans: []const Cubic,
+        curve_spans: []const RegularizedCubicSpan,
         min_y_q: i16,
         max_y_q: i16,
     ) Error!HBandIndex {
@@ -201,7 +201,7 @@ const HBandIndex = struct {
     }
 };
 
-fn curveBandRange(curve: Cubic, band_min: i32) Error!struct { lo: usize, hi: usize } {
+fn curveBandRange(curve: RegularizedCubicSpan, band_min: i32) Error!struct { lo: usize, hi: usize } {
     const min_y = try quantizeDown(curve.minY());
     const max_y = try quantizeUp(curve.maxY());
     const lo_i32 = bandIndex(min_y) - band_min;
@@ -222,7 +222,7 @@ fn idAtOrZero(ids: []const i16, index: usize) i16 {
     return if (index < ids.len) ids[index] else 0;
 }
 
-fn quantizedCubic(curve: Cubic) Error!Cubic {
+fn quantizedCubic(curve: RegularizedCubicSpan) Error!RegularizedCubicSpan {
     return .{
         .p0 = try quantizedPoint(curve.p0),
         .p1 = try quantizedPoint(curve.p1),
@@ -261,18 +261,18 @@ fn dequantize(v: i16) f64 {
     return @as(f64, @floatFromInt(v)) / blob_units_per_pixel;
 }
 
-fn fillSignCubics(curve_spans: []const Cubic) i16 {
+fn fillSignCubics(curve_spans: []const RegularizedCubicSpan) i16 {
     const area = signedAreaCubics(curve_spans);
     return if (area < 0) -1 else 1;
 }
 
-fn signedAreaCubics(curve_spans: []const Cubic) f64 {
+fn signedAreaCubics(curve_spans: []const RegularizedCubicSpan) f64 {
     var area: f64 = 0;
     for (curve_spans) |curve| area += cubicSignedArea(curve);
     return area;
 }
 
-fn cubicSignedArea(curve: Cubic) f64 {
+fn cubicSignedArea(curve: RegularizedCubicSpan) f64 {
     const mid: f64 = 0.5;
     const half: f64 = 0.5;
     const root: f64 = 0.7745966692414834;
@@ -281,13 +281,13 @@ fn cubicSignedArea(curve: Cubic) f64 {
         5.0 / 9.0 * greenIntegrand(curve, mid + half * root));
 }
 
-fn greenIntegrand(curve: Cubic, t: f64) f64 {
+fn greenIntegrand(curve: RegularizedCubicSpan, t: f64) f64 {
     const p = cubicPoint(curve, t);
     const d = cubicDerivative(curve, t);
     return 0.5 * (p.x * d.y - p.y * d.x);
 }
 
-fn cubicPoint(curve: Cubic, t: f64) regularize.Point {
+fn cubicPoint(curve: RegularizedCubicSpan, t: f64) regularize.Point {
     const a = lerpPoint(curve.p0, curve.p1, t);
     const b = lerpPoint(curve.p1, curve.p2, t);
     const c = lerpPoint(curve.p2, curve.p3, t);
@@ -296,7 +296,7 @@ fn cubicPoint(curve: Cubic, t: f64) regularize.Point {
     return lerpPoint(d, e, t);
 }
 
-fn cubicDerivative(curve: Cubic, t: f64) regularize.Point {
+fn cubicDerivative(curve: RegularizedCubicSpan, t: f64) regularize.Point {
     const u = 1.0 - t;
     return .{
         .x = 3.0 * (u * u * (curve.p1.x - curve.p0.x) +
@@ -324,7 +324,7 @@ fn mulU32(a: u32, b: u32) Error!u32 {
 }
 
 test "blob encode: curves round trip through CoverageBlob decoder" {
-    const source = [_]Cubic{
+    const source = [_]RegularizedCubicSpan{
         .{
             .p0 = .{ .x = 0, .y = 0 },
             .p1 = .{ .x = 1, .y = 2 },
@@ -342,7 +342,7 @@ test "blob encode: curves round trip through CoverageBlob decoder" {
 }
 
 test "blob encode: writes h-band candidate index after curves" {
-    const source = [_]Cubic{
+    const source = [_]RegularizedCubicSpan{
         regularize.lineAsCubic(.{ .x = 0, .y = 0 }, .{ .x = 1, .y = 1 }),
         regularize.lineAsCubic(.{ .x = 1, .y = 1 }, .{ .x = 2, .y = 2 }),
     };
@@ -372,13 +372,13 @@ test "blob encode: writes h-band candidate index after curves" {
 }
 
 test "blob encode: stores glyph fill direction in header" {
-    const ccw = [_]Cubic{
+    const ccw = [_]RegularizedCubicSpan{
         regularize.lineAsCubic(.{ .x = 0, .y = 0 }, .{ .x = 2, .y = 0 }),
         regularize.lineAsCubic(.{ .x = 2, .y = 0 }, .{ .x = 2, .y = 2 }),
         regularize.lineAsCubic(.{ .x = 2, .y = 2 }, .{ .x = 0, .y = 2 }),
         regularize.lineAsCubic(.{ .x = 0, .y = 2 }, .{ .x = 0, .y = 0 }),
     };
-    const cw = [_]Cubic{
+    const cw = [_]RegularizedCubicSpan{
         regularize.lineAsCubic(.{ .x = 0, .y = 0 }, .{ .x = 0, .y = 2 }),
         regularize.lineAsCubic(.{ .x = 0, .y = 2 }, .{ .x = 2, .y = 2 }),
         regularize.lineAsCubic(.{ .x = 2, .y = 2 }, .{ .x = 2, .y = 0 }),

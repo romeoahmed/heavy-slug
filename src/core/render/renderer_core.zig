@@ -10,7 +10,7 @@ const units = @import("../units.zig");
 const hb = font_mod.hb;
 const pga = @import("../../math/pga.zig");
 
-pub const empty_glyph_ref = std.math.maxInt(u32);
+pub const GlyphRef = cache_mod.GlyphRef;
 
 pub const Error = error{
     GlyphCapacityExceeded,
@@ -35,8 +35,6 @@ pub const TextRun = struct {
     color: core_types.Color = .black,
     fill_rule: core_types.FillRule = .non_zero,
 };
-
-pub const Options = RendererOptions;
 
 pub const Stats = if (@import("builtin").mode == .Debug) struct {
     cache_hits: u32 = 0,
@@ -69,7 +67,7 @@ const FontEntry = struct {
 };
 
 const CachedGlyph = struct {
-    ref: u32,
+    ref: GlyphRef,
     em_box: cache_mod.EmBox,
 };
 
@@ -105,7 +103,7 @@ pub const RendererCore = struct {
     stats: Stats,
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator, options: Options) !RendererCore {
+    pub fn init(allocator: std.mem.Allocator, options: RendererOptions) !RendererCore {
         var store = try glyph_store_mod.GlyphStore.init(allocator, options);
         errdefer store.deinit();
 
@@ -199,11 +197,16 @@ pub const RendererCore = struct {
     pub fn appendRun(
         self: *RendererCore,
         backend: anytype,
-        comptime Command: type,
-        batch: *text_batch_mod.TextBatch(Command),
+        batch: anytype,
         run: TextRun,
     ) !void {
         comptime backend_contract.BackendContract(@TypeOf(backend));
+        comptime {
+            const ExpectedBatch = *text_batch_mod.TextBatch(backend_contract.CommandType(@TypeOf(backend)));
+            if (@TypeOf(batch) != ExpectedBatch) {
+                @compileError("RendererCore.appendRun requires *TextBatch(Backend.Command)");
+            }
+        }
         const font = run.font;
         const font_entry = self.fonts.get(font.id) orelse return Error.ShapingFailed;
 
@@ -241,7 +244,7 @@ pub const RendererCore = struct {
                 break :blk try self.ensureGlyphCached(backend, font_entry, cache_key);
             };
 
-            if (cached_glyph.ref != empty_glyph_ref) {
+            if (!cached_glyph.ref.isEmpty()) {
                 try batch.append(.{
                     .motor = glyph_motor.m,
                     .color = color,
@@ -249,7 +252,7 @@ pub const RendererCore = struct {
                     .em_y_min = cached_glyph.em_box.y_min,
                     .em_x_max = cached_glyph.em_box.x_max,
                     .em_y_max = cached_glyph.em_box.y_max,
-                    .descriptor_index = cached_glyph.ref,
+                    .glyph_ref = cached_glyph.ref.value,
                     .flags = flags,
                 });
                 self.glyph_count = batch.count();
@@ -280,8 +283,8 @@ pub const RendererCore = struct {
         }
 
         if (encoded.data.len == 0) {
-            try self.store.glyph_cache.insertCold(cache_key, empty_glyph_ref, .{ .offset = 0, .size = 0 }, em_box);
-            return .{ .ref = empty_glyph_ref, .em_box = em_box };
+            try self.store.glyph_cache.insertCold(cache_key, GlyphRef.empty, .{ .offset = 0, .size = 0 }, em_box);
+            return .{ .ref = GlyphRef.empty, .em_box = em_box };
         }
 
         const pool_alloc = self.store.pool_alloc.alloc(@intCast(encoded.data.len)) orelse
@@ -303,13 +306,13 @@ const TestCommand = extern struct {
     em_y_min: f32,
     em_x_max: f32,
     em_y_max: f32,
-    descriptor_index: u32,
+    glyph_ref: u32,
     flags: u32,
     _pad: [2]u32 = .{ 0, 0 },
 };
 
 const FakeBackend = struct {
-    pub const GlyphRef = u32;
+    pub const GlyphRef = cache_mod.GlyphRef;
     pub const FrameToken = glyph_store_mod.FrameToken;
     pub const Command = TestCommand;
 
@@ -317,14 +320,14 @@ const FakeBackend = struct {
     next_ref: u32 = 0,
     releases: u32 = 0,
 
-    pub fn uploadBlob(self: *FakeBackend, allocation: pool_mod.Allocation, data: []const u8) !u32 {
+    pub fn uploadBlob(self: *FakeBackend, allocation: pool_mod.Allocation, data: []const u8) !cache_mod.GlyphRef {
         @memcpy(self.pool[allocation.offset..][0..data.len], data);
         const ref = self.next_ref;
         self.next_ref += 1;
-        return ref;
+        return cache_mod.GlyphRef.from(ref);
     }
 
-    pub fn retireBlob(self: *FakeBackend, _: u32) void {
+    pub fn retireBlob(self: *FakeBackend, _: cache_mod.GlyphRef) void {
         self.releases += 1;
     }
 
@@ -372,7 +375,7 @@ test "render: RendererCore appends shaped glyph commands and caches blobs" {
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(backend.completedFrameToken(), &backend);
-    try core.appendRun(&backend, TestCommand, &batch, .{
+    try core.appendRun(&backend, &batch, .{
         .font = font,
         .text = "Hi",
         .transform = core_types.Transform.translation(10, 20),
@@ -381,11 +384,11 @@ test "render: RendererCore appends shaped glyph commands and caches blobs" {
 
     try std.testing.expect(core.glyph_count > 0);
     try std.testing.expect(backend.next_ref > 0);
-    try std.testing.expect(commands[0].descriptor_index != empty_glyph_ref);
+    try std.testing.expect(commands[0].glyph_ref != GlyphRef.empty.value);
     try std.testing.expect(commands[0].motor[2] != 0);
 
     const refs_after_first = backend.next_ref;
-    try core.appendRun(&backend, TestCommand, &batch, .{
+    try core.appendRun(&backend, &batch, .{
         .font = font,
         .text = "Hi",
         .transform = core_types.Transform.translation(10, 20),
@@ -405,7 +408,7 @@ test "render: RendererCore skips empty glyph commands while preserving cache ent
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(backend.completedFrameToken(), &backend);
-    try core.appendRun(&backend, TestCommand, &batch, .{
+    try core.appendRun(&backend, &batch, .{
         .font = font,
         .text = " ",
         .color = .white,
@@ -429,7 +432,7 @@ test "render: RendererCore enforces command capacity after skipping empty glyphs
     core.beginFrame(backend.completedFrameToken(), &backend);
     try std.testing.expectError(
         Error.GlyphCapacityExceeded,
-        core.appendRun(&backend, TestCommand, &batch, .{
+        core.appendRun(&backend, &batch, .{
             .font = font,
             .text = "HH",
             .color = .white,
@@ -449,7 +452,7 @@ test "render: RendererCore writes fill-rule flags into glyph commands" {
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(backend.completedFrameToken(), &backend);
-    try core.appendRun(&backend, TestCommand, &batch, .{
+    try core.appendRun(&backend, &batch, .{
         .font = font,
         .text = "A",
         .color = .white,
@@ -476,7 +479,7 @@ test "render: RendererCore defers evicted glyph retirement until frame token com
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.setRetireAfterToken(7);
     core.beginFrame(0, &backend);
-    try core.appendRun(&backend, TestCommand, &batch, .{
+    try core.appendRun(&backend, &batch, .{
         .font = font,
         .text = "A",
         .color = .white,
@@ -484,7 +487,7 @@ test "render: RendererCore defers evicted glyph retirement until frame token com
 
     core.setRetireAfterToken(7);
     core.beginFrame(0, &backend);
-    try core.appendRun(&backend, TestCommand, &batch, .{
+    try core.appendRun(&backend, &batch, .{
         .font = font,
         .text = "B",
         .color = .white,
