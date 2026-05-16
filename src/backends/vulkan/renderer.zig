@@ -437,14 +437,7 @@ pub const Renderer = struct {
         const projection = target.projection;
         const viewport = target.viewport;
 
-        const vk_viewport = vk.Viewport{
-            .x = 0,
-            .y = 0,
-            .width = viewport[0],
-            .height = viewport[1],
-            .min_depth = 0,
-            .max_depth = 1,
-        };
+        const vk_viewport = yUpViewport(viewport);
         self.dispatch.cmdSetViewport(vk_cmd, 0, &.{vk_viewport});
 
         const vk_scissor = vk.Rect2D{
@@ -548,6 +541,22 @@ fn readShaderStatsBuffer(buffer: MappedBuffer) heavy_slug.ShaderStats {
     return shader_stats_mod.Snapshot.fromBytes(bytes);
 }
 
+// Match the Metal demo's y-up clip-space convention without changing shared scene input math.
+fn yUpViewport(viewport: [2]f32) vk.Viewport {
+    return .{
+        .x = 0,
+        .y = viewport[1],
+        .width = viewport[0],
+        .height = -viewport[1],
+        .min_depth = 0,
+        .max_depth = 1,
+    };
+}
+
+fn viewportFramebufferY(viewport: vk.Viewport, ndc_y: f32) f32 {
+    return viewport.y + (ndc_y + 1.0) * viewport.height * 0.5;
+}
+
 test "RendererOptions has correct defaults" {
     const opts = RendererOptions{};
     try std.testing.expectEqual(@as(u32, 16_384), opts.max_glyphs_per_frame);
@@ -590,6 +599,17 @@ test "task workgroup validation follows Vulkan mesh shader draw limits" {
 
     props.max_task_work_group_total_count = 3;
     try std.testing.expectError(Error.MeshTaskWorkgroupLimitExceeded, validateTaskDrawWorkgroups(props, 4));
+}
+
+test "yUpViewport matches the Metal demo clip-space convention" {
+    const viewport = yUpViewport(.{ 1280, 720 });
+
+    try std.testing.expectEqual(@as(f32, 0), viewport.x);
+    try std.testing.expectEqual(@as(f32, 720), viewport.y);
+    try std.testing.expectEqual(@as(f32, 1280), viewport.width);
+    try std.testing.expectEqual(@as(f32, -720), viewport.height);
+    try std.testing.expectEqual(@as(f32, 0), viewportFramebufferY(viewport, 1));
+    try std.testing.expectEqual(@as(f32, 720), viewportFramebufferY(viewport, -1));
 }
 
 test "Renderer satisfies core backend contract" {

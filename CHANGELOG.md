@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Vulkan demo orientation:** use a negative-height dynamic viewport so the
+  shared demo projection and mouse controls match the Metal demo's y-up
+  coordinate convention.
 - **Vulkan demo build:** initialize Vulkan property/feature `pNext`
   chains with explicit `sType` values and zeroed payload structs so Zig 0.16
   bindings compile the demo path consistently.
