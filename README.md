@@ -67,7 +67,7 @@ backend-neutral command generation. Applications still own GPU devices, queues,
 swapchains, windows, and frame completion.
 
 - Vulkan uses SPIR-V 1.6 mesh shaders on Vulkan 1.4 with `VK_EXT_mesh_shader`.
-  Glyph blobs live in one storage buffer and `glyph_ref` is a byte offset.
+  Glyph blobs live in one storage buffer and `blob_ref` is a byte offset.
   Per-glyph descriptor slots were removed because the single-pool model is
   simpler and faster for the current data layout.
 - Metal uses the Metal 4 core API: `MTL4CommandQueue`,
@@ -85,7 +85,7 @@ FontSystem
   -> RegularizedCubicSpans
   -> CoverageBlob
   -> GlyphStore
-  -> TextBatch
+  -> GlyphBatch
   -> Backend Frame
   -> Task/Mesh/Fragment shaders
 ```
@@ -102,9 +102,9 @@ writes a compact `CoverageBlob` containing:
 - packed band candidate curve IDs.
 
 `GlyphStore` owns the two-tier glyph cache, byte-pool allocations, and deferred
-resource retirement. The renderer core emits backend-neutral `GlyphCommand`
-records into a `TextBatch`. Backends upload the command buffer, bind the shared
-glyph pool, and submit one task/mesh draw. Resource reuse is guarded by
+resource retirement. The renderer core emits backend-neutral `GlyphInstance`
+records into a `GlyphBatch`. Backends upload the glyph instance buffer, bind the
+shared glyph pool, and submit one task/mesh draw. Resource reuse is guarded by
 `FrameToken` completion reported by the host.
 
 ## Algorithm Details
@@ -175,8 +175,8 @@ zig build test
 zig build test -Dvulkan=true
 zig build test -Dmetal=true
 zig build test -Dvulkan=true -Dmetal=true -Dshader-stats=true
-zig build shaders
-zig build metal-shaders
+zig build spirv
+zig build msl
 zig build -Doptimize=ReleaseFast
 ```
 
@@ -185,8 +185,8 @@ Useful options:
 ```bash
 zig build test -Dvulkan=true -Dshader-stats=true
 zig build test -Dmetal=true -Dshader-stats=true
-zig build shaders -Dshader-stats=true
-zig build metal-shaders -Dshader-stats=true
+zig build spirv -Dshader-stats=true
+zig build msl -Dshader-stats=true
 zig build -Dthinlto=auto
 zig build -Dthinlto=on
 zig build -Dthinlto=off
@@ -203,8 +203,8 @@ Mach-O LLD linking is unsupported, so macOS release builds skip ThinLTO unless
 ## Demos
 
 ```bash
-zig build run -Ddemo=true -Ddemo-backend=vulkan_spirv16
-zig build run -Ddemo=true -Ddemo-backend=metal4
+zig build run -Ddemo=true -Ddemo-backend=vulkan
+zig build run -Ddemo=true -Ddemo-backend=metal
 ```
 
 The Vulkan demo is intended for Windows/Linux. The Metal demo is intended for
@@ -282,12 +282,13 @@ The Vulkan backend uses conventional descriptor sets for the small frame-local
 binding table:
 
 - binding 0: one glyph blob storage buffer,
-- binding 1: frame-local `GlyphCommand[]`,
+- binding 1: frame-local `GlyphInstance[]`,
 - binding 2: optional shader stats buffer.
 
 `VK_EXT_descriptor_heap` was evaluated but not adopted. The renderer no longer
-needs a descriptor per cached glyph; a single glyph pool buffer with byte-offset
-`GlyphRef` values removes the pressure that descriptor heap would have solved.
+needs a descriptor per cached glyph; a single glyph pool buffer with
+byte-offset `GlyphBlobRef` values removes the pressure that descriptor heap
+would have solved.
 
 ### Metal 4
 

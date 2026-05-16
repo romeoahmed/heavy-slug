@@ -14,11 +14,11 @@ struct VertexOutput
     float4 color       : COLOR;
 #if HEAVY_SLUG_METAL
     float2 texcoord    : TEXCOORD;
-    nointerpolation uint glyphRef : TEXCOORD_1;
+    nointerpolation uint blobRef : TEXCOORD_1;
     nointerpolation uint flags           : TEXCOORD_2;
 #else
     float2 texcoord    : TEXCOORD0;
-    nointerpolation uint glyphRef : TEXCOORD1;
+    nointerpolation uint blobRef : TEXCOORD1;
     nointerpolation uint flags           : TEXCOORD2;
 #endif
 };
@@ -53,11 +53,11 @@ void addShaderStat(uint index, uint value)
 }
 #endif
 
-BlobReader glyphBlob(uint glyphRef)
+BlobReader blobReader(uint blobRef)
 {
     BlobReader blob;
     blob.buf = glyphPool;
-    blob.base = glyphRef;
+    blob.base = blobRef;
     return blob;
 }
 
@@ -71,14 +71,14 @@ uint sliceCount(uint sliceInfo)
     return sliceInfo >> 16;
 }
 
-float2 emPerPixel(GlyphCommand cmd)
+float2 emPerPixel(GlyphInstance glyph)
 {
-    float2 halfDim = pc.viewport_dim * 0.5;
+    float2 halfDim = pc.viewport_size * 0.5;
     float2 ppe = float2(
-        length(float2(pc.proj[0][0] * halfDim.x, pc.proj[1][0] * halfDim.y)),
-        length(float2(pc.proj[0][1] * halfDim.x, pc.proj[1][1] * halfDim.y))
+        length(float2(pc.projection[0][0] * halfDim.x, pc.projection[1][0] * halfDim.y)),
+        length(float2(pc.projection[0][1] * halfDim.x, pc.projection[1][1] * halfDim.y))
     );
-    float ms = cmd.motor.x * cmd.motor.x + cmd.motor.y * cmd.motor.y;
+    float ms = glyph.motor.x * glyph.motor.x + glyph.motor.y * glyph.motor.y;
     return (1.0 / ppe) / ms;
 }
 
@@ -140,8 +140,8 @@ void meshMain(
     uint requestedSlice = sliceIndex(info);
     uint requestedSlices = max(sliceCount(info), 1u);
 
-    GlyphCommand cmd = commands[glyphIndex];
-    BlobReader blob = glyphBlob(cmd.glyph_ref);
+    GlyphInstance glyph = glyphs[glyphIndex];
+    BlobReader blob = blobReader(glyph.blob_ref);
 
     float4 bounds;
     uint curveCount;
@@ -192,17 +192,17 @@ void meshMain(
             candidateCount += s_threadCandidateCounts[i];
         }
 
-        float2 dilate = emPerPixel(cmd) * 0.5;
-        float yMin = max(cmd.em_y_min, (float(bandMin) + float(bandStart)) * bandHeight);
-        float yMax = min(cmd.em_y_max, (float(bandMin) + float(bandEnd)) * bandHeight);
+        float2 dilate = emPerPixel(glyph) * 0.5;
+        float yMin = max(glyph.em_y_min, (float(bandMin) + float(bandStart)) * bandHeight);
+        float yMax = min(glyph.em_y_max, (float(bandMin) + float(bandEnd)) * bandHeight);
 
         if (bandStart == 0)
             yMin -= dilate.y;
         if (bandEnd == bandCount)
             yMax += dilate.y;
 
-        float2 rectMin = float2(max(cmd.em_x_min, minX) - dilate.x, yMin);
-        float2 rectMax = float2(min(cmd.em_x_max, maxX) + dilate.x, yMax);
+        float2 rectMin = float2(max(glyph.em_x_min, minX) - dilate.x, yMin);
+        float2 rectMax = float2(min(glyph.em_x_max, maxX) + dilate.x, yMax);
 
         bool emit = candidateCount != 0 && rectMax.x > rectMin.x && rectMax.y > rectMin.y;
         s_rect = float4(rectMin, rectMax);
@@ -222,18 +222,18 @@ void meshMain(
 
     if (gtid < 4)
     {
-        Motor motor = { cmd.motor };
+        Motor motor = { glyph.motor };
         float2 corner = kCornerOffsets[gtid];
         float2 emPos = lerp(s_rect.xy, s_rect.zw, corner);
         float2 worldPos = motor.apply(emPos);
-        float4 clipPos = mul(pc.proj, float4(worldPos, 0.0, 1.0));
+        float4 clipPos = mul(pc.projection, float4(worldPos, 0.0, 1.0));
 
         VertexOutput v;
         v.position = clipPos;
-        v.color = cmd.color;
+        v.color = glyph.color;
         v.texcoord = emPos;
-        v.glyphRef = cmd.glyph_ref;
-        v.flags = cmd.flags;
+        v.blobRef = glyph.blob_ref;
+        v.flags = glyph.flags;
         verts[gtid] = v;
     }
 

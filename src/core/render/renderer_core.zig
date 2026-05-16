@@ -7,13 +7,13 @@ const blob_format = @import("../blob/format.zig");
 const font_mod = @import("../font/root.zig");
 const glyph_store_mod = @import("glyph_store.zig");
 const backend_contract = @import("backend_contract.zig");
-const text_batch_mod = @import("text_batch.zig");
+const glyph_batch_mod = @import("glyph_batch.zig");
 const core_types = @import("../types.zig");
 const units = @import("../units.zig");
 const hb = font_mod.hb;
 const pga = @import("../../math/pga.zig");
 
-pub const GlyphRef = cache_mod.GlyphRef;
+pub const GlyphBlobRef = cache_mod.GlyphBlobRef;
 
 pub const Error = error{
     GlyphCapacityExceeded,
@@ -41,7 +41,7 @@ pub const TextRun = struct {
 pub const Stats = if (@import("builtin").mode == .Debug) struct {
     runs_shaped: u32 = 0,
     glyphs_shaped: u32 = 0,
-    commands_written: u32 = 0,
+    instances_written: u32 = 0,
     empty_glyphs_skipped: u32 = 0,
     cache_hits: u32 = 0,
     cache_misses: u32 = 0,
@@ -53,7 +53,7 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
     retirements_queued: u32 = 0,
     retirements_completed: u32 = 0,
     pool_alloc_failures: u32 = 0,
-    glyphs_submitted: u32 = 0,
+    instances_submitted: u32 = 0,
     pool: pool_mod.Snapshot = .{},
 
     pub fn reset(self: *@This()) void {
@@ -62,11 +62,11 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
 
     pub fn log(self: *const @This(), comptime scope: anytype) void {
         std.log.scoped(scope).debug(
-            "core stats: runs={d} shaped={d} commands={d} empty={d} hits={d} misses={d} encoded={d} spans={d} upload_bytes={d} evictions={d} retire_q={d} retire_done={d} pool_used={d} pool_free={d} largest_free={d} free_blocks={d}",
+            "core stats: runs={d} shaped={d} instances={d} empty={d} hits={d} misses={d} encoded={d} spans={d} upload_bytes={d} evictions={d} retire_q={d} retire_done={d} pool_used={d} pool_free={d} largest_free={d} free_blocks={d}",
             .{
                 self.runs_shaped,
                 self.glyphs_shaped,
-                self.commands_written,
+                self.instances_written,
                 self.empty_glyphs_skipped,
                 self.cache_hits,
                 self.cache_misses,
@@ -97,7 +97,7 @@ const FontEntry = struct {
 };
 
 const CachedGlyph = struct {
-    ref: GlyphRef,
+    blob_ref: GlyphBlobRef,
     em_box: cache_mod.EmBox,
 };
 
@@ -129,8 +129,8 @@ pub fn motorToEm(motor: pga.Motor) pga.Motor {
     return units.motorPixelsToHb26p6(motor);
 }
 
-pub fn projectionToEm(proj: [4][4]f32) [4][4]f32 {
-    return units.projectionPixelsToHb26p6(proj);
+pub fn projectionToEm(projection: [4][4]f32) [4][4]f32 {
+    return units.projectionPixelsToHb26p6(projection);
 }
 
 pub const RendererCore = struct {
@@ -248,9 +248,9 @@ pub const RendererCore = struct {
     ) !void {
         comptime backend_contract.BackendContract(@TypeOf(backend));
         comptime {
-            const ExpectedBatch = *text_batch_mod.TextBatch(backend_contract.CommandType(@TypeOf(backend)));
+            const ExpectedBatch = *glyph_batch_mod.GlyphBatch(backend_contract.GlyphInstanceType(@TypeOf(backend)));
             if (@TypeOf(batch) != ExpectedBatch) {
-                @compileError("RendererCore.appendRun requires *TextBatch(Backend.Command)");
+                @compileError("RendererCore.appendRun requires *GlyphBatch(Backend.GlyphInstance)");
             }
         }
         const font = run.font;
@@ -266,7 +266,7 @@ pub const RendererCore = struct {
         const em_motor = motorToEm(run.transform.toMotor());
         const em_translation = em_motor.translationComposer();
         const color = run.color.rgba;
-        const flags = run.fill_rule.commandFlags();
+        const flags = run.fill_rule.shaderFlags();
         const start_batch_len = batch.len;
         errdefer {
             batch.len = start_batch_len;
@@ -287,13 +287,13 @@ pub const RendererCore = struct {
             };
             const cached_glyph = if (self.store.glyph_cache.lookup(cache_key)) |entry| blk: {
                 if (@import("builtin").mode == .Debug) self.stats.cache_hits += 1;
-                break :blk CachedGlyph{ .ref = entry.slot, .em_box = entry.em_box };
+                break :blk CachedGlyph{ .blob_ref = entry.blob_ref, .em_box = entry.em_box };
             } else blk: {
                 if (@import("builtin").mode == .Debug) self.stats.cache_misses += 1;
                 break :blk try self.ensureGlyphCached(backend, font_entry, cache_key);
             };
 
-            if (!cached_glyph.ref.isEmpty()) {
+            if (!cached_glyph.blob_ref.isEmpty()) {
                 try batch.append(.{
                     .motor = glyph_motor.m,
                     .color = color,
@@ -301,10 +301,10 @@ pub const RendererCore = struct {
                     .em_y_min = cached_glyph.em_box.y_min,
                     .em_x_max = cached_glyph.em_box.x_max,
                     .em_y_max = cached_glyph.em_box.y_max,
-                    .glyph_ref = cached_glyph.ref.value,
+                    .blob_ref = cached_glyph.blob_ref.value,
                     .flags = flags,
                 });
-                if (@import("builtin").mode == .Debug) self.stats.commands_written += 1;
+                if (@import("builtin").mode == .Debug) self.stats.instances_written += 1;
             } else {
                 if (@import("builtin").mode == .Debug) self.stats.empty_glyphs_skipped += 1;
             }
@@ -340,8 +340,8 @@ pub const RendererCore = struct {
 
         if (encoded.data.len == 0) {
             const extent_box = emBoxFromExtents(encoded.extents);
-            try self.store.glyph_cache.insertCold(cache_key, GlyphRef.empty, .{ .offset = 0, .size = 0 }, extent_box);
-            return .{ .ref = GlyphRef.empty, .em_box = extent_box };
+            try self.store.glyph_cache.insertCold(cache_key, GlyphBlobRef.empty, .{ .offset = 0, .size = 0 }, extent_box);
+            return .{ .blob_ref = GlyphBlobRef.empty, .em_box = extent_box };
         }
 
         const em_box = emBoxFromBlobBounds(encoded.blob);
@@ -351,46 +351,46 @@ pub const RendererCore = struct {
         };
         errdefer self.store.pool_alloc.free(pool_alloc);
 
-        const glyph_ref = try backend.uploadBlob(pool_alloc, encoded.data);
-        errdefer backend.retireBlob(glyph_ref);
+        const blob_ref = try backend.uploadBlob(pool_alloc, encoded.data);
+        errdefer backend.retireBlob(blob_ref);
         if (@import("builtin").mode == .Debug) {
             self.stats.blob_bytes_uploaded += encoded.data.len;
             self.stats.pool = self.store.poolSnapshot();
         }
 
-        try self.store.glyph_cache.insertCold(cache_key, glyph_ref, pool_alloc, em_box);
-        return .{ .ref = glyph_ref, .em_box = em_box };
+        try self.store.glyph_cache.insertCold(cache_key, blob_ref, pool_alloc, em_box);
+        return .{ .blob_ref = blob_ref, .em_box = em_box };
     }
 };
 
-const TestCommand = extern struct {
+const TestGlyphInstance = extern struct {
     motor: [4]f32,
     color: [4]f32,
     em_x_min: f32,
     em_y_min: f32,
     em_x_max: f32,
     em_y_max: f32,
-    glyph_ref: u32,
+    blob_ref: u32,
     flags: u32,
     _pad: [2]u32 = .{ 0, 0 },
 };
 
 const FakeBackend = struct {
-    pub const GlyphRef = cache_mod.GlyphRef;
+    pub const GlyphBlobRef = cache_mod.GlyphBlobRef;
     pub const FrameToken = glyph_store_mod.FrameToken;
-    pub const Command = TestCommand;
+    pub const GlyphInstance = TestGlyphInstance;
 
     pool: []u8,
     next_ref: u32 = 0,
     releases: u32 = 0,
 
-    pub fn uploadBlob(self: *FakeBackend, allocation: pool_mod.Allocation, data: []const u8) !cache_mod.GlyphRef {
+    pub fn uploadBlob(self: *FakeBackend, allocation: pool_mod.Allocation, data: []const u8) !cache_mod.GlyphBlobRef {
         @memcpy(self.pool[allocation.offset..][0..data.len], data);
         self.next_ref += 1;
-        return cache_mod.GlyphRef.from(allocation.offset);
+        return cache_mod.GlyphBlobRef.from(allocation.offset);
     }
 
-    pub fn retireBlob(self: *FakeBackend, _: cache_mod.GlyphRef) void {
+    pub fn retireBlob(self: *FakeBackend, _: cache_mod.GlyphBlobRef) void {
         self.releases += 1;
     }
 };
@@ -414,13 +414,13 @@ test "RendererOptions mirrors current default capacities" {
 }
 
 test "render: projectionToEm scales x and y rows only" {
-    const proj = [4][4]f32{
+    const projection = [4][4]f32{
         .{ 64, 128, 192, 256 },
         .{ -64, -128, -192, -256 },
         .{ 1, 2, 3, 4 },
         .{ 5, 6, 7, 8 },
     };
-    const em = projectionToEm(proj);
+    const em = projectionToEm(projection);
     try std.testing.expectEqual(@as(f32, 1), em[0][0]);
     try std.testing.expectEqual(@as(f32, -1), em[1][0]);
     try std.testing.expectEqual(@as(f32, 3), em[2][2]);
@@ -441,14 +441,14 @@ test "render: emBoxFromBlobBounds uses encoded curve bounds" {
     try std.testing.expectApproxEqAbs(@as(f32, 4.5), em_box.y_max, 1.0e-6);
 }
 
-test "render: RendererCore appends shaped glyph commands and caches blobs" {
+test "render: RendererCore appends shaped glyph instances and caches blobs" {
     var core = try RendererCore.init(std.testing.allocator, .{ .max_glyphs_per_frame = 16 });
     defer core.deinit();
 
     var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
-    var commands: [16]TestCommand = undefined;
-    var batch = text_batch_mod.TextBatch(TestCommand).init(&commands);
+    var glyphs: [16]TestGlyphInstance = undefined;
+    var batch = glyph_batch_mod.GlyphBatch(TestGlyphInstance).init(&glyphs);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);
@@ -461,16 +461,16 @@ test "render: RendererCore appends shaped glyph commands and caches blobs" {
 
     try std.testing.expect(batch.count() > 0);
     try std.testing.expect(backend.next_ref > 0);
-    try std.testing.expect(commands[0].glyph_ref != GlyphRef.empty.value);
-    try std.testing.expect(commands[0].motor[2] != 0);
+    try std.testing.expect(glyphs[0].blob_ref != GlyphBlobRef.empty.value);
+    try std.testing.expect(glyphs[0].motor[2] != 0);
 
-    const meta = texelAt(&pool, commands[0].glyph_ref + @sizeOf(blob_format.Texel));
+    const meta = texelAt(&pool, glyphs[0].blob_ref + @sizeOf(blob_format.Texel));
     try std.testing.expect(meta.r > 0);
     try std.testing.expect(meta.a > 0);
     if (@import("builtin").mode == .Debug) {
         try std.testing.expectEqual(@as(u32, 1), core.stats.runs_shaped);
         try std.testing.expect(core.stats.glyphs_shaped >= batch.count());
-        try std.testing.expectEqual(batch.count(), core.stats.commands_written);
+        try std.testing.expectEqual(batch.count(), core.stats.instances_written);
         try std.testing.expect(core.stats.cache_misses > 0);
         try std.testing.expect(core.stats.glyphs_encoded > 0);
         try std.testing.expect(core.stats.outline_segments > 0);
@@ -489,18 +489,18 @@ test "render: RendererCore appends shaped glyph commands and caches blobs" {
     try std.testing.expectEqual(refs_after_first, backend.next_ref);
     if (@import("builtin").mode == .Debug) {
         try std.testing.expect(core.stats.cache_hits > 0);
-        try std.testing.expectEqual(batch.count(), core.stats.commands_written);
+        try std.testing.expectEqual(batch.count(), core.stats.instances_written);
     }
 }
 
-test "render: RendererCore skips empty glyph commands while preserving cache entry" {
+test "render: RendererCore skips empty glyph instances while preserving cache entry" {
     var core = try RendererCore.init(std.testing.allocator, .{ .max_glyphs_per_frame = 4 });
     defer core.deinit();
 
     var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
-    var commands: [4]TestCommand = undefined;
-    var batch = text_batch_mod.TextBatch(TestCommand).init(&commands);
+    var glyphs: [4]TestGlyphInstance = undefined;
+    var batch = glyph_batch_mod.GlyphBatch(TestGlyphInstance).init(&glyphs);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);
@@ -521,14 +521,14 @@ test "render: RendererCore skips empty glyph commands while preserving cache ent
     }
 }
 
-test "render: RendererCore enforces command capacity after skipping empty glyphs" {
+test "render: RendererCore enforces instance capacity after skipping empty glyphs" {
     var core = try RendererCore.init(std.testing.allocator, .{ .max_glyphs_per_frame = 1 });
     defer core.deinit();
 
     var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
-    var commands: [1]TestCommand = undefined;
-    var batch = text_batch_mod.TextBatch(TestCommand).init(&commands);
+    var glyphs: [1]TestGlyphInstance = undefined;
+    var batch = glyph_batch_mod.GlyphBatch(TestGlyphInstance).init(&glyphs);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);
@@ -543,14 +543,14 @@ test "render: RendererCore enforces command capacity after skipping empty glyphs
     try std.testing.expectEqual(@as(u32, 0), batch.count());
 }
 
-test "render: RendererCore writes fill-rule flags into glyph commands" {
+test "render: RendererCore writes fill-rule flags into glyph instances" {
     var core = try RendererCore.init(std.testing.allocator, .{ .max_glyphs_per_frame = 4 });
     defer core.deinit();
 
     var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
-    var commands: [4]TestCommand = undefined;
-    var batch = text_batch_mod.TextBatch(TestCommand).init(&commands);
+    var glyphs: [4]TestGlyphInstance = undefined;
+    var batch = glyph_batch_mod.GlyphBatch(TestGlyphInstance).init(&glyphs);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);
@@ -562,7 +562,7 @@ test "render: RendererCore writes fill-rule flags into glyph commands" {
     });
 
     try std.testing.expect(batch.count() > 0);
-    try std.testing.expectEqual(core_types.FillRule.even_odd.commandFlags(), commands[0].flags);
+    try std.testing.expectEqual(core_types.FillRule.even_odd.shaderFlags(), glyphs[0].flags);
 }
 
 test "render: RendererCore defers evicted glyph retirement until frame token completes" {
@@ -575,8 +575,8 @@ test "render: RendererCore defers evicted glyph retirement until frame token com
 
     var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
-    var commands: [4]TestCommand = undefined;
-    var batch = text_batch_mod.TextBatch(TestCommand).init(&commands);
+    var glyphs: [4]TestGlyphInstance = undefined;
+    var batch = glyph_batch_mod.GlyphBatch(TestGlyphInstance).init(&glyphs);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.setRetireAfterToken(7);
@@ -619,8 +619,8 @@ test "render: RendererCore unloadFont removes handle and defers cached glyph ret
 
     var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
-    var commands: [4]TestCommand = undefined;
-    var batch = text_batch_mod.TextBatch(TestCommand).init(&commands);
+    var glyphs: [4]TestGlyphInstance = undefined;
+    var batch = glyph_batch_mod.GlyphBatch(TestGlyphInstance).init(&glyphs);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);

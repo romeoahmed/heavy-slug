@@ -14,7 +14,7 @@ pub fn buildVulkan(
     use_lto: bool,
 ) ?*std.Build.Step.Compile {
     const exe = b.addExecutable(.{
-        .name = "heavy_slug",
+        .name = "heavy_slug_demo",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/demo/vulkan/main.zig"),
             .target = target,
@@ -59,7 +59,7 @@ pub fn buildMetal(
     use_lto: bool,
 ) ?*std.Build.Step.Compile {
     const exe = b.addExecutable(.{
-        .name = "heavy_slug_metal4",
+        .name = "heavy_slug_demo",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/demo/metal/main.zig"),
             .target = target,

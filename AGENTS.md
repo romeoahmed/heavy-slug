@@ -15,21 +15,21 @@ Backend modules are opt-in. `src/backends/vulkan/` provides `heavy_slug_vulkan` 
 - `zig build test -Dvulkan=true -Dshader-stats=true` verifies the Vulkan backend with opt-in GPU shader counters.
 - `zig build test -Dmetal=true -Dshader-stats=true` verifies the Metal backend with opt-in GPU shader counters.
 - `zig build test -Dvulkan=true -Dmetal=true -Dshader-stats=true` verifies both backend modules and shader-counter bindings together.
-- `zig build shaders` compiles Slang to SPIR-V 1.6.
-- `zig build metal-shaders` compiles Slang to Metal 4 MSL.
-- `zig build run -Ddemo=true -Ddemo-backend=vulkan_spirv16` runs the Windows/Linux Vulkan demo.
-- `zig build run -Ddemo=true -Ddemo-backend=metal4` runs the macOS Metal demo.
+- `zig build spirv` compiles Slang to SPIR-V 1.6.
+- `zig build msl` compiles Slang to Metal 4 MSL.
+- `zig build run -Ddemo=true -Ddemo-backend=vulkan` runs the Windows/Linux Vulkan demo.
+- `zig build run -Ddemo=true -Ddemo-backend=metal` runs the macOS Metal demo.
 - `zig build -Doptimize=ReleaseFast [-Dthinlto=auto|on|off]` builds release mode; `auto` enables ThinLTO only where Zig 0.16 can link it.
 
 ## Coding Style & Naming Conventions
 
 Run `zig fmt build.zig build/ src/ tools/` before submitting. Use lowercase module filenames, `PascalCase` public types, `camelCase` functions and fields, and descriptive constants matching local style. Keep shader layouts generated from reflection; do not hand-edit generated GPU structs. Use build-system `addTranslateC()` modules for C headers instead of source-level `@cImport`.
 
-For GPU resources, preserve the single glyph-pool buffer model unless profiling proves a stronger alternative. Do not reintroduce per-glyph Vulkan descriptor slots, Vulkan descriptor indexing, or `VK_EXT_descriptor_heap` as architectural churn; the current hot path deliberately uses byte-offset `GlyphRef` values. For Metal, new command submission and resource binding work should use the MTL4 API family rather than legacy `MTLCommandQueue`/`MTLCommandBuffer`/stage-specific buffer setters.
+For GPU resources, preserve the single glyph-pool buffer model unless profiling proves a stronger alternative. Do not reintroduce per-glyph Vulkan descriptor slots, Vulkan descriptor indexing, or `VK_EXT_descriptor_heap` as architectural churn; the current hot path deliberately uses byte-offset `GlyphBlobRef` values. For Metal, new command submission and resource binding work should use the MTL4 API family rather than legacy `MTLCommandQueue`/`MTLCommandBuffer`/stage-specific buffer setters.
 
 ## Testing Guidelines
 
-Tests use Zig `test` blocks and `std.testing`. Put module tests near the implementation and import new modules from `src/root.zig` so nested tests are discovered. Prefer behavior names such as `test "RendererCore: skips empty glyph commands"`. Use repository assets, not system font paths.
+Tests use Zig `test` blocks and `std.testing`. Put module tests near the implementation and import new modules from `src/root.zig` so nested tests are discovered. Prefer behavior names such as `test "RendererCore: skips empty glyph instances"`. Use repository assets, not system font paths.
 
 ## Commit & Pull Request Guidelines
 

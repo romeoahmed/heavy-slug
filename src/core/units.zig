@@ -31,8 +31,8 @@ pub fn motorPixelsToHb26p6(motor: pga.Motor) pga.Motor {
     } };
 }
 
-pub fn projectionPixelsToHb26p6(proj: [4][4]f32) [4][4]f32 {
-    var result = proj;
+pub fn projectionPixelsToHb26p6(projection: [4][4]f32) [4][4]f32 {
+    var result = projection;
     for (0..4) |j| {
         result[0][j] /= hb_subpixels_per_pixel;
         result[1][j] /= hb_subpixels_per_pixel;
@@ -54,13 +54,13 @@ test "blob unit conversions use quarter-pixel grid" {
 }
 
 test "projectionPixelsToHb26p6 scales only x and y columns" {
-    const proj = [4][4]f32{
+    const projection = [4][4]f32{
         .{ 64, 128, 192, 256 },
         .{ -64, -128, -192, -256 },
         .{ 1, 2, 3, 4 },
         .{ 5, 6, 7, 8 },
     };
-    const em = projectionPixelsToHb26p6(proj);
+    const em = projectionPixelsToHb26p6(projection);
     try std.testing.expectEqual(@as(f32, 1), em[0][0]);
     try std.testing.expectEqual(@as(f32, -1), em[1][0]);
     try std.testing.expectEqual(@as(f32, 3), em[2][2]);

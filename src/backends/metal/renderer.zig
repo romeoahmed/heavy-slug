@@ -1,7 +1,7 @@
 const std = @import("std");
 const heavy_slug = @import("heavy_slug");
 const gpu_structs = @import("gpu_structs");
-const metal_shaders = @import("metal_shaders");
+const msl_shaders = @import("msl_shaders");
 const backend_options = @import("heavy_slug_backend_options");
 
 const pool_mod = heavy_slug.core.cache.byte_pool;
@@ -10,8 +10,10 @@ const core_types = heavy_slug.core.types;
 const mesh_limits = heavy_slug.gpu.mesh_limits;
 const shader_stats_mod = heavy_slug.gpu.shader_stats;
 
-pub const GlyphCommand = gpu_structs.GlyphCommand;
-pub const PushConstants = gpu_structs.PushConstants;
+const AbiGlyphInstance = gpu_structs.GlyphInstance;
+
+pub const GlyphInstance = AbiGlyphInstance;
+pub const FrameParams = gpu_structs.FrameParams;
 
 const ContextHandle = opaque {};
 const BufferHandle = opaque {};
@@ -58,8 +60,8 @@ extern fn hs_metal_context_draw(
     clear_g: f32,
     clear_b: f32,
     clear_a: f32,
-    commands: *BufferHandle,
-    push_constants: *BufferHandle,
+    glyphs: *BufferHandle,
+    frame_params: *BufferHandle,
     glyph_pool: *BufferHandle,
     shader_stats: ?*BufferHandle,
     workgroup_count: u32,
@@ -70,8 +72,8 @@ extern fn hs_metal_context_draw(
 
 const ResourceIndices = extern struct {
     glyph_pool: u32,
-    commands: u32,
-    push_constants: u32,
+    glyphs: u32,
+    frame_params: u32,
     shader_stats: u32,
 };
 
@@ -139,7 +141,7 @@ pub const Target = struct {
     clear_color: [4]f32,
 };
 
-const CommandBatch = heavy_slug.core.render.TextBatch(GlyphCommand);
+const GlyphBatch = heavy_slug.core.render.GlyphBatch(GlyphInstance);
 const ShaderStatsBuffer = if (backend_options.shader_stats) MappedBuffer else void;
 
 pub const Context = struct {
@@ -149,12 +151,12 @@ pub const Context = struct {
         var error_buf: [2048]u8 = undefined;
         const handle = hs_metal_context_create(
             host,
-            metal_shaders.task.ptr,
-            metal_shaders.task.len,
-            metal_shaders.mesh.ptr,
-            metal_shaders.mesh.len,
-            metal_shaders.fragment.ptr,
-            metal_shaders.fragment.len,
+            msl_shaders.task.ptr,
+            msl_shaders.task.len,
+            msl_shaders.mesh.ptr,
+            msl_shaders.mesh.len,
+            msl_shaders.fragment.ptr,
+            msl_shaders.fragment.len,
             &error_buf,
             error_buf.len,
         ) orelse {
@@ -215,20 +217,20 @@ fn monotonicNs() u64 {
 }
 
 const FrameSlot = struct {
-    commands: MappedBuffer,
-    push_constants: MappedBuffer,
+    glyphs: MappedBuffer,
+    frame_params: MappedBuffer,
     shader_stats: ShaderStatsBuffer,
 
     fn deinit(self: FrameSlot) void {
         if (backend_options.shader_stats) self.shader_stats.deinit();
-        self.push_constants.deinit();
-        self.commands.deinit();
+        self.frame_params.deinit();
+        self.glyphs.deinit();
     }
 };
 
 pub const Frame = struct {
     renderer: *Renderer,
-    batch: CommandBatch,
+    batch: GlyphBatch,
     submitted: bool = false,
 
     pub fn drawText(
@@ -249,9 +251,9 @@ pub const Frame = struct {
 };
 
 pub const Renderer = struct {
-    pub const GlyphRef = render.GlyphRef;
+    pub const GlyphBlobRef = render.GlyphBlobRef;
     pub const FrameToken = render.FrameToken;
-    pub const Command = GlyphCommand;
+    pub const GlyphInstance = AbiGlyphInstance;
 
     context: Context,
     core: render.RendererCore,
@@ -276,18 +278,18 @@ pub const Renderer = struct {
         const pool_buf = try MappedBuffer.init(context, options.pool_buffer_size);
         errdefer pool_buf.deinit();
 
-        const cmd_buf_size = @as(usize, options.max_glyphs_per_frame) * @sizeOf(GlyphCommand);
+        const glyph_buffer_size = @as(usize, options.max_glyphs_per_frame) * @sizeOf(AbiGlyphInstance);
         var frame_slots: [frames_in_flight]FrameSlot = undefined;
         var initialized_slots: usize = 0;
         errdefer {
             for (frame_slots[0..initialized_slots]) |slot| slot.deinit();
         }
         for (&frame_slots) |*slot| {
-            const cmd_buf = try MappedBuffer.init(context, cmd_buf_size);
-            errdefer cmd_buf.deinit();
+            const glyph_buffer = try MappedBuffer.init(context, glyph_buffer_size);
+            errdefer glyph_buffer.deinit();
 
-            const push_buf = try MappedBuffer.init(context, @sizeOf(PushConstants));
-            errdefer push_buf.deinit();
+            const params_buffer = try MappedBuffer.init(context, @sizeOf(FrameParams));
+            errdefer params_buffer.deinit();
 
             var shader_stats: ShaderStatsBuffer = undefined;
             if (backend_options.shader_stats) {
@@ -296,8 +298,8 @@ pub const Renderer = struct {
             }
 
             slot.* = .{
-                .commands = cmd_buf,
-                .push_constants = push_buf,
+                .glyphs = glyph_buffer,
+                .frame_params = params_buffer,
                 .shader_stats = shader_stats,
             };
             initialized_slots += 1;
@@ -376,23 +378,23 @@ pub const Renderer = struct {
 
     pub fn beginFrame(self: *Renderer) Error!Frame {
         try self.reserveFrameSlot();
-        const commands: [*]GlyphCommand = @ptrCast(@alignCast(self.frame_slots[self.active_frame].commands.mapped));
-        const command_slice = commands[0..self.core.max_glyphs_per_frame];
+        const glyphs: [*]AbiGlyphInstance = @ptrCast(@alignCast(self.frame_slots[self.active_frame].glyphs.mapped));
+        const glyph_slice = glyphs[0..self.core.max_glyphs_per_frame];
         return .{
             .renderer = self,
-            .batch = CommandBatch.init(command_slice),
+            .batch = GlyphBatch.init(glyph_slice),
         };
     }
 
-    pub fn uploadBlob(self: *Renderer, pool_alloc: pool_mod.Allocation, data: []const u8) !GlyphRef {
+    pub fn uploadBlob(self: *Renderer, pool_alloc: pool_mod.Allocation, data: []const u8) !GlyphBlobRef {
         const dst = self.pool_buffer.mapped[pool_alloc.offset..][0..data.len];
         @memcpy(dst, data);
-        return GlyphRef.from(pool_alloc.offset);
+        return GlyphBlobRef.from(pool_alloc.offset);
     }
 
-    pub fn retireBlob(self: *Renderer, _: GlyphRef) void {
+    pub fn retireBlob(self: *Renderer, _: GlyphBlobRef) void {
         _ = self;
-        // Metal stores glyph refs as byte offsets into one buffer; RendererCore
+        // Metal stores glyph blob refs as byte offsets into one buffer; RendererCore
         // frees the paired pool allocation only after a completed frame token.
     }
 
@@ -410,23 +412,23 @@ pub const Renderer = struct {
         }
 
         const viewport = target.viewport;
-        const proj = target.projection;
+        const projection = target.projection;
         const clear_color = target.clear_color;
-        const proj_em = render.projectionToEm(proj);
+        const em_projection = render.projectionToEm(projection);
         const frame_slot = &self.frame_slots[self.active_frame];
         const shader_stats_handle: ?*BufferHandle = if (backend_options.shader_stats)
             frame_slot.shader_stats.handle
         else
             null;
 
-        const push = PushConstants{
-            .proj = proj_em,
-            .viewport_dim = .{ @floatFromInt(viewport[0]), @floatFromInt(viewport[1]) },
+        const params = FrameParams{
+            .projection = em_projection,
+            .viewport_size = .{ @floatFromInt(viewport[0]), @floatFromInt(viewport[1]) },
             .glyph_count = glyph_count,
             .glyph_base = 0,
         };
-        const push_bytes = frame_slot.push_constants.mapped[0..@sizeOf(PushConstants)];
-        @memcpy(push_bytes, std.mem.asBytes(&push));
+        const params_bytes = frame_slot.frame_params.mapped[0..@sizeOf(FrameParams)];
+        @memcpy(params_bytes, std.mem.asBytes(&params));
 
         const workgroup_count = mesh_limits.taskWorkgroupCount(glyph_count);
         var error_buf: [2048]u8 = undefined;
@@ -438,8 +440,8 @@ pub const Renderer = struct {
             clear_color[1],
             clear_color[2],
             clear_color[3],
-            frame_slot.commands.handle,
-            frame_slot.push_constants.handle,
+            frame_slot.glyphs.handle,
+            frame_slot.frame_params.handle,
             self.pool_buffer.handle,
             shader_stats_handle,
             workgroup_count,
@@ -455,7 +457,7 @@ pub const Renderer = struct {
         self.frame_reserved = false;
 
         if (@import("builtin").mode == .Debug) {
-            self.core.stats.glyphs_submitted += glyph_count;
+            self.core.stats.instances_submitted += glyph_count;
             self.core.stats.pool = self.core.poolSnapshot();
         }
         self.last_submitted_frame +%= 1;
@@ -492,37 +494,37 @@ test "Metal renderer public API compiles" {
 test "Metal bridge resource indices match generated Slang MSL" {
     const indices = hs_metal_get_resource_indices();
     try std.testing.expectEqual(@as(u32, 0), indices.glyph_pool);
-    try std.testing.expectEqual(@as(u32, 1), indices.commands);
-    const push_index: u32 = if (backend_options.shader_stats) 3 else 2;
-    try std.testing.expectEqual(push_index, indices.push_constants);
+    try std.testing.expectEqual(@as(u32, 1), indices.glyphs);
+    const params_index: u32 = if (backend_options.shader_stats) 3 else 2;
+    try std.testing.expectEqual(params_index, indices.frame_params);
     try std.testing.expectEqual(@as(u32, 2), indices.shader_stats);
 
-    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.task, "GlyphCommand_0 device* commands_1 [[buffer(1)]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.task, "[[buffer(0)]]") == null);
-    const push_pattern = if (backend_options.shader_stats)
-        "PushConstants_natural_0 constant* pc_1 [[buffer(3)]]"
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.task, "GlyphInstance_0 device* glyphs_1 [[buffer(1)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.task, "[[buffer(0)]]") == null);
+    const params_pattern = if (backend_options.shader_stats)
+        "FrameParams_natural_0 constant* pc_1 [[buffer(3)]]"
     else
-        "PushConstants_natural_0 constant* pc_1 [[buffer(2)]]";
-    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.task, push_pattern) != null);
-    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "GlyphCommand_0 device* commands_1 [[buffer(1)]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "uint32_t device* glyphPool_") != null);
-    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "[[buffer(0)]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, push_pattern) != null);
-    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "uint32_t device* glyphPool_") != null);
-    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "[[buffer(0)]]") != null);
+        "FrameParams_natural_0 constant* pc_1 [[buffer(2)]]";
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.task, params_pattern) != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "GlyphInstance_0 device* glyphs_1 [[buffer(1)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "uint32_t device* glyphPool_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "[[buffer(0)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, params_pattern) != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "uint32_t device* glyphPool_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "[[buffer(0)]]") != null);
     if (backend_options.shader_stats) {
-        try std.testing.expect(std.mem.indexOf(u8, metal_shaders.task, "shaderStats_") != null);
-        try std.testing.expect(std.mem.indexOf(u8, metal_shaders.task, "[[buffer(2)]]") != null);
-        try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "shaderStats_") != null);
-        try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "[[buffer(2)]]") != null);
-        try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "shaderStats_") != null);
-        try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "[[buffer(2)]]") != null);
+        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.task, "shaderStats_") != null);
+        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.task, "[[buffer(2)]]") != null);
+        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "shaderStats_") != null);
+        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "[[buffer(2)]]") != null);
+        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "shaderStats_") != null);
+        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "[[buffer(2)]]") != null);
     } else {
-        try std.testing.expect(std.mem.indexOf(u8, metal_shaders.task, "shaderStats_") == null);
-        try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "shaderStats_") == null);
-        try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "shaderStats_") == null);
+        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.task, "shaderStats_") == null);
+        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "shaderStats_") == null);
+        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "shaderStats_") == null);
     }
-    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "[[user(TEXCOORD_1)]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "[[user(TEXCOORD_1)]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "user(TEXCOORD__1)") == null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "[[user(TEXCOORD_1)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "[[user(TEXCOORD_1)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "user(TEXCOORD__1)") == null);
 }

@@ -5,9 +5,9 @@ const std = @import("std");
 pub fn BackendContract(comptime Backend: type) void {
     comptime {
         const Impl = BackendImpl(Backend);
-        requireDecl(Impl, "GlyphRef");
+        requireDecl(Impl, "GlyphBlobRef");
         requireDecl(Impl, "FrameToken");
-        requireDecl(Impl, "Command");
+        requireDecl(Impl, "GlyphInstance");
         requireFn(Impl, "uploadBlob");
         requireFn(Impl, "retireBlob");
     }
@@ -20,9 +20,9 @@ pub fn BackendImpl(comptime Backend: type) type {
     };
 }
 
-pub fn CommandType(comptime Backend: type) type {
+pub fn GlyphInstanceType(comptime Backend: type) type {
     BackendContract(Backend);
-    return BackendImpl(Backend).Command;
+    return BackendImpl(Backend).GlyphInstance;
 }
 
 fn requireDecl(comptime T: type, comptime name: []const u8) void {
@@ -40,15 +40,15 @@ fn requireFn(comptime T: type, comptime name: []const u8) void {
 }
 
 const GoodBackend = struct {
-    pub const GlyphRef = u32;
+    pub const GlyphBlobRef = u32;
     pub const FrameToken = u64;
-    pub const Command = extern struct { value: u32 };
+    pub const GlyphInstance = extern struct { value: u32 };
 
-    pub fn uploadBlob(_: *@This(), _: anytype, _: []const u8) !GlyphRef {
+    pub fn uploadBlob(_: *@This(), _: anytype, _: []const u8) !GlyphBlobRef {
         return 0;
     }
 
-    pub fn retireBlob(_: *@This(), _: GlyphRef) void {}
+    pub fn retireBlob(_: *@This(), _: GlyphBlobRef) void {}
 };
 
 test "BackendContract accepts a complete backend shape" {

@@ -7,10 +7,10 @@ const retirement_mod = @import("../cache/retirement.zig");
 const core_render = @import("renderer_core.zig");
 
 pub const FrameToken = u64;
-pub const GlyphRef = cache_mod.GlyphRef;
+pub const GlyphBlobRef = cache_mod.GlyphBlobRef;
 
 pub const RetiredGlyph = struct {
-    ref: GlyphRef,
+    blob_ref: GlyphBlobRef,
     pool_alloc: pool_mod.Allocation,
 };
 
@@ -76,7 +76,7 @@ pub const GlyphStore = struct {
             backend: @TypeOf(backend),
 
             pub fn retire(retiree: *@This(), retired: RetiredGlyph) void {
-                if (!retired.ref.isEmpty()) retiree.backend.retireBlob(retired.ref);
+                if (!retired.blob_ref.isEmpty()) retiree.backend.retireBlob(retired.blob_ref);
                 if (retired.pool_alloc.size > 0) retiree.store.pool_alloc.free(retired.pool_alloc);
             }
         };
@@ -86,9 +86,9 @@ pub const GlyphStore = struct {
     }
 
     pub fn deferEvicted(self: *GlyphStore, evicted: cache_mod.EvictedEntry) !bool {
-        if (evicted.slot.isEmpty() and evicted.pool_alloc.size == 0) return false;
+        if (evicted.blob_ref.isEmpty() and evicted.pool_alloc.size == 0) return false;
         try self.retirements.push(self.retire_after_token, .{
-            .ref = evicted.slot,
+            .blob_ref = evicted.blob_ref,
             .pool_alloc = evicted.pool_alloc,
         });
         return true;
@@ -106,7 +106,7 @@ test "GlyphStore defers evicted resources until completed token" {
     const Retiree = struct {
         releases: u32 = 0,
 
-        pub fn retireBlob(self: *@This(), _: GlyphRef) void {
+        pub fn retireBlob(self: *@This(), _: GlyphBlobRef) void {
             self.releases += 1;
         }
     };
@@ -114,7 +114,7 @@ test "GlyphStore defers evicted resources until completed token" {
 
     try std.testing.expect(try store.deferEvicted(.{
         .key = .{ .font_id = 1, .glyph_id = 1 },
-        .slot = GlyphRef.from(9),
+        .blob_ref = GlyphBlobRef.from(9),
         .pool_alloc = .{ .offset = 0, .size = 0 },
     }));
     const retired = store.retireCompleted(0, &retiree);

@@ -17,7 +17,7 @@ pub fn buildVulkan(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     core_mod: *std.Build.Module,
-    spirv: shaders.SpirvShaders,
+    spirv: shaders.SpirvBundle,
     gpu_structs_mod: *std.Build.Module,
     shader_stats: bool,
 ) ?VulkanBackend {
@@ -41,7 +41,7 @@ pub fn buildVulkan(
     options.addOption(bool, "shader_stats", shader_stats);
     mod.addImport("heavy_slug", core_mod);
     mod.addImport("vulkan", vulkan_zig);
-    mod.addImport("shader_spv", spirv.module);
+    mod.addImport("spirv_shaders", spirv.module);
     mod.addImport("gpu_structs", gpu_structs_mod);
     mod.addOptions("heavy_slug_backend_options", options);
 
@@ -56,7 +56,7 @@ pub fn buildMetal(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     core_mod: *std.Build.Module,
-    metal_shaders: shaders.MetalShaders,
+    msl: shaders.MslBundle,
     gpu_structs_mod: *std.Build.Module,
     shader_stats: bool,
 ) MetalBackend {
@@ -67,7 +67,7 @@ pub fn buildMetal(
     const options = b.addOptions();
     options.addOption(bool, "shader_stats", shader_stats);
     mod.addImport("heavy_slug", core_mod);
-    mod.addImport("metal_shaders", metal_shaders.module);
+    mod.addImport("msl_shaders", msl.module);
     mod.addImport("gpu_structs", gpu_structs_mod);
     mod.addOptions("heavy_slug_backend_options", options);
     mod.addIncludePath(b.path("src/backends/metal"));

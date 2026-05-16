@@ -1,15 +1,15 @@
-//! Borrowed per-frame glyph command storage.
+//! Borrowed per-frame glyph instance storage.
 
-pub fn TextBatch(comptime Command: type) type {
+pub fn GlyphBatch(comptime GlyphInstance: type) type {
     return struct {
         const Self = @This();
 
-        commands: []Command,
+        glyphs: []GlyphInstance,
         len: u32 = 0,
         submitted: bool = false,
 
-        pub fn init(commands: []Command) Self {
-            return .{ .commands = commands };
+        pub fn init(glyphs: []GlyphInstance) Self {
+            return .{ .glyphs = glyphs };
         }
 
         pub fn reset(self: *Self) void {
@@ -17,15 +17,15 @@ pub fn TextBatch(comptime Command: type) type {
             self.submitted = false;
         }
 
-        pub fn append(self: *Self, command: Command) !void {
+        pub fn append(self: *Self, glyph: GlyphInstance) !void {
             if (self.submitted) return error.FrameAlreadySubmitted;
-            if (self.len >= self.commands.len) return error.GlyphCapacityExceeded;
-            self.commands[self.len] = command;
+            if (self.len >= self.glyphs.len) return error.GlyphCapacityExceeded;
+            self.glyphs[self.len] = glyph;
             self.len += 1;
         }
 
-        pub fn slice(self: *const Self) []const Command {
-            return self.commands[0..self.len];
+        pub fn slice(self: *const Self) []const GlyphInstance {
+            return self.glyphs[0..self.len];
         }
 
         pub fn count(self: *const Self) u32 {
@@ -40,10 +40,10 @@ pub fn TextBatch(comptime Command: type) type {
 
 const std = @import("std");
 
-test "TextBatch writes into borrowed command storage" {
-    const Command = extern struct { value: u32 };
-    var storage: [2]Command = undefined;
-    var batch = TextBatch(Command).init(&storage);
+test "GlyphBatch writes into borrowed glyph storage" {
+    const TestGlyph = extern struct { value: u32 };
+    var storage: [2]TestGlyph = undefined;
+    var batch = GlyphBatch(TestGlyph).init(&storage);
 
     try batch.append(.{ .value = 1 });
     try batch.append(.{ .value = 2 });
@@ -52,10 +52,10 @@ test "TextBatch writes into borrowed command storage" {
     try std.testing.expectEqual(@as(u32, 1), batch.slice()[0].value);
 }
 
-test "TextBatch rejects appends after submit" {
-    const Command = extern struct { value: u32 };
-    var storage: [2]Command = undefined;
-    var batch = TextBatch(Command).init(&storage);
+test "GlyphBatch rejects appends after submit" {
+    const TestGlyph = extern struct { value: u32 };
+    var storage: [2]TestGlyph = undefined;
+    var batch = GlyphBatch(TestGlyph).init(&storage);
 
     try batch.append(.{ .value = 1 });
     batch.markSubmitted();
@@ -63,10 +63,10 @@ test "TextBatch rejects appends after submit" {
     try std.testing.expectEqual(@as(usize, 1), batch.slice().len);
 }
 
-test "TextBatch reset allows reuse after submit" {
-    const Command = extern struct { value: u32 };
-    var storage: [2]Command = undefined;
-    var batch = TextBatch(Command).init(&storage);
+test "GlyphBatch reset allows reuse after submit" {
+    const TestGlyph = extern struct { value: u32 };
+    var storage: [2]TestGlyph = undefined;
+    var batch = GlyphBatch(TestGlyph).init(&storage);
 
     try batch.append(.{ .value = 1 });
     batch.markSubmitted();

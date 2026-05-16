@@ -1,4 +1,4 @@
-//! Repository build graph: core library, optional backends, shaders, demos, and tests.
+//! Repository build graph: core library, optional backends, Slang outputs, demos, and tests.
 
 const std = @import("std");
 const backends = @import("build/backends.zig");
@@ -10,13 +10,13 @@ const shaders = @import("build/shaders.zig");
 pub fn build(b: *std.Build) void {
     const opts = deps.resolve(b);
 
-    const shader_step = b.step("shaders", "Compile Slang shaders to SPIR-V");
-    const spirv = shaders.buildSpirv(b, opts.shader_stats);
-    shaders.addSpirvInstallSteps(b, shader_step, spirv);
+    const spirv_step = b.step("spirv", "Compile Slang shaders to SPIR-V 1.6");
+    const spirv_shaders = shaders.compileSpirv(b, opts.shader_stats);
+    shaders.installSpirv(b, spirv_step, spirv_shaders);
 
-    const metal_shader_step = b.step("metal-shaders", "Compile Slang shaders to Metal source");
-    const metal_shaders = shaders.buildMetal(b, opts.shader_stats);
-    shaders.addMetalInstallSteps(b, metal_shader_step, metal_shaders);
+    const msl_step = b.step("msl", "Compile Slang shaders to Metal Shading Language");
+    const msl_shaders = shaders.compileMsl(b, opts.shader_stats);
+    shaders.installMsl(b, msl_step, msl_shaders);
 
     const core_mod = b.addModule("heavy_slug", .{
         .root_source_file = b.path("src/root.zig"),
@@ -41,7 +41,7 @@ pub fn build(b: *std.Build) void {
     addToolTests(b, test_step);
 
     const vulkan_backend = if (opts.build_vulkan)
-        backends.buildVulkan(b, opts.target, core_mod, spirv, gpu_structs_mod.?, opts.shader_stats) orelse return
+        backends.buildVulkan(b, opts.target, core_mod, spirv_shaders, gpu_structs_mod.?, opts.shader_stats) orelse return
     else
         null;
     if (vulkan_backend) |backend| {
@@ -49,7 +49,7 @@ pub fn build(b: *std.Build) void {
     }
 
     const metal_backend = if (opts.build_metal)
-        backends.buildMetal(b, opts.target, core_mod, metal_shaders, gpu_structs_mod.?, opts.shader_stats)
+        backends.buildMetal(b, opts.target, core_mod, msl_shaders, gpu_structs_mod.?, opts.shader_stats)
     else
         null;
     if (metal_backend) |backend| {
@@ -58,7 +58,7 @@ pub fn build(b: *std.Build) void {
 
     if (opts.build_demo) {
         const exe = switch (opts.demo_backend) {
-            .vulkan_spirv16 => demos.buildVulkan(
+            .vulkan => demos.buildVulkan(
                 b,
                 opts.target,
                 opts.optimize,
@@ -66,7 +66,7 @@ pub fn build(b: *std.Build) void {
                 vulkan_backend.?,
                 opts.use_lto,
             ) orelse return,
-            .metal4 => demos.buildMetal(
+            .metal => demos.buildMetal(
                 b,
                 opts.target,
                 opts.optimize,

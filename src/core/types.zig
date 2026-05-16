@@ -7,7 +7,7 @@ pub const FillRule = enum(u32) {
     non_zero = 0,
     even_odd = 1,
 
-    pub fn commandFlags(self: FillRule) u32 {
+    pub fn shaderFlags(self: FillRule) u32 {
         return switch (self) {
             .non_zero => 0,
             .even_odd => 1,
@@ -145,7 +145,7 @@ test "Transform wraps PGA motor without changing behavior" {
     try std.testing.expectApproxEqAbs(@as(f32, 1), q[1], 1.0e-5);
 }
 
-test "FillRule maps to command flags" {
-    try std.testing.expectEqual(@as(u32, 0), FillRule.non_zero.commandFlags());
-    try std.testing.expectEqual(@as(u32, 1), FillRule.even_odd.commandFlags());
+test "FillRule maps to shader flags" {
+    try std.testing.expectEqual(@as(u32, 0), FillRule.non_zero.shaderFlags());
+    try std.testing.expectEqual(@as(u32, 1), FillRule.even_odd.shaderFlags());
 }

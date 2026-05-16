@@ -2,13 +2,13 @@ const std = @import("std");
 
 pub const DemoBackend = enum {
     auto,
-    vulkan_spirv16,
-    metal4,
+    vulkan,
+    metal,
 };
 
 pub const ResolvedDemoBackend = enum {
-    vulkan_spirv16,
-    metal4,
+    vulkan,
+    metal,
 };
 
 pub const ThinLtoMode = enum {
@@ -32,14 +32,14 @@ pub fn resolve(b: *std.Build) Options {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const build_demo = b.option(bool, "demo", "Build demo executable") orelse false;
-    const requested_backend = b.option(DemoBackend, "demo-backend", "Demo backend: auto, vulkan_spirv16, metal4") orelse .auto;
+    const requested_backend = b.option(DemoBackend, "demo-backend", "Demo backend: auto, vulkan, metal") orelse .auto;
     const thin_lto_mode = b.option(ThinLtoMode, "thinlto", "ThinLTO: auto, on, off") orelse .auto;
     const shader_stats = b.option(bool, "shader-stats", "Enable opt-in GPU shader statistics buffers") orelse false;
     const demo_backend = resolveDemoBackend(target.result.os.tag, requested_backend);
     const build_vulkan = (b.option(bool, "vulkan", "Build the Vulkan SPIR-V 1.6 backend module") orelse false) or
-        (build_demo and demo_backend == .vulkan_spirv16);
+        (build_demo and demo_backend == .vulkan);
     const build_metal = (b.option(bool, "metal", "Build the Metal 4 backend module") orelse false) or
-        (build_demo and demo_backend == .metal4);
+        (build_demo and demo_backend == .metal);
 
     if (build_metal and target.result.os.tag != .macos) {
         std.process.fatal("Metal backend is supported only on macOS targets", .{});
@@ -63,21 +63,21 @@ fn resolveDemoBackend(
 ) ResolvedDemoBackend {
     const resolved: ResolvedDemoBackend = switch (requested) {
         .auto => switch (os) {
-            .windows, .linux => .vulkan_spirv16,
-            .macos => .metal4,
+            .windows, .linux => .vulkan,
+            .macos => .metal,
             else => std.process.fatal("unsupported demo target OS: {s}", .{@tagName(os)}),
         },
-        .vulkan_spirv16 => .vulkan_spirv16,
-        .metal4 => .metal4,
+        .vulkan => .vulkan,
+        .metal => .metal,
     };
 
     switch (resolved) {
-        .vulkan_spirv16 => switch (os) {
+        .vulkan => switch (os) {
             .windows, .linux => {},
-            else => std.process.fatal("demo-backend=vulkan_spirv16 is supported on Windows/Linux targets; {s} selects the Metal 4 demo path", .{@tagName(os)}),
+            else => std.process.fatal("demo-backend=vulkan is supported on Windows/Linux targets; {s} selects the Metal demo path", .{@tagName(os)}),
         },
-        .metal4 => if (os != .macos) {
-            std.process.fatal("demo-backend=metal4 is supported only on macOS targets", .{});
+        .metal => if (os != .macos) {
+            std.process.fatal("demo-backend=metal is supported only on macOS targets", .{});
         },
     }
 

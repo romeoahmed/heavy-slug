@@ -2,7 +2,7 @@ const std = @import("std");
 const vk = @import("vulkan");
 const gpu_context = @import("context.zig");
 const descriptors = @import("descriptors.zig");
-const spv = @import("shader_spv");
+const spirv = @import("spirv_shaders");
 
 pub const Pipeline = struct {
     device: vk.Device,
@@ -24,7 +24,7 @@ pub const Pipeline = struct {
                 .fragment_bit = true,
             },
             .offset = 0,
-            .size = @sizeOf(descriptors.PushConstants),
+            .size = @sizeOf(descriptors.FrameParams),
         };
         const layout_ci = vk.PipelineLayoutCreateInfo{
             .s_type = .pipeline_layout_create_info,
@@ -38,13 +38,13 @@ pub const Pipeline = struct {
         errdefer dispatch.destroyPipelineLayout(device, pipeline_layout, null);
 
         // Shader modules are transient and destroyed after pipeline creation.
-        const task_module = try createShaderModule(device, dispatch, spv.task);
+        const task_module = try createShaderModule(device, dispatch, spirv.task);
         defer dispatch.destroyShaderModule(device, task_module, null);
 
-        const mesh_module = try createShaderModule(device, dispatch, spv.mesh);
+        const mesh_module = try createShaderModule(device, dispatch, spirv.mesh);
         defer dispatch.destroyShaderModule(device, mesh_module, null);
 
-        const frag_module = try createShaderModule(device, dispatch, spv.fragment);
+        const frag_module = try createShaderModule(device, dispatch, spirv.fragment);
         defer dispatch.destroyShaderModule(device, frag_module, null);
 
         const stages = [3]vk.PipelineShaderStageCreateInfo{
@@ -209,18 +209,18 @@ fn createShaderModule(
     return dispatch.createShaderModule(device, &ci, null);
 }
 
-test "push constant range matches PushConstants size" {
-    try std.testing.expectEqual(@as(usize, 80), @sizeOf(descriptors.PushConstants));
+test "push constant range matches FrameParams size" {
+    try std.testing.expectEqual(@as(usize, 80), @sizeOf(descriptors.FrameParams));
 }
 
 test "embedded SPIR-V data is non-empty" {
-    try std.testing.expect(spv.task.len > 0);
-    try std.testing.expect(spv.mesh.len > 0);
-    try std.testing.expect(spv.fragment.len > 0);
+    try std.testing.expect(spirv.task.len > 0);
+    try std.testing.expect(spirv.mesh.len > 0);
+    try std.testing.expect(spirv.fragment.len > 0);
 }
 
 test "SPIR-V length is multiple of 4 (u32-aligned words)" {
-    try std.testing.expectEqual(@as(usize, 0), spv.task.len % 4);
-    try std.testing.expectEqual(@as(usize, 0), spv.mesh.len % 4);
-    try std.testing.expectEqual(@as(usize, 0), spv.fragment.len % 4);
+    try std.testing.expectEqual(@as(usize, 0), spirv.task.len % 4);
+    try std.testing.expectEqual(@as(usize, 0), spirv.mesh.len % 4);
+    try std.testing.expectEqual(@as(usize, 0), spirv.fragment.len % 4);
 }

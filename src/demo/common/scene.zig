@@ -249,6 +249,6 @@ test "demo scene exposes shared content settings" {
 
 test "demo scene projection keeps glyph outlines y-up" {
     const view = contentFit(window_width, window_height);
-    const proj = viewProjection(window_width, window_height, view);
-    try std.testing.expect(proj[1][1] > 0);
+    const projection = viewProjection(window_width, window_height, view);
+    try std.testing.expect(projection[1][1] > 0);
 }

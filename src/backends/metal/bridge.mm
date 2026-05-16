@@ -321,8 +321,8 @@ void *hs_metal_buffer_contents(hs_metal_buffer *buffer) {
 hs_metal_resource_indices hs_metal_get_resource_indices(void) {
     return hs_metal_resource_indices{
         HS_METAL_BUFFER_GLYPH_POOL,
-        HS_METAL_BUFFER_COMMANDS,
-        HS_METAL_BUFFER_PUSH_CONSTANTS,
+        HS_METAL_BUFFER_GLYPHS,
+        HS_METAL_BUFFER_FRAME_PARAMS,
         HS_METAL_BUFFER_SHADER_STATS,
     };
 }
@@ -335,8 +335,8 @@ int hs_metal_context_draw(
     float clear_g,
     float clear_b,
     float clear_a,
-    hs_metal_buffer *commands,
-    hs_metal_buffer *push_constants,
+    hs_metal_buffer *glyphs,
+    hs_metal_buffer *frame_params,
     hs_metal_buffer *glyph_pool,
     hs_metal_buffer *shader_stats,
     uint32_t workgroup_count,
@@ -344,7 +344,7 @@ int hs_metal_context_draw(
     char *error_buffer,
     size_t error_buffer_len) {
     @autoreleasepool {
-        if (!context || !commands || !push_constants || !glyph_pool) {
+        if (!context || !glyphs || !frame_params || !glyph_pool) {
             write_error(error_buffer, error_buffer_len, @"Metal draw received a null handle");
             return 0;
         }
@@ -399,8 +399,8 @@ int hs_metal_context_draw(
         }
 
         bind_buffer(slot->argument_table, glyph_pool, HS_METAL_BUFFER_GLYPH_POOL);
-        bind_buffer(slot->argument_table, commands, HS_METAL_BUFFER_COMMANDS);
-        bind_buffer(slot->argument_table, push_constants, HS_METAL_BUFFER_PUSH_CONSTANTS);
+        bind_buffer(slot->argument_table, glyphs, HS_METAL_BUFFER_GLYPHS);
+        bind_buffer(slot->argument_table, frame_params, HS_METAL_BUFFER_FRAME_PARAMS);
 #if HEAVY_SLUG_SHADER_STATS
         bind_buffer(slot->argument_table, shader_stats, HS_METAL_BUFFER_SHADER_STATS);
 #endif

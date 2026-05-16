@@ -57,7 +57,7 @@ float2 visiblePixelExtent(float4 c0, float4 c1, float4 c2, float4 c3)
 
     float2 ndcMin = max(min(min(ndc0, ndc1), min(ndc2, ndc3)), float2(-1.0, -1.0));
     float2 ndcMax = min(max(max(ndc0, ndc1), max(ndc2, ndc3)), float2(1.0, 1.0));
-    return max(ndcMax - ndcMin, float2(0.0, 0.0)) * (pc.viewport_dim * 0.5);
+    return max(ndcMax - ndcMin, float2(0.0, 0.0)) * (pc.viewport_size * 0.5);
 }
 
 uint subdivisionCount(float4 c0, float4 c1, float4 c2, float4 c3)
@@ -83,7 +83,7 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
     bool alive = false;
     uint slices = 0;
 
-    GlyphCommand cmd;
+    GlyphInstance glyph;
 
     if (gtid == 0)
     {
@@ -96,17 +96,17 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
 
     if (localIndex < pc.glyph_count)
     {
-        cmd = commands[glyphIndex];
-        Motor motor = { cmd.motor };
+        glyph = glyphs[glyphIndex];
+        Motor motor = { glyph.motor };
         MotorAffine affine = motor.affine();
 
-        float2 emMin = float2(cmd.em_x_min, cmd.em_y_min);
-        float2 emMax = float2(cmd.em_x_max, cmd.em_y_max);
+        float2 emMin = float2(glyph.em_x_min, glyph.em_y_min);
+        float2 emMax = float2(glyph.em_x_max, glyph.em_y_max);
 
-        float4 c0 = mul(pc.proj, float4(affine.apply(emMin), 0, 1));
-        float4 c1 = mul(pc.proj, float4(affine.apply(float2(emMax.x, emMin.y)), 0, 1));
-        float4 c2 = mul(pc.proj, float4(affine.apply(emMax), 0, 1));
-        float4 c3 = mul(pc.proj, float4(affine.apply(float2(emMin.x, emMax.y)), 0, 1));
+        float4 c0 = mul(pc.projection, float4(affine.apply(emMin), 0, 1));
+        float4 c1 = mul(pc.projection, float4(affine.apply(float2(emMax.x, emMin.y)), 0, 1));
+        float4 c2 = mul(pc.projection, float4(affine.apply(emMax), 0, 1));
+        float4 c3 = mul(pc.projection, float4(affine.apply(float2(emMin.x, emMax.y)), 0, 1));
 
         alive = isVisible(c0, c1, c2, c3);
         slices = alive ? subdivisionCount(c0, c1, c2, c3) : 0;

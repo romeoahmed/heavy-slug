@@ -12,11 +12,11 @@ struct FragmentInput
     float4 color       : COLOR;
 #if HEAVY_SLUG_METAL
     float2 texcoord    : TEXCOORD;
-    nointerpolation uint glyphRef : TEXCOORD1;
+    nointerpolation uint blobRef : TEXCOORD1;
     nointerpolation uint flags           : TEXCOORD2;
 #else
     float2 texcoord    : TEXCOORD0;
-    nointerpolation uint glyphRef : TEXCOORD1;
+    nointerpolation uint blobRef : TEXCOORD1;
     nointerpolation uint flags           : TEXCOORD2;
 #endif
 };
@@ -303,7 +303,7 @@ float4 fragmentMain(FragmentInput input) : SV_Target
 {
     BlobReader blob;
     blob.buf = glyphPool;
-    blob.base = input.glyphRef;
+    blob.base = input.blobRef;
 
     float coverage = slugRender(blob, input.texcoord, input.flags);
     return input.color * coverage;

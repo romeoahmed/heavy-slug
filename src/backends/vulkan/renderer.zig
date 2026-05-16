@@ -84,12 +84,12 @@ pub const Target = struct {
     viewport: [2]f32,
 };
 
-const CommandBatch = heavy_slug.core.render.TextBatch(descriptors.GlyphCommand);
+const GlyphBatch = heavy_slug.core.render.GlyphBatch(descriptors.GlyphInstance);
 const ShaderStatsBuffers = if (backend_options.shader_stats) [frames_in_flight]MappedBuffer else void;
 
 pub const Frame = struct {
     renderer: *Renderer,
-    batch: CommandBatch,
+    batch: GlyphBatch,
     submitted: bool = false,
 
     pub fn drawText(
@@ -217,20 +217,21 @@ fn validateTaskDrawWorkgroups(
 /// thread or externally synchronized. The renderer mutates shared state
 /// without synchronization.
 pub const Renderer = struct {
-    pub const GlyphRef = render.GlyphRef;
+    pub const GlyphBlobRef = render.GlyphBlobRef;
     pub const FrameToken = render.FrameToken;
-    pub const Command = descriptors.GlyphCommand;
+    pub const GlyphInstance = descriptors.GlyphInstance;
 
     device: vk.Device,
     dispatch: gpu_context.DeviceDispatch,
+    mesh_shader_properties: vk.PhysicalDeviceMeshShaderPropertiesEXT,
 
     core: render.RendererCore,
     descriptor_table: descriptors.DescriptorTable,
-    pip: pipeline_mod.Pipeline,
+    pipeline: pipeline_mod.Pipeline,
 
     // Host-visible storage buffers.
     pool_buffer: MappedBuffer,
-    command_buffers: [frames_in_flight]MappedBuffer,
+    glyph_buffers: [frames_in_flight]MappedBuffer,
     shader_stats_buffers: ShaderStatsBuffers,
     active_frame: u32,
 
@@ -257,19 +258,19 @@ pub const Renderer = struct {
 
         const device = ctx.device;
         const dispatch = ctx.dispatch;
-        var desc_table = try descriptors.DescriptorTable.init(
+        var descriptor_table = try descriptors.DescriptorTable.init(
             ctx,
             allocator,
             frames_in_flight,
         );
-        errdefer desc_table.deinit(allocator);
+        errdefer descriptor_table.deinit(allocator);
 
-        var pip = try pipeline_mod.Pipeline.init(
+        var pipeline = try pipeline_mod.Pipeline.init(
             ctx,
-            desc_table.layout,
+            descriptor_table.layout,
             color_format,
         );
-        errdefer pip.deinit();
+        errdefer pipeline.deinit();
 
         var core = try render.RendererCore.init(allocator, options);
         errdefer core.deinit();
@@ -282,23 +283,23 @@ pub const Renderer = struct {
         );
         errdefer destroyMappedBuffer(pool_buf, device, dispatch);
 
-        // One command buffer per frame slot.
-        const cmd_buf_size = @as(vk.DeviceSize, options.max_glyphs_per_frame) *
-            @sizeOf(descriptors.GlyphCommand);
-        var command_buffers: [frames_in_flight]MappedBuffer = undefined;
-        var initialized_command_buffers: usize = 0;
+        // One glyph instance buffer per frame slot.
+        const glyph_buffer_size = @as(vk.DeviceSize, options.max_glyphs_per_frame) *
+            @sizeOf(descriptors.GlyphInstance);
+        var glyph_buffers: [frames_in_flight]MappedBuffer = undefined;
+        var initialized_glyph_buffers: usize = 0;
         errdefer {
-            for (command_buffers[0..initialized_command_buffers]) |cmd_buf| {
-                destroyMappedBuffer(cmd_buf, device, dispatch);
+            for (glyph_buffers[0..initialized_glyph_buffers]) |glyph_buffer| {
+                destroyMappedBuffer(glyph_buffer, device, dispatch);
             }
         }
-        for (&command_buffers) |*cmd_buf| {
-            cmd_buf.* = try createMappedBuffer(
+        for (&glyph_buffers) |*glyph_buffer| {
+            glyph_buffer.* = try createMappedBuffer(
                 ctx,
-                cmd_buf_size,
+                glyph_buffer_size,
                 .{ .storage_buffer_bit = true },
             );
-            initialized_command_buffers += 1;
+            initialized_glyph_buffers += 1;
         }
 
         var shader_stats_buffers: ShaderStatsBuffers = undefined;
@@ -323,11 +324,12 @@ pub const Renderer = struct {
         return .{
             .device = device,
             .dispatch = dispatch,
+            .mesh_shader_properties = ctx.mesh_shader_properties,
             .core = core,
-            .descriptor_table = desc_table,
-            .pip = pip,
+            .descriptor_table = descriptor_table,
+            .pipeline = pipeline,
             .pool_buffer = pool_buf,
-            .command_buffers = command_buffers,
+            .glyph_buffers = glyph_buffers,
             .shader_stats_buffers = shader_stats_buffers,
             .active_frame = frames_in_flight - 1,
             .stats = .{},
@@ -370,11 +372,11 @@ pub const Renderer = struct {
 
     pub fn beginFrame(self: *Renderer) Error!Frame {
         try self.reserveFrameSlot();
-        const commands: [*]descriptors.GlyphCommand = @ptrCast(@alignCast(self.command_buffers[self.active_frame].mapped));
-        const command_slice = commands[0..self.core.max_glyphs_per_frame];
+        const glyphs: [*]descriptors.GlyphInstance = @ptrCast(@alignCast(self.glyph_buffers[self.active_frame].mapped));
+        const glyph_slice = glyphs[0..self.core.max_glyphs_per_frame];
         return .{
             .renderer = self,
-            .batch = CommandBatch.init(command_slice),
+            .batch = GlyphBatch.init(glyph_slice),
         };
     }
 
@@ -417,13 +419,13 @@ pub const Renderer = struct {
         }
     }
 
-    pub fn uploadBlob(self: *Renderer, pool_alloc: pool_mod.Allocation, data: []const u8) !GlyphRef {
+    pub fn uploadBlob(self: *Renderer, pool_alloc: pool_mod.Allocation, data: []const u8) !GlyphBlobRef {
         const dst = self.pool_buffer.mapped[pool_alloc.offset..][0..data.len];
         @memcpy(dst, data);
-        return GlyphRef.from(pool_alloc.offset);
+        return GlyphBlobRef.from(pool_alloc.offset);
     }
 
-    pub fn retireBlob(self: *Renderer, _: GlyphRef) void {
+    pub fn retireBlob(self: *Renderer, _: GlyphBlobRef) void {
         _ = self;
     }
 
@@ -432,15 +434,15 @@ pub const Renderer = struct {
     /// rendering pass. The caller is responsible for starting/ending the
     /// render pass and submitting the command buffer.
     ///
-    /// `proj`: column-major 4×4 projection matrix (e.g. orthographic).
+    /// `projection`: column-major 4x4 projection matrix (e.g. orthographic).
     /// `viewport`: viewport dimensions in pixels [width, height].
     fn submitFrame(self: *Renderer, target: Target, glyph_count: u32) Error!render.FrameToken {
         if (glyph_count == 0) return self.last_submitted_frame;
         const workgroup_count = mesh_limits.taskWorkgroupCount(glyph_count);
         try validateTaskDrawWorkgroups(self.mesh_shader_properties, workgroup_count);
 
-        const cmd_buf = target.command_buffer;
-        const proj = target.projection;
+        const vk_cmd = target.command_buffer;
+        const projection = target.projection;
         const viewport = target.viewport;
 
         const vk_viewport = vk.Viewport{
@@ -451,7 +453,7 @@ pub const Renderer = struct {
             .min_depth = 0,
             .max_depth = 1,
         };
-        self.dispatch.cmdSetViewport(cmd_buf, 0, &.{vk_viewport});
+        self.dispatch.cmdSetViewport(vk_cmd, 0, &.{vk_viewport});
 
         const vk_scissor = vk.Rect2D{
             .offset = .{ .x = 0, .y = 0 },
@@ -460,13 +462,13 @@ pub const Renderer = struct {
                 .height = @intFromFloat(viewport[1]),
             },
         };
-        self.dispatch.cmdSetScissor(cmd_buf, 0, &.{vk_scissor});
+        self.dispatch.cmdSetScissor(vk_cmd, 0, &.{vk_scissor});
 
-        self.dispatch.cmdBindPipeline(cmd_buf, .graphics, self.pip.pipeline);
+        self.dispatch.cmdBindPipeline(vk_cmd, .graphics, self.pipeline.pipeline);
 
-        const command_buffer = self.command_buffers[self.active_frame];
+        const glyph_buffer = self.glyph_buffers[self.active_frame];
         self.descriptor_table.updateGlyphPool(self.active_frame, self.pool_buffer.buffer, 0, self.pool_buffer.size);
-        self.descriptor_table.updateCommandBuffer(self.active_frame, command_buffer.buffer, 0, command_buffer.size);
+        self.descriptor_table.updateGlyphBuffer(self.active_frame, glyph_buffer.buffer, 0, glyph_buffer.size);
         if (backend_options.shader_stats) {
             const stats_buffer = self.shader_stats_buffers[self.active_frame];
             self.descriptor_table.updateShaderStatsBuffer(
@@ -480,9 +482,9 @@ pub const Renderer = struct {
         self.descriptor_table.flushWrites();
 
         self.dispatch.cmdBindDescriptorSets(
-            cmd_buf,
+            vk_cmd,
             .graphics,
-            self.pip.pipeline_layout,
+            self.pipeline.pipeline_layout,
             0,
             &.{self.descriptor_table.setForFrame(self.active_frame)},
             null,
@@ -491,26 +493,26 @@ pub const Renderer = struct {
         // Scale projection from pixel-space to 26.6 em-space.
         // Motor translations and em-box extents are in 26.6 units (64x pixels).
         // Dividing columns 0 and 1 by 64 maps 26.6 world coords to clip space.
-        const proj_em = render.projectionToEm(proj);
+        const em_projection = render.projectionToEm(projection);
 
-        const push = descriptors.PushConstants{
-            .proj = proj_em,
-            .viewport_dim = viewport,
+        const params = descriptors.FrameParams{
+            .projection = em_projection,
+            .viewport_size = viewport,
             .glyph_count = glyph_count,
             .glyph_base = 0,
         };
         self.dispatch.cmdPushConstants(
-            cmd_buf,
-            self.pip.pipeline_layout,
+            vk_cmd,
+            self.pipeline.pipeline_layout,
             .{ .task_bit_ext = true, .mesh_bit_ext = true, .fragment_bit = true },
             0,
-            @sizeOf(descriptors.PushConstants),
-            @ptrCast(&push),
+            @sizeOf(descriptors.FrameParams),
+            @ptrCast(&params),
         );
 
-        self.dispatch.cmdDrawMeshTasksEXT(cmd_buf, workgroup_count, 1, 1);
+        self.dispatch.cmdDrawMeshTasksEXT(vk_cmd, workgroup_count, 1, 1);
         if (@import("builtin").mode == .Debug) {
-            self.core.stats.glyphs_submitted += glyph_count;
+            self.core.stats.instances_submitted += glyph_count;
             self.core.stats.pool = self.core.poolSnapshot();
         }
 
@@ -522,8 +524,8 @@ pub const Renderer = struct {
 
     pub fn deinit(self: *Renderer) void {
         self.markFrameComplete(std.math.maxInt(render.FrameToken));
-        for (self.command_buffers) |cmd_buf| {
-            destroyMappedBuffer(cmd_buf, self.device, self.dispatch);
+        for (self.glyph_buffers) |glyph_buffer| {
+            destroyMappedBuffer(glyph_buffer, self.device, self.dispatch);
         }
         if (backend_options.shader_stats) {
             for (self.shader_stats_buffers) |stats_buf| {
@@ -533,7 +535,7 @@ pub const Renderer = struct {
         destroyMappedBuffer(self.pool_buffer, self.device, self.dispatch);
 
         self.core.deinit();
-        self.pip.deinit();
+        self.pipeline.deinit();
         self.descriptor_table.deinit(self.allocator);
 
         self.* = undefined;

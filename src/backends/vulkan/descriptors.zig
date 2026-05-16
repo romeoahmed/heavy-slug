@@ -4,23 +4,23 @@ const gpu_context = @import("context.zig");
 const gpu_structs = @import("gpu_structs");
 const backend_options = @import("heavy_slug_backend_options");
 
-/// Per-glyph draw command uploaded to GPU each frame.
+/// Per-glyph draw instance uploaded to GPU each frame.
 /// Generated from slangc reflection of shaders/core/abi.slang.
-pub const GlyphCommand = gpu_structs.GlyphCommand;
+pub const GlyphInstance = gpu_structs.GlyphInstance;
 
-/// Per-frame push constants. 80 bytes, within Vulkan's guaranteed
-/// 128-byte minimum push constant range.
+/// Per-frame shader parameters. 80 bytes, within Vulkan's guaranteed
+/// 128-byte minimum push constant range when sent through push constants.
 /// Generated from slangc reflection of shaders/core/abi.slang.
-pub const PushConstants = gpu_structs.PushConstants;
+pub const FrameParams = gpu_structs.FrameParams;
 
-test "GlyphCommand is 64 bytes with correct field offsets" {
-    try std.testing.expectEqual(@as(usize, 64), @sizeOf(GlyphCommand));
-    try std.testing.expectEqual(@as(usize, 48), @offsetOf(GlyphCommand, "glyph_ref"));
+test "GlyphInstance is 64 bytes with correct field offsets" {
+    try std.testing.expectEqual(@as(usize, 64), @sizeOf(GlyphInstance));
+    try std.testing.expectEqual(@as(usize, 48), @offsetOf(GlyphInstance, "blob_ref"));
 }
 
-test "PushConstants is 80 bytes with correct field offsets" {
-    try std.testing.expectEqual(@as(usize, 80), @sizeOf(PushConstants));
-    try std.testing.expectEqual(@as(usize, 72), @offsetOf(PushConstants, "glyph_count"));
+test "FrameParams is 80 bytes with correct field offsets" {
+    try std.testing.expectEqual(@as(usize, 80), @sizeOf(FrameParams));
+    try std.testing.expectEqual(@as(usize, 72), @offsetOf(FrameParams, "glyph_count"));
 }
 
 const max_pending_writes: u32 = 8;
@@ -38,7 +38,7 @@ pub const DebugStats = if (@import("builtin").mode == .Debug) struct {
 
 const PendingWrites = struct {
     writes: [max_pending_writes]vk.WriteDescriptorSet = undefined,
-    buf_infos: [max_pending_writes]vk.DescriptorBufferInfo = undefined,
+    buffer_infos: [max_pending_writes]vk.DescriptorBufferInfo = undefined,
     len: u32 = 0,
 };
 
@@ -165,7 +165,7 @@ pub const DescriptorTable = struct {
             self.debug_stats.descriptor_flush_calls += 1;
         }
         for (self.pending.writes[0..self.pending.len], 0..) |*w, i| {
-            w.p_buffer_info = @ptrCast(&self.pending.buf_infos[i]);
+            w.p_buffer_info = @ptrCast(&self.pending.buffer_infos[i]);
         }
         self.dispatch.updateDescriptorSets(self.device, self.pending.writes[0..self.pending.len], null);
         self.pending.len = 0;
@@ -183,7 +183,7 @@ pub const DescriptorTable = struct {
             self.flushWrites();
         }
         const set = self.setForFrame(frame_index);
-        self.pending.buf_infos[self.pending.len] = .{
+        self.pending.buffer_infos[self.pending.len] = .{
             .buffer = buffer,
             .offset = offset,
             .range = range,
@@ -212,7 +212,7 @@ pub const DescriptorTable = struct {
         self.enqueueStorageBuffer(frame_index, 0, buffer, offset, range);
     }
 
-    pub fn updateCommandBuffer(
+    pub fn updateGlyphBuffer(
         self: *DescriptorTable,
         frame_index: u32,
         buffer: vk.Buffer,

@@ -332,19 +332,19 @@ pub fn main(init: std.process.Init) !void {
     try stdout_writer.interface.flush();
 }
 
-test "parseReflection extracts GlyphCommand with field types" {
+test "parseReflection extracts GlyphInstance with field types" {
     const json =
         \\{
         \\  "parameters": [
         \\    {
-        \\      "name": "commands",
+        \\      "name": "glyphs",
         \\      "binding": {"kind": "descriptorTableSlot", "index": 1},
         \\      "type": {
         \\        "kind": "resource",
         \\        "baseShape": "structuredBuffer",
         \\        "resultType": {
         \\          "kind": "struct",
-        \\          "name": "GlyphCommand",
+        \\          "name": "GlyphInstance",
         \\          "fields": [
         \\            {
         \\              "name": "motor",
@@ -369,7 +369,7 @@ test "parseReflection extracts GlyphCommand with field types" {
     defer freeStructs(std.testing.allocator, structs);
 
     try std.testing.expectEqual(@as(usize, 1), structs.len);
-    try std.testing.expectEqualStrings("GlyphCommand", structs[0].name);
+    try std.testing.expectEqualStrings("GlyphInstance", structs[0].name);
     try std.testing.expectEqual(@as(u32, 56), structs[0].size);
     try std.testing.expectEqual(@as(usize, 2), structs[0].fields.len);
 
@@ -383,7 +383,7 @@ test "parseReflection extracts GlyphCommand with field types" {
     try std.testing.expectEqual(FieldType{ .scalar = .uint32 }, structs[0].fields[1].field_type);
 }
 
-test "parseReflection extracts PushConstants with matrix type" {
+test "parseReflection extracts FrameParams with matrix type" {
     const json =
         \\{
         \\  "parameters": [
@@ -395,10 +395,10 @@ test "parseReflection extracts PushConstants with matrix type" {
         \\        "elementVarLayout": {
         \\          "type": {
         \\            "kind": "struct",
-        \\            "name": "PushConstants",
+        \\            "name": "FrameParams",
         \\            "fields": [
         \\              {
-        \\                "name": "proj",
+        \\                "name": "projection",
         \\                "type": {"kind": "matrix", "rowCount": 4, "columnCount": 4, "elementType": {"kind": "scalar", "scalarType": "float32"}},
         \\                "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
         \\              },
@@ -422,7 +422,7 @@ test "parseReflection extracts PushConstants with matrix type" {
     defer freeStructs(std.testing.allocator, structs);
 
     try std.testing.expectEqual(@as(usize, 1), structs.len);
-    try std.testing.expectEqualStrings("PushConstants", structs[0].name);
+    try std.testing.expectEqualStrings("FrameParams", structs[0].name);
     try std.testing.expectEqual(@as(u32, 80), structs[0].size);
 
     try std.testing.expectEqual(FieldType{ .matrix = .{ .rows = 4, .cols = 4, .element = .float32 } }, structs[0].fields[0].field_type);
@@ -433,14 +433,14 @@ test "parseReflection extracts both structs" {
         \\{
         \\  "parameters": [
         \\    {
-        \\      "name": "commands",
+        \\      "name": "glyphs",
         \\      "binding": {"kind": "descriptorTableSlot", "index": 1},
         \\      "type": {
         \\        "kind": "resource",
         \\        "baseShape": "structuredBuffer",
         \\        "resultType": {
         \\          "kind": "struct",
-        \\          "name": "GlyphCommand",
+        \\          "name": "GlyphInstance",
         \\          "fields": [
         \\            {
         \\              "name": "motor",
@@ -459,10 +459,10 @@ test "parseReflection extracts both structs" {
         \\        "elementVarLayout": {
         \\          "type": {
         \\            "kind": "struct",
-        \\            "name": "PushConstants",
+        \\            "name": "FrameParams",
         \\            "fields": [
         \\              {
-        \\                "name": "proj",
+        \\                "name": "projection",
         \\                "type": {"kind": "matrix", "rowCount": 4, "columnCount": 4, "elementType": {"kind": "scalar", "scalarType": "float32"}},
         \\                "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
         \\              }
@@ -481,8 +481,8 @@ test "parseReflection extracts both structs" {
     defer freeStructs(std.testing.allocator, structs);
 
     try std.testing.expectEqual(@as(usize, 2), structs.len);
-    try std.testing.expectEqualStrings("GlyphCommand", structs[0].name);
-    try std.testing.expectEqualStrings("PushConstants", structs[1].name);
+    try std.testing.expectEqualStrings("GlyphInstance", structs[0].name);
+    try std.testing.expectEqualStrings("FrameParams", structs[1].name);
 }
 
 test "emitZig produces extern struct definitions" {
@@ -492,12 +492,12 @@ test "emitZig produces extern struct definitions" {
         .{ .name = "_pad", .offset = 56, .size = 8, .field_type = .{ .vector = .{ .count = 2, .element = .uint32 } } },
     };
     const fields_pc = [_]FieldLayout{
-        .{ .name = "proj", .offset = 0, .size = 64, .field_type = .{ .matrix = .{ .rows = 4, .cols = 4, .element = .float32 } } },
+        .{ .name = "projection", .offset = 0, .size = 64, .field_type = .{ .matrix = .{ .rows = 4, .cols = 4, .element = .float32 } } },
         .{ .name = "glyph_count", .offset = 72, .size = 4, .field_type = .{ .scalar = .uint32 } },
     };
     const structs = [_]StructLayout{
-        .{ .name = "GlyphCommand", .size = 64, .fields = &fields_gc },
-        .{ .name = "PushConstants", .size = 80, .fields = &fields_pc },
+        .{ .name = "GlyphInstance", .size = 64, .fields = &fields_gc },
+        .{ .name = "FrameParams", .size = 80, .fields = &fields_pc },
     };
 
     var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
@@ -508,13 +508,13 @@ test "emitZig produces extern struct definitions" {
 
     try std.testing.expect(std.mem.find(u8, output, "AUTO-GENERATED") != null);
 
-    try std.testing.expect(std.mem.find(u8, output, "pub const GlyphCommand = extern struct {") != null);
+    try std.testing.expect(std.mem.find(u8, output, "pub const GlyphInstance = extern struct {") != null);
     try std.testing.expect(std.mem.find(u8, output, "motor: [4]f32,") != null);
     try std.testing.expect(std.mem.find(u8, output, "flags: u32,") != null);
     try std.testing.expect(std.mem.find(u8, output, "_pad: [2]u32 = .{0} ** 2,") != null);
 
-    try std.testing.expect(std.mem.find(u8, output, "pub const PushConstants = extern struct {") != null);
-    try std.testing.expect(std.mem.find(u8, output, "proj: [4][4]f32,") != null);
+    try std.testing.expect(std.mem.find(u8, output, "pub const FrameParams = extern struct {") != null);
+    try std.testing.expect(std.mem.find(u8, output, "projection: [4][4]f32,") != null);
     try std.testing.expect(std.mem.find(u8, output, "glyph_count: u32,") != null);
 }
 

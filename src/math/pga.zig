@@ -96,8 +96,8 @@ pub const Motor = extern struct {
         return self.translationComposer().compose(tx, ty);
     }
 
-    /// Expand motor to a column-major 4×4 matrix, pre-multiplied by `proj`.
-    /// Result = proj × motor_mat.  Exploits motor matrix sparsity (cols 2,3
+    /// Expand motor to a column-major 4×4 matrix, pre-multiplied by `projection`.
+    /// Result = projection × motor_mat.  Exploits motor matrix sparsity (cols 2,3
     /// are identity/translation) to avoid a full 4×4 multiply.
     ///
     /// Motor matrix (column-major, [col][row]):
@@ -105,19 +105,19 @@ pub const Motor = extern struct {
     ///   col1 = [-2sα,  1-2α², 0, 0]
     ///   col2 = [0,      0,    1, 0]
     ///   col3 = [2(s·tx+α·ty), 2(s·ty-α·tx), 0, 1]
-    pub fn toMat(self: Motor, proj: [4][4]f32) [4][4]f32 {
+    pub fn toMat(self: Motor, projection: [4][4]f32) [4][4]f32 {
         const a = self.m[1];
         const c: @Vector(4, f32) = @splat(1.0 - 2.0 * a * a);
         const sv: @Vector(4, f32) = @splat(2.0 * self.m[0] * a);
         const dx: @Vector(4, f32) = @splat(2.0 * (self.m[0] * self.m[2] + a * self.m[3]));
         const dy: @Vector(4, f32) = @splat(2.0 * (self.m[0] * self.m[3] - a * self.m[2]));
-        const p0: @Vector(4, f32) = proj[0];
-        const p1: @Vector(4, f32) = proj[1];
+        const p0: @Vector(4, f32) = projection[0];
+        const p1: @Vector(4, f32) = projection[1];
         return .{
             p0 * c + p1 * sv,
             p1 * c - p0 * sv,
-            proj[2],
-            p0 * dx + p1 * dy + @as(@Vector(4, f32), proj[3]),
+            projection[2],
+            p0 * dx + p1 * dy + @as(@Vector(4, f32), projection[3]),
         };
     }
 
@@ -268,13 +268,13 @@ test "Motor.compose rotate then translate" {
 }
 
 test "Motor.toMat identity produces identity matrix" {
-    const proj = [4][4]f32{
+    const projection = [4][4]f32{
         .{ 1, 0, 0, 0 },
         .{ 0, 1, 0, 0 },
         .{ 0, 0, 1, 0 },
         .{ 0, 0, 0, 1 },
     };
-    const result = Motor.identity.toMat(proj);
+    const result = Motor.identity.toMat(projection);
     for (0..4) |col| {
         for (0..4) |row| {
             const expected: f32 = if (row == col) 1.0 else 0.0;
@@ -284,27 +284,27 @@ test "Motor.toMat identity produces identity matrix" {
 }
 
 test "Motor.toMat translation appears in column 3" {
-    const proj = [4][4]f32{
+    const projection = [4][4]f32{
         .{ 1, 0, 0, 0 },
         .{ 0, 1, 0, 0 },
         .{ 0, 0, 1, 0 },
         .{ 0, 0, 0, 1 },
     };
     const m = Motor.fromTranslation(5.0, -2.0);
-    const result = m.toMat(proj);
+    const result = m.toMat(projection);
     try testing.expectApproxEqAbs(@as(f32, 5.0), result[3][0], 1e-5);
     try testing.expectApproxEqAbs(@as(f32, -2.0), result[3][1], 1e-5);
 }
 
 test "Motor.toMat rotation matches apply" {
-    const proj = [4][4]f32{
+    const projection = [4][4]f32{
         .{ 1, 0, 0, 0 },
         .{ 0, 1, 0, 0 },
         .{ 0, 0, 1, 0 },
         .{ 0, 0, 0, 1 },
     };
     const m = Motor.fromRotation(std.math.pi / 3.0);
-    const mat = m.toMat(proj);
+    const mat = m.toMat(projection);
     const px: f32 = 3.0;
     const py: f32 = 1.0;
     // Transform via matrix (column-major: result[col][row]).
@@ -315,9 +315,9 @@ test "Motor.toMat rotation matches apply" {
     try testing.expectApproxEqAbs(applied[1], mat_y, 1e-5);
 }
 
-test "Motor.toMat respects non-identity proj" {
+test "Motor.toMat respects non-identity projection" {
     // Uniform scale projection: 2x in x, 3x in y.
-    const proj = [4][4]f32{
+    const projection = [4][4]f32{
         .{ 2, 0, 0, 0 },
         .{ 0, 3, 0, 0 },
         .{ 0, 0, 1, 0 },
@@ -325,15 +325,15 @@ test "Motor.toMat respects non-identity proj" {
     };
     // Pure translation by (4, 6).
     const m = Motor.fromTranslation(4.0, 6.0);
-    const result = m.toMat(proj);
-    // proj × motor_mat: translation column is proj × [4, 6, 0, 1]ᵀ = [8, 18, 0, 1]
+    const result = m.toMat(projection);
+    // projection × motor_mat: translation column is projection × [4, 6, 0, 1]ᵀ = [8, 18, 0, 1]
     try testing.expectApproxEqAbs(@as(f32, 8.0), result[3][0], 1e-5);
     try testing.expectApproxEqAbs(@as(f32, 18.0), result[3][1], 1e-5);
     try testing.expectApproxEqAbs(@as(f32, 1.0), result[3][3], 1e-5);
 }
 
 test "Motor.toMat combined motor matches apply" {
-    const proj = [4][4]f32{
+    const projection = [4][4]f32{
         .{ 1, 0, 0, 0 },
         .{ 0, 1, 0, 0 },
         .{ 0, 0, 1, 0 },
@@ -344,7 +344,7 @@ test "Motor.toMat combined motor matches apply" {
     const tr = Motor.fromTranslation(1.0, 2.0);
     const m = Motor.compose(tr, rot); // rot first, then tr
 
-    const mat = m.toMat(proj);
+    const mat = m.toMat(projection);
     // Test point (2, 0).
     const px: f32 = 2.0;
     const py: f32 = 0.0;
@@ -406,14 +406,14 @@ test "Motor.fromRotationAbout: 90° rotates non-center point correctly" {
 }
 
 test "Motor.fromRotationAbout: toMat matches apply" {
-    const proj = [4][4]f32{
+    const projection = [4][4]f32{
         .{ 1, 0, 0, 0 },
         .{ 0, 1, 0, 0 },
         .{ 0, 0, 1, 0 },
         .{ 0, 0, 0, 1 },
     };
     const m = Motor.fromRotationAbout(std.math.pi / 3.0, 4.0, -2.0);
-    const mat = m.toMat(proj);
+    const mat = m.toMat(projection);
     const points = [_][2]f32{ .{ 4, -2 }, .{ 0, 0 }, .{ 10, 5 }, .{ -3, 7 } };
     for (points) |pt| {
         const mat_x = mat[0][0] * pt[0] + mat[1][0] * pt[1] + mat[3][0];
