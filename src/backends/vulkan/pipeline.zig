@@ -1,7 +1,7 @@
 const std = @import("std");
 const vk = @import("vulkan");
 const gpu_context = @import("context.zig");
-const descriptors = @import("descriptors.zig");
+const bindings = @import("bindings.zig");
 const spirv = @import("spirv_shaders");
 
 pub const Pipeline = struct {
@@ -11,8 +11,8 @@ pub const Pipeline = struct {
     pipeline: vk.Pipeline,
 
     pub fn init(
-        ctx: gpu_context.VulkanContext,
-        descriptor_set_layout: vk.DescriptorSetLayout,
+        ctx: gpu_context.Context,
+        frame_set_layout: vk.DescriptorSetLayout,
         color_format: vk.Format,
     ) !Pipeline {
         const device = ctx.device;
@@ -24,13 +24,13 @@ pub const Pipeline = struct {
                 .fragment_bit = true,
             },
             .offset = 0,
-            .size = @sizeOf(descriptors.FrameParams),
+            .size = @sizeOf(bindings.FrameParams),
         };
         const layout_ci = vk.PipelineLayoutCreateInfo{
             .s_type = .pipeline_layout_create_info,
             .flags = .{},
             .set_layout_count = 1,
-            .p_set_layouts = @ptrCast(&descriptor_set_layout),
+            .p_set_layouts = @ptrCast(&frame_set_layout),
             .push_constant_range_count = 1,
             .p_push_constant_ranges = @ptrCast(&push_range),
         };
@@ -210,7 +210,7 @@ fn createShaderModule(
 }
 
 test "push constant range matches FrameParams size" {
-    try std.testing.expectEqual(@as(usize, 80), @sizeOf(descriptors.FrameParams));
+    try std.testing.expectEqual(@as(usize, 80), @sizeOf(bindings.FrameParams));
 }
 
 test "embedded SPIR-V data is non-empty" {

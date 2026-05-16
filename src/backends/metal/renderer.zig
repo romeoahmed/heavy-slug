@@ -3,6 +3,7 @@ const heavy_slug = @import("heavy_slug");
 const gpu_structs = @import("gpu_structs");
 const msl_shaders = @import("msl_shaders");
 const backend_options = @import("heavy_slug_backend_options");
+const metal = @import("context.zig");
 
 const pool_mod = heavy_slug.core.cache.byte_pool;
 const render = heavy_slug.core.render.renderer_core;
@@ -15,75 +16,11 @@ const AbiGlyphInstance = gpu_structs.GlyphInstance;
 pub const GlyphInstance = AbiGlyphInstance;
 pub const FrameParams = gpu_structs.FrameParams;
 
-const ContextHandle = opaque {};
-const BufferHandle = opaque {};
 const frames_in_flight = 3;
 
-pub const HostObjects = extern struct {
-    /// Borrowed id<MTLDevice>; must outlive Context.
-    device: *anyopaque,
-    /// Borrowed id<MTL4CommandQueue>; must belong to device.
-    command_queue: *anyopaque,
-    /// Borrowed CAMetalLayer with device and pixelFormat already configured.
-    layer: *anyopaque,
-};
-
-extern fn hs_metal_context_create(
-    host: HostObjects,
-    task_source: [*]const u8,
-    task_source_len: usize,
-    mesh_source: [*]const u8,
-    mesh_source_len: usize,
-    fragment_source: [*]const u8,
-    fragment_source_len: usize,
-    error_buffer: [*]u8,
-    error_buffer_len: usize,
-) ?*ContextHandle;
-
-extern fn hs_metal_context_destroy(context: *ContextHandle) void;
-extern fn hs_metal_context_wait_frame_slot(
-    context: *ContextHandle,
-    slot_index: u32,
-    error_buffer: [*]u8,
-    error_buffer_len: usize,
-) c_int;
-extern fn hs_metal_context_release_frame_slot(context: *ContextHandle, slot_index: u32) void;
-extern fn hs_metal_context_wait_submitted(context: *ContextHandle) void;
-extern fn hs_metal_buffer_create(context: *ContextHandle, size: usize) ?*BufferHandle;
-extern fn hs_metal_buffer_destroy(buffer: *BufferHandle) void;
-extern fn hs_metal_buffer_contents(buffer: *BufferHandle) ?[*]u8;
-extern fn hs_metal_context_draw(
-    context: *ContextHandle,
-    width: u32,
-    height: u32,
-    clear_r: f32,
-    clear_g: f32,
-    clear_b: f32,
-    clear_a: f32,
-    glyphs: *BufferHandle,
-    frame_params: *BufferHandle,
-    glyph_pool: *BufferHandle,
-    shader_stats: ?*BufferHandle,
-    workgroup_count: u32,
-    slot_index: u32,
-    error_buffer: [*]u8,
-    error_buffer_len: usize,
-) c_int;
-
-const ResourceIndices = extern struct {
-    glyph_pool: u32,
-    glyphs: u32,
-    frame_params: u32,
-    shader_stats: u32,
-};
-
-extern fn hs_metal_get_resource_indices() ResourceIndices;
-
-pub const Error = error{
-    MetalInitFailed,
-    MetalBufferCreateFailed,
-    MetalDrawFailed,
-};
+pub const Context = metal.Context;
+pub const Host = metal.Host;
+pub const Error = metal.Error;
 
 pub const RendererOptions = render.RendererOptions;
 pub const FontHandle = render.FontHandle;
@@ -142,64 +79,13 @@ pub const Target = struct {
 };
 
 const GlyphBatch = heavy_slug.core.render.GlyphBatch(GlyphInstance);
-const ShaderStatsBuffer = if (backend_options.shader_stats) MappedBuffer else void;
+const ShaderStatsBuffer = if (backend_options.shader_stats) metal.Buffer else void;
 
-pub const Context = struct {
-    handle: *ContextHandle,
-
-    pub fn init(host: HostObjects) !Context {
-        var error_buf: [2048]u8 = undefined;
-        const handle = hs_metal_context_create(
-            host,
-            msl_shaders.task.ptr,
-            msl_shaders.task.len,
-            msl_shaders.mesh.ptr,
-            msl_shaders.mesh.len,
-            msl_shaders.fragment.ptr,
-            msl_shaders.fragment.len,
-            &error_buf,
-            error_buf.len,
-        ) orelse {
-            std.log.err("Metal init failed: {s}", .{std.mem.sliceTo(&error_buf, 0)});
-            return Error.MetalInitFailed;
-        };
-        return .{ .handle = handle };
-    }
-
-    pub fn deinit(self: *Context) void {
-        hs_metal_context_destroy(self.handle);
-        self.* = undefined;
-    }
-};
-
-const MappedBuffer = struct {
-    handle: *BufferHandle,
-    mapped: [*]u8,
-
-    fn init(ctx: Context, size: usize) !MappedBuffer {
-        const handle = hs_metal_buffer_create(ctx.handle, size) orelse
-            return Error.MetalBufferCreateFailed;
-        errdefer hs_metal_buffer_destroy(handle);
-
-        const mapped = hs_metal_buffer_contents(handle) orelse
-            return Error.MetalBufferCreateFailed;
-
-        return .{
-            .handle = handle,
-            .mapped = mapped,
-        };
-    }
-
-    fn deinit(self: MappedBuffer) void {
-        hs_metal_buffer_destroy(self.handle);
-    }
-};
-
-fn resetShaderStatsBuffer(buffer: MappedBuffer) void {
+fn resetShaderStatsBuffer(buffer: metal.Buffer) void {
     shader_stats_mod.clearBytes(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
 }
 
-fn readShaderStatsBuffer(buffer: MappedBuffer) heavy_slug.ShaderStats {
+fn readShaderStatsBuffer(buffer: metal.Buffer) heavy_slug.ShaderStats {
     const bytes: []align(@alignOf(u32)) const u8 = @alignCast(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
     return shader_stats_mod.Snapshot.fromBytes(bytes);
 }
@@ -217,8 +103,8 @@ fn monotonicNs() u64 {
 }
 
 const FrameSlot = struct {
-    glyphs: MappedBuffer,
-    frame_params: MappedBuffer,
+    glyphs: metal.Buffer,
+    frame_params: metal.Buffer,
     shader_stats: ShaderStatsBuffer,
 
     fn deinit(self: FrameSlot) void {
@@ -257,7 +143,7 @@ pub const Renderer = struct {
 
     context: Context,
     core: render.RendererCore,
-    pool_buffer: MappedBuffer,
+    pool_buffer: metal.Buffer,
     frame_slots: [frames_in_flight]FrameSlot,
     active_frame: u32,
     frame_reserved: bool,
@@ -275,7 +161,7 @@ pub const Renderer = struct {
         var core = try render.RendererCore.init(allocator, options);
         errdefer core.deinit();
 
-        const pool_buf = try MappedBuffer.init(context, options.pool_buffer_size);
+        const pool_buf = try metal.Buffer.init(context, options.pool_buffer_size);
         errdefer pool_buf.deinit();
 
         const glyph_buffer_size = @as(usize, options.max_glyphs_per_frame) * @sizeOf(AbiGlyphInstance);
@@ -285,15 +171,15 @@ pub const Renderer = struct {
             for (frame_slots[0..initialized_slots]) |slot| slot.deinit();
         }
         for (&frame_slots) |*slot| {
-            const glyph_buffer = try MappedBuffer.init(context, glyph_buffer_size);
+            const glyph_buffer = try metal.Buffer.init(context, glyph_buffer_size);
             errdefer glyph_buffer.deinit();
 
-            const params_buffer = try MappedBuffer.init(context, @sizeOf(FrameParams));
+            const params_buffer = try metal.Buffer.init(context, @sizeOf(FrameParams));
             errdefer params_buffer.deinit();
 
             var shader_stats: ShaderStatsBuffer = undefined;
             if (backend_options.shader_stats) {
-                shader_stats = try MappedBuffer.init(context, @sizeOf(heavy_slug.ShaderStats));
+                shader_stats = try metal.Buffer.init(context, @sizeOf(heavy_slug.ShaderStats));
                 resetShaderStatsBuffer(shader_stats);
             }
 
@@ -335,7 +221,7 @@ pub const Renderer = struct {
 
     fn reserveFrameSlot(self: *Renderer) Error!void {
         if (self.frame_reserved) {
-            hs_metal_context_release_frame_slot(self.context.handle, self.active_frame);
+            metal.releaseFrameSlot(self.context, self.active_frame);
             self.frame_reserved = false;
         }
 
@@ -343,15 +229,10 @@ pub const Renderer = struct {
         self.stats.reset();
         var error_buf: [2048]u8 = undefined;
         const wait_start = monotonicNs();
-        if (hs_metal_context_wait_frame_slot(
-            self.context.handle,
-            self.active_frame,
-            &error_buf,
-            error_buf.len,
-        ) == 0) {
+        metal.waitFrameSlot(self.context, self.active_frame, &error_buf) catch {
             std.log.err("Metal frame slot wait failed: {s}", .{std.mem.sliceTo(&error_buf, 0)});
             return Error.MetalDrawFailed;
-        }
+        };
         if (@import("builtin").mode == .Debug) {
             const wait_end = monotonicNs();
             self.stats.frame_slot_wait_ns = if (wait_end >= wait_start) wait_end - wait_start else 0;
@@ -405,7 +286,7 @@ pub const Renderer = struct {
     fn submitFrame(self: *Renderer, target: Target, glyph_count: u32) Error!render.FrameToken {
         if (glyph_count == 0) {
             if (self.frame_reserved) {
-                hs_metal_context_release_frame_slot(self.context.handle, self.active_frame);
+                metal.releaseFrameSlot(self.context, self.active_frame);
                 self.frame_reserved = false;
             }
             return self.last_submitted_frame;
@@ -416,8 +297,8 @@ pub const Renderer = struct {
         const clear_color = target.clear_color;
         const em_projection = render.projectionToEm(projection);
         const frame_slot = &self.frame_slots[self.active_frame];
-        const shader_stats_handle: ?*BufferHandle = if (backend_options.shader_stats)
-            frame_slot.shader_stats.handle
+        const shader_stats_buffer: ?metal.Buffer = if (backend_options.shader_stats)
+            frame_slot.shader_stats
         else
             null;
 
@@ -432,28 +313,21 @@ pub const Renderer = struct {
 
         const workgroup_count = mesh_limits.taskWorkgroupCount(glyph_count);
         var error_buf: [2048]u8 = undefined;
-        if (hs_metal_context_draw(
-            self.context.handle,
-            viewport[0],
-            viewport[1],
-            clear_color[0],
-            clear_color[1],
-            clear_color[2],
-            clear_color[3],
-            frame_slot.glyphs.handle,
-            frame_slot.frame_params.handle,
-            self.pool_buffer.handle,
-            shader_stats_handle,
-            workgroup_count,
-            self.active_frame,
-            &error_buf,
-            error_buf.len,
-        ) == 0) {
+        metal.draw(self.context, .{
+            .viewport = viewport,
+            .clear_color = clear_color,
+            .glyphs = frame_slot.glyphs,
+            .frame_params = frame_slot.frame_params,
+            .glyph_pool = self.pool_buffer,
+            .shader_stats = shader_stats_buffer,
+            .workgroup_count = workgroup_count,
+            .slot_index = self.active_frame,
+        }, &error_buf) catch {
             std.log.err("Metal draw failed: {s}", .{std.mem.sliceTo(&error_buf, 0)});
-            hs_metal_context_release_frame_slot(self.context.handle, self.active_frame);
+            metal.releaseFrameSlot(self.context, self.active_frame);
             self.frame_reserved = false;
             return Error.MetalDrawFailed;
-        }
+        };
         self.frame_reserved = false;
 
         if (@import("builtin").mode == .Debug) {
@@ -468,10 +342,10 @@ pub const Renderer = struct {
 
     pub fn deinit(self: *Renderer) void {
         if (self.frame_reserved) {
-            hs_metal_context_release_frame_slot(self.context.handle, self.active_frame);
+            metal.releaseFrameSlot(self.context, self.active_frame);
             self.frame_reserved = false;
         }
-        hs_metal_context_wait_submitted(self.context.handle);
+        metal.waitSubmitted(self.context);
         self.completed_frame = std.math.maxInt(render.FrameToken);
         self.core.retireCompleted(self.completed_frame, self);
         for (self.frame_slots) |slot| slot.deinit();
@@ -483,6 +357,7 @@ pub const Renderer = struct {
 
 test "Metal renderer public API compiles" {
     _ = Context;
+    _ = Host;
     _ = Renderer;
     try std.testing.expectEqual(@as(usize, 3), max_frames_in_flight);
     try std.testing.expectEqual(backend_options.shader_stats, shader_stats_enabled);
@@ -492,7 +367,7 @@ test "Metal renderer public API compiles" {
 }
 
 test "Metal bridge resource indices match generated Slang MSL" {
-    const indices = hs_metal_get_resource_indices();
+    const indices = metal.resourceIndices();
     try std.testing.expectEqual(@as(u32, 0), indices.glyph_pool);
     try std.testing.expectEqual(@as(u32, 1), indices.glyphs);
     const params_index: u32 = if (backend_options.shader_stats) 3 else 2;

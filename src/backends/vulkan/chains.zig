@@ -52,6 +52,73 @@ pub fn physicalDeviceFeatures2(p_next: ?*anyopaque) vk.PhysicalDeviceFeatures2 {
     return features;
 }
 
+pub const PropertyChain = struct {
+    mesh_shader: vk.PhysicalDeviceMeshShaderPropertiesEXT,
+    vulkan14: vk.PhysicalDeviceVulkan14Properties,
+    root: vk.PhysicalDeviceProperties2,
+
+    pub fn init() PropertyChain {
+        return .{
+            .mesh_shader = meshShaderProperties(),
+            .vulkan14 = vulkan14Properties(null),
+            .root = physicalDeviceProperties2(null),
+        };
+    }
+
+    pub fn rootInfo(self: *PropertyChain) *vk.PhysicalDeviceProperties2 {
+        self.mesh_shader.p_next = null;
+        self.vulkan14.p_next = @ptrCast(&self.mesh_shader);
+        self.root.p_next = @ptrCast(&self.vulkan14);
+        return &self.root;
+    }
+};
+
+pub const FeatureChain = struct {
+    mesh_shader: vk.PhysicalDeviceMeshShaderFeaturesEXT,
+    vulkan14: vk.PhysicalDeviceVulkan14Features,
+    vulkan13: vk.PhysicalDeviceVulkan13Features,
+    root: vk.PhysicalDeviceFeatures2,
+
+    pub fn init() FeatureChain {
+        return .{
+            .mesh_shader = meshShaderFeatures(),
+            .vulkan14 = vulkan14Features(null),
+            .vulkan13 = vulkan13Features(null),
+            .root = physicalDeviceFeatures2(null),
+        };
+    }
+
+    pub fn rootInfo(self: *FeatureChain) *vk.PhysicalDeviceFeatures2 {
+        self.mesh_shader.p_next = null;
+        self.vulkan14.p_next = @ptrCast(&self.mesh_shader);
+        self.vulkan13.p_next = @ptrCast(&self.vulkan14);
+        self.root.p_next = @ptrCast(&self.vulkan13);
+        return &self.root;
+    }
+
+    pub fn enableRendererFeatures(self: *FeatureChain) void {
+        self.vulkan13.dynamic_rendering = .true;
+        self.vulkan14.push_descriptor = .true;
+        self.mesh_shader.task_shader = .true;
+        self.mesh_shader.mesh_shader = .true;
+    }
+
+    pub fn enableSynchronization2(self: *FeatureChain) void {
+        self.vulkan13.synchronization_2 = .true;
+    }
+
+    pub fn hasRendererFeatures(self: FeatureChain) bool {
+        return self.vulkan13.dynamic_rendering == .true and
+            self.vulkan14.push_descriptor == .true and
+            self.mesh_shader.task_shader == .true and
+            self.mesh_shader.mesh_shader == .true;
+    }
+
+    pub fn hasSynchronization2(self: FeatureChain) bool {
+        return self.vulkan13.synchronization_2 == .true;
+    }
+};
+
 test "properties2 chain roots keep sType and zeroed payloads" {
     var mesh_props = meshShaderProperties();
     var vk14_props = vulkan14Properties(@ptrCast(&mesh_props));
@@ -73,4 +140,29 @@ test "features2 chain roots keep sType values" {
     try std.testing.expectEqual(vk.StructureType.physical_device_vulkan_1_3_features, vk13_features.s_type);
     try std.testing.expectEqual(vk.StructureType.physical_device_vulkan_1_4_features, vk14_features.s_type);
     try std.testing.expectEqual(vk.StructureType.physical_device_mesh_shader_features_ext, mesh_features.s_type);
+}
+
+test "PropertyChain wires Vulkan 1.4 and mesh shader property queries" {
+    var chain = PropertyChain.init();
+    const root = chain.rootInfo();
+
+    try std.testing.expectEqual(vk.StructureType.physical_device_properties_2, root.s_type);
+    try std.testing.expectEqual(vk.StructureType.physical_device_vulkan_1_4_properties, chain.vulkan14.s_type);
+    try std.testing.expectEqual(vk.StructureType.physical_device_mesh_shader_properties_ext, chain.mesh_shader.s_type);
+    try std.testing.expect(root.p_next != null);
+    try std.testing.expect(chain.vulkan14.p_next != null);
+}
+
+test "FeatureChain enables renderer and demo feature bits" {
+    var chain = FeatureChain.init();
+    try std.testing.expect(!chain.hasRendererFeatures());
+    try std.testing.expect(!chain.hasSynchronization2());
+
+    _ = chain.rootInfo();
+    chain.enableRendererFeatures();
+    try std.testing.expect(chain.hasRendererFeatures());
+    try std.testing.expect(!chain.hasSynchronization2());
+
+    chain.enableSynchronization2();
+    try std.testing.expect(chain.hasSynchronization2());
 }

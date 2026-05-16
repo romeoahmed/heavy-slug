@@ -99,6 +99,9 @@ Prefer semantic names tied to renderer roles:
 - per-frame glyph storage: `GlyphBatch`,
 - glyph-pool references: `GlyphBlobRef`,
 - shader ABI fields: `blob_ref`.
+- Vulkan per-frame resource binding helper: `FrameBindings`.
+- Vulkan pushed buffer range values: `BufferView`.
+- Metal borrowed host object contract: `Host`.
 
 Use build-system `addTranslateC()` modules for C headers instead of source-level
 `@cImport`. Keep GPU layouts generated from Slang reflection; do not hand-edit
@@ -111,12 +114,17 @@ alternative. Do not reintroduce per-glyph Vulkan descriptor slots, Vulkan
 descriptor indexing as the glyph addressing model, or `VK_EXT_descriptor_heap`
 as architectural churn. The current hot path deliberately uses byte-offset
 `GlyphBlobRef` values and Vulkan 1.4 push descriptors for per-frame bindings.
+Keep Vulkan pNext chains in `chains.zig`; use the chain structs there rather
+than open-coded feature/property chains in demos or backend init paths.
 
 For Metal, new command submission and resource binding work should use the
 Metal 4 API family: `MTL4CommandQueue`, `MTL4CommandAllocator`,
 `MTL4Compiler`, mesh render pipeline descriptors, and `MTL4ArgumentTable`.
 Avoid legacy `MTLCommandQueue`, `MTLCommandBuffer`, or stage-specific buffer
 setters unless a documented architecture decision changes the backend model.
+Keep Zig-facing Metal bridge declarations in `src/backends/metal/context.zig`;
+`renderer.zig` should stay focused on renderer state, frame slots, and
+`RendererCore` coordination.
 
 ## Testing Guidelines
 

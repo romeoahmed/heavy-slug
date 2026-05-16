@@ -17,7 +17,6 @@ struct hs_metal_frame_slot {
     __strong id<MTL4CommandAllocator> allocator;
     __strong id<MTL4ArgumentTable> argument_table;
     bool reserved;
-    bool in_flight;
     bool failed;
     __strong NSString *message;
 };
@@ -223,7 +222,6 @@ hs_metal_context *hs_metal_context_create(
             }
 
             context->frame_slots[i].reserved = false;
-            context->frame_slots[i].in_flight = false;
             context->frame_slots[i].failed = false;
             context->frame_slots[i].message = nil;
         }
@@ -276,7 +274,6 @@ void hs_metal_context_wait_submitted(hs_metal_context *context) {
     if (!context) return;
     for (uint32_t i = 0; i < kFrameSlotCount; i++) {
         hs_metal_frame_slot *slot = &context->frame_slots[i];
-        if (!slot->in_flight) continue;
         dispatch_semaphore_wait(slot->semaphore, DISPATCH_TIME_FOREVER);
         dispatch_semaphore_signal(slot->semaphore);
     }
@@ -417,7 +414,6 @@ int hs_metal_context_draw(
 
         MTL4CommitOptions *commit_options = [MTL4CommitOptions new];
         slot->reserved = false;
-        slot->in_flight = true;
         slot->failed = false;
         slot->message = nil;
         [commit_options addFeedbackHandler:^(id<MTL4CommitFeedback> feedback) {
@@ -426,7 +422,6 @@ int hs_metal_context_draw(
                 slot->failed = true;
                 slot->message = error.localizedDescription;
             }
-            slot->in_flight = false;
             dispatch_semaphore_signal(slot->semaphore);
         }];
 

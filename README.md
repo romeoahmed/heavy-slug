@@ -106,7 +106,7 @@ Task -> Mesh -> Fragment shaders
 | Layer | Owns | Does not own |
 | --- | --- | --- |
 | `heavy_slug` | Shaping, outline encoding, cache metadata, backend-neutral batches | GPU context, GLFW, swapchain |
-| `heavy_slug_vulkan` | Vulkan glyph pool, descriptors, pipeline, draw submission | Instance/window creation |
+| `heavy_slug_vulkan` | Vulkan glyph pool, push frame bindings, pipeline, draw submission | Instance/window creation |
 | `heavy_slug_metal` | Metal 4 bridge objects, argument tables, pipeline, buffers | Cocoa/GLFW app lifecycle |
 | Demo code | Example GLFW hosts and scene input | Core library behavior |
 
@@ -147,7 +147,9 @@ Stable top-level core exports include `FontHandle`, `FontSource`,
 
 Backend modules expose `Context`, `Renderer`, `Frame`, `Target`,
 `RendererOptions`, `FontHandle`, `FrameToken`, `Stats`, and
-`shader_stats_enabled`.
+`shader_stats_enabled`. The Metal module also exposes `Host`, the borrowed
+`id<MTLDevice>` / `id<MTL4CommandQueue>` / `CAMetalLayer *` contract used to
+create a backend context.
 
 <details>
 <summary>Basic Vulkan usage shape</summary>
@@ -201,11 +203,13 @@ renderer.markFrameComplete(token);
 ```zig
 const heavy_slug_metal = @import("heavy_slug_metal");
 
-var ctx = try heavy_slug_metal.Context.init(.{
+const host = heavy_slug_metal.Host{
     .device = mtl_device,
     .command_queue = mtl4_queue,
     .layer = metal_layer,
-});
+};
+
+var ctx = try heavy_slug_metal.Context.init(host);
 defer ctx.deinit();
 
 var renderer = try heavy_slug_metal.Renderer.init(ctx, allocator, .{});
@@ -241,7 +245,7 @@ UTF-8 text
 
 | Backend | Resource model | Required API path |
 | --- | --- | --- |
-| Vulkan | One glyph blob storage buffer; one frame-local `GlyphInstance[]`; optional shader stats buffer; pushed frame bindings | Vulkan 1.4, SPIR-V 1.6, core `pushDescriptor`, `VK_EXT_mesh_shader`, dynamic rendering |
+| Vulkan | One glyph blob storage buffer; one frame-local `GlyphInstance[]`; optional shader stats buffer; `FrameBindings` pushes per-frame buffer views | Vulkan 1.4, SPIR-V 1.6, core `pushDescriptor`, `VK_EXT_mesh_shader`, dynamic rendering |
 | Metal | Bridge-owned buffers; per-frame `MTL4ArgumentTable`; Metal residency set | Metal 4, `MTL4CommandQueue`, `MTL4CommandAllocator`, `MTL4Compiler`, `MTL4MeshRenderPipelineDescriptor` |
 
 The current Vulkan hot path is the single glyph-pool buffer plus `GlyphBlobRef`
@@ -279,7 +283,7 @@ zig-out/shaders/msl/fragment.metal
 
 | Diagnostic source | Signals |
 | --- | --- |
-| CPU/backend debug stats | Shaping counts, cache hits/misses, encoded spans, uploaded bytes, pool fragmentation, deferred retirements, descriptor writes/pushes, frame-slot waits. |
+| CPU/backend debug stats | Shaping counts, cache hits/misses, encoded spans, uploaded bytes, pool fragmentation, deferred retirements, Vulkan binding writes/pushes, Metal frame-slot waits. |
 | Shader stats opt-in | Visible glyphs, emitted mesh tiles, mesh culls, fragment counts, candidate-path usage, full-scan fallback, curve tests, zero-coverage fragments. |
 
 Enable shader counters only when investigating performance:
@@ -296,8 +300,8 @@ zig build test -Dmetal=true -Dshader-stats=true
 | `src/root.zig` | Public core module. |
 | `src/core/` | Types, font, outline, blob, cache, renderer core. |
 | `src/gpu/` | GPU ABI marker, mesh limits, shader stats, resource model notes. |
-| `src/backends/vulkan/` | Vulkan backend. |
-| `src/backends/metal/` | Metal backend and Objective-C++ bridge. |
+| `src/backends/vulkan/` | Vulkan backend, including `bindings.zig` push-frame binding helpers. |
+| `src/backends/metal/` | Metal backend, Zig bridge context, and Objective-C++ bridge. |
 | `src/demo/` | Demo-only hosts and shared scene/input code. |
 | `src/c/` | Headers translated by build-system `addTranslateC()`. |
 | `build/` | Modular Zig build graph. |

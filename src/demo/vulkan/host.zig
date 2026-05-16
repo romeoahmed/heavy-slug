@@ -11,10 +11,9 @@ const vk_chains = heavy_slug_vulkan.chains;
 extern fn glfwGetInstanceProcAddress(instance: vk.Instance, procname: [*:0]const u8) vk.PfnVoidFunction;
 extern fn glfwCreateWindowSurface(instance: vk.Instance, window: glfw.Window, allocator: ?*const anyopaque, surface: *vk.SurfaceKHR) vk.Result;
 
-const demo_device_extensions = [_][*:0]const u8{
+const device_extensions = [_][*:0]const u8{
     "VK_KHR_swapchain",
-    "VK_EXT_mesh_shader",
-};
+} ++ gpu_context.Context.required_device_extensions;
 
 fn getRequiredInstanceExtensions() []const [*:0]const u8 {
     return glfw.getRequiredInstanceExtensions();
@@ -92,8 +91,8 @@ const DemoDeviceTable = struct {
 };
 pub const DemoDeviceDispatch = vk.DeviceWrapperWithCustomDispatch(DemoDeviceTable);
 
-/// Owns all demo Vulkan state.
-pub const GraphicsContext = struct {
+/// Owns demo-only Vulkan state: instance, device, swapchain, sync, and frames.
+pub const Host = struct {
     instance: vk.Instance,
     surface: vk.SurfaceKHR,
     physical_device: vk.PhysicalDevice,
@@ -105,7 +104,7 @@ pub const GraphicsContext = struct {
     demo_idisp: DemoInstanceDispatch,
     demo_ddisp: DemoDeviceDispatch,
     lib_idisp: gpu_context.InstanceDispatch,
-    vulkan_ctx: gpu_context.VulkanContext,
+    renderer_context: gpu_context.Context,
     surface_format: vk.SurfaceFormatKHR,
 
     swapchain: vk.SwapchainKHR = .null_handle,
@@ -114,19 +113,19 @@ pub const GraphicsContext = struct {
     swapchain_extent: vk.Extent2D = .{ .width = 0, .height = 0 },
 
     command_pool: vk.CommandPool = .null_handle,
-    command_buffers: [FRAMES_IN_FLIGHT]vk.CommandBuffer = .{.null_handle} ** FRAMES_IN_FLIGHT,
-    image_available: [FRAMES_IN_FLIGHT]vk.Semaphore = .{.null_handle} ** FRAMES_IN_FLIGHT,
-    render_finished: [FRAMES_IN_FLIGHT]vk.Semaphore = .{.null_handle} ** FRAMES_IN_FLIGHT,
-    in_flight_fences: [FRAMES_IN_FLIGHT]vk.Fence = .{.null_handle} ** FRAMES_IN_FLIGHT,
+    command_buffers: [frames_in_flight]vk.CommandBuffer = .{.null_handle} ** frames_in_flight,
+    image_available: [frames_in_flight]vk.Semaphore = .{.null_handle} ** frames_in_flight,
+    render_finished: [frames_in_flight]vk.Semaphore = .{.null_handle} ** frames_in_flight,
+    in_flight_fences: [frames_in_flight]vk.Fence = .{.null_handle} ** frames_in_flight,
     frame_index: u32 = 0,
     /// Linear RGBA clear color. Vulkan converts to sRGB on write for sRGB swapchain formats.
     clear_color: [4]f32 = .{ 1.0, 1.0, 1.0, 1.0 },
 
     allocator: std.mem.Allocator,
 
-    pub const FRAMES_IN_FLIGHT = 2;
+    pub const frames_in_flight = 2;
 
-    pub fn init(window: glfw.Window, allocator: std.mem.Allocator) !GraphicsContext {
+    pub fn init(window: glfw.Window, allocator: std.mem.Allocator) !Host {
         const base = BaseDispatch.load(getInstanceProcAddress);
         const glfw_exts = getRequiredInstanceExtensions();
         const app_info = vk.ApplicationInfo{
@@ -157,8 +156,8 @@ pub const GraphicsContext = struct {
         var chosen_gfx: u32 = undefined;
         var chosen_present: u32 = undefined;
         for (devices[0..dev_count]) |pdev| {
-            if (!try supportsDeviceExtensions(pdev, lib_idisp, allocator, &demo_device_extensions)) continue;
-            gpu_context.VulkanContext.checkDeviceSupport(pdev, lib_idisp, allocator) catch continue;
+            if (!try supportsDeviceExtensions(pdev, lib_idisp, allocator, &device_extensions)) continue;
+            gpu_context.Context.checkDeviceSupport(pdev, lib_idisp, allocator) catch continue;
             if (!supportsRequiredDemoFeatures(pdev, lib_idisp)) continue;
 
             const families = findQueueFamilies(pdev, surface, demo_idisp, allocator) catch continue;
@@ -184,29 +183,21 @@ pub const GraphicsContext = struct {
             };
         }
 
-        // Feature chain (pNext traversal order): features2 -> vk13 -> vk14 -> mesh_shader.
-        // Bool32 enum fields use .true/.false (not vk.TRUE/vk.FALSE).
-        var mesh_shader = vk_chains.meshShaderFeatures();
-        mesh_shader.task_shader = .true;
-        mesh_shader.mesh_shader = .true;
-        var vk14_features = vk_chains.vulkan14Features(@ptrCast(&mesh_shader));
-        vk14_features.push_descriptor = .true;
-        var vk13_features = vk_chains.vulkan13Features(@ptrCast(&vk14_features));
-        vk13_features.dynamic_rendering = .true;
-        vk13_features.synchronization_2 = .true;
-        var features2 = vk_chains.physicalDeviceFeatures2(@ptrCast(&vk13_features));
+        var enabled_features = vk_chains.FeatureChain.init();
+        enabled_features.enableRendererFeatures();
+        enabled_features.enableSynchronization2();
 
         // pp_enabled_layer_names is *const *const u8 (non-optional in this vk.zig version).
         // We pass 0 layers; the pointer is never dereferenced by the driver when count=0.
         const empty_layers = [0][*:0]const u8{};
         const device = try demo_idisp.createDevice(physical_device, &.{
-            .p_next = @ptrCast(&features2),
+            .p_next = @ptrCast(enabled_features.rootInfo()),
             .queue_create_info_count = @intCast(unique_families.len),
             .p_queue_create_infos = &queue_cis,
             .enabled_layer_count = 0,
             .pp_enabled_layer_names = @ptrCast(&empty_layers),
-            .enabled_extension_count = demo_device_extensions.len,
-            .pp_enabled_extension_names = &demo_device_extensions,
+            .enabled_extension_count = device_extensions.len,
+            .pp_enabled_extension_names = &device_extensions,
             .p_enabled_features = null,
         }, null);
 
@@ -214,7 +205,7 @@ pub const GraphicsContext = struct {
             demo_idisp.dispatch.vkGetDeviceProcAddr orelse return error.MissingFunction,
         );
         const demo_ddisp = DemoDeviceDispatch.load(device, get_device_proc_addr);
-        const vulkan_ctx = gpu_context.VulkanContext.init(
+        const renderer_context = gpu_context.Context.init(
             physical_device,
             device,
             lib_idisp,
@@ -237,7 +228,7 @@ pub const GraphicsContext = struct {
             }
         }
 
-        var ctx = GraphicsContext{
+        var host = Host{
             .instance = instance,
             .surface = surface,
             .physical_device = physical_device,
@@ -249,18 +240,18 @@ pub const GraphicsContext = struct {
             .demo_idisp = demo_idisp,
             .demo_ddisp = demo_ddisp,
             .lib_idisp = lib_idisp,
-            .vulkan_ctx = vulkan_ctx,
+            .renderer_context = renderer_context,
             .surface_format = surface_format,
             .allocator = allocator,
         };
 
-        errdefer ctx.deinit();
-        try ctx.createSyncObjects();
+        errdefer host.deinit();
+        try host.createSyncObjects();
 
-        return ctx;
+        return host;
     }
 
-    fn createSyncObjects(self: *GraphicsContext) !void {
+    fn createSyncObjects(self: *Host) !void {
         self.command_pool = try self.demo_ddisp.createCommandPool(self.device, &.{
             .flags = .{ .reset_command_buffer_bit = true },
             .queue_family_index = self.graphics_family,
@@ -269,10 +260,10 @@ pub const GraphicsContext = struct {
         try self.demo_ddisp.allocateCommandBuffers(self.device, &.{
             .command_pool = self.command_pool,
             .level = .primary,
-            .command_buffer_count = FRAMES_IN_FLIGHT,
+            .command_buffer_count = frames_in_flight,
         }, &self.command_buffers);
 
-        for (0..FRAMES_IN_FLIGHT) |i| {
+        for (0..frames_in_flight) |i| {
             self.image_available[i] = try self.demo_ddisp.createSemaphore(self.device, &.{}, null);
             self.render_finished[i] = try self.demo_ddisp.createSemaphore(self.device, &.{}, null);
             self.in_flight_fences[i] = try self.demo_ddisp.createFence(self.device, &.{
@@ -281,7 +272,7 @@ pub const GraphicsContext = struct {
         }
     }
 
-    pub const FrameInfo = struct {
+    pub const SwapchainFrame = struct {
         cmd: vk.CommandBuffer,
         image_view: vk.ImageView,
         image: vk.Image,
@@ -289,7 +280,7 @@ pub const GraphicsContext = struct {
         frame_index: u32,
     };
 
-    pub fn createSwapchain(self: *GraphicsContext, window: glfw.Window) !void {
+    pub fn createSwapchain(self: *Host, window: glfw.Window) !void {
         const caps = try self.demo_idisp.getPhysicalDeviceSurfaceCapabilitiesKHR(
             self.physical_device,
             self.surface,
@@ -369,7 +360,7 @@ pub const GraphicsContext = struct {
         }
     }
 
-    fn destroySwapchainResources(self: *GraphicsContext) void {
+    fn destroySwapchainResources(self: *Host) void {
         for (self.swapchain_views) |view| {
             self.demo_ddisp.destroyImageView(self.device, view, null);
         }
@@ -379,7 +370,7 @@ pub const GraphicsContext = struct {
         self.swapchain_images = &.{};
     }
 
-    pub fn beginFrame(self: *GraphicsContext) !?FrameInfo {
+    pub fn beginFrame(self: *Host) !?SwapchainFrame {
         // Window minimization can leave swapchain creation deferred.
         if (self.swapchain == .null_handle) return null;
 
@@ -442,7 +433,7 @@ pub const GraphicsContext = struct {
     }
 
     /// Returns true if the swapchain needs recreation (out-of-date).
-    pub fn endFrame(self: *GraphicsContext, frame: FrameInfo) !bool {
+    pub fn endFrame(self: *Host, frame: SwapchainFrame) !bool {
         const fi = self.frame_index;
         const cmd = frame.cmd;
 
@@ -492,12 +483,12 @@ pub const GraphicsContext = struct {
             else => return err,
         };
 
-        self.frame_index = (fi + 1) % FRAMES_IN_FLIGHT;
+        self.frame_index = (fi + 1) % frames_in_flight;
         return needs_recreate;
     }
 
     fn transitionImage(
-        self: *GraphicsContext,
+        self: *Host,
         cmd: vk.CommandBuffer,
         image: vk.Image,
         old_layout: vk.ImageLayout,
@@ -544,15 +535,15 @@ pub const GraphicsContext = struct {
         });
     }
 
-    pub fn recreateSwapchain(self: *GraphicsContext, window: glfw.Window) !void {
+    pub fn recreateSwapchain(self: *Host, window: glfw.Window) !void {
         try self.demo_ddisp.deviceWaitIdle(self.device);
         try self.createSwapchain(window);
     }
 
-    pub fn deinit(self: *GraphicsContext) void {
+    pub fn deinit(self: *Host) void {
         self.demo_ddisp.deviceWaitIdle(self.device) catch {};
 
-        for (0..FRAMES_IN_FLIGHT) |i| {
+        for (0..frames_in_flight) |i| {
             if (self.image_available[i] != .null_handle)
                 self.demo_ddisp.destroySemaphore(self.device, self.image_available[i], null);
             if (self.render_finished[i] != .null_handle)
@@ -610,15 +601,10 @@ fn supportsRequiredDemoFeatures(
     pdev: vk.PhysicalDevice,
     idisp: gpu_context.InstanceDispatch,
 ) bool {
-    var mesh_shader = vk_chains.meshShaderFeatures();
-    var vk14_features = vk_chains.vulkan14Features(@ptrCast(&mesh_shader));
-    var vk13_features = vk_chains.vulkan13Features(@ptrCast(&vk14_features));
-    var features2 = vk_chains.physicalDeviceFeatures2(@ptrCast(&vk13_features));
-    idisp.getPhysicalDeviceFeatures2(pdev, &features2);
+    var features = vk_chains.FeatureChain.init();
+    idisp.getPhysicalDeviceFeatures2(pdev, features.rootInfo());
 
-    return vk13_features.dynamic_rendering == .true and
-        vk13_features.synchronization_2 == .true and
-        vk14_features.push_descriptor == .true;
+    return features.hasRendererFeatures() and features.hasSynchronization2();
 }
 
 fn findQueueFamilies(

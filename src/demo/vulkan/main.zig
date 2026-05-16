@@ -19,13 +19,13 @@ pub fn main() !void {
     defer glfw.destroyWindow(window);
     glfw.setScrollCallback(window);
 
-    var gctx = try demo_vk.GraphicsContext.init(window, allocator);
-    defer gctx.deinit();
-    try gctx.createSwapchain(window);
+    var host = try demo_vk.Host.init(window, allocator);
+    defer host.deinit();
+    try host.createSwapchain(window);
 
     var text_renderer = try heavy_slug_vulkan.Renderer.init(
-        gctx.vulkan_ctx,
-        gctx.surface_format.format,
+        host.renderer_context,
+        host.surface_format.format,
         allocator,
         .{},
     );
@@ -34,7 +34,7 @@ pub fn main() !void {
     const font = try text_renderer.loadFont(.{ .path = demo_scene.font_path }, .{ .size_px = demo_scene.font_size_px });
 
     var scene: demo_scene.Scene = .{};
-    var submitted_text_tokens = [_]heavy_slug_vulkan.FrameToken{0} ** demo_vk.GraphicsContext.FRAMES_IN_FLIGHT;
+    var submitted_text_tokens = [_]heavy_slug_vulkan.FrameToken{0} ** demo_vk.Host.frames_in_flight;
     var last_time = glfw.getTime();
     var stats_log_time = last_time;
 
@@ -46,13 +46,13 @@ pub fn main() !void {
         const dt: f32 = @floatCast(now - last_time);
         last_time = now;
 
-        const w: f32 = @floatFromInt(gctx.swapchain_extent.width);
-        const h: f32 = @floatFromInt(gctx.swapchain_extent.height);
+        const w: f32 = @floatFromInt(host.swapchain_extent.width);
+        const h: f32 = @floatFromInt(host.swapchain_extent.height);
         scene.update(window, dt, now, w, h);
-        gctx.clear_color = scene.clearColor();
+        host.clear_color = scene.clearColor();
 
-        const frame = try gctx.beginFrame() orelse {
-            try gctx.recreateSwapchain(window);
+        const frame = try host.beginFrame() orelse {
+            try host.recreateSwapchain(window);
             continue;
         };
         text_renderer.markFrameComplete(submitted_text_tokens[frame.frame_index]);
@@ -70,9 +70,9 @@ pub fn main() !void {
             .viewport = viewport,
         });
 
-        if (try gctx.endFrame(frame)) {
-            try gctx.recreateSwapchain(window);
+        if (try host.endFrame(frame)) {
+            try host.recreateSwapchain(window);
         }
     }
-    gctx.demo_ddisp.deviceWaitIdle(gctx.device) catch {};
+    host.demo_ddisp.deviceWaitIdle(host.device) catch {};
 }

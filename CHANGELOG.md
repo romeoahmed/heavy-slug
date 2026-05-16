@@ -12,12 +12,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Vulkan frame bindings now use core 1.4 push descriptors** instead of
   frame-local descriptor pools, descriptor set allocation, and
   `vkUpdateDescriptorSets`.
+- **Breaking cleanup:** `heavy_slug_vulkan.descriptors` is now
+  `heavy_slug_vulkan.bindings`; the Vulkan helper types are renamed around
+  their actual roles (`FrameBindings`, `BufferView`, `binding_writes`, and
+  `binding_pushes`).
+- **Vulkan pNext setup now uses reusable chain structs** for Vulkan 1.4,
+  Vulkan 1.3, and `VK_EXT_mesh_shader` feature/property queries instead of
+  open-coded chains in both backend and demo code.
+- **Breaking cleanup:** `heavy_slug_metal.HostObjects` is now
+  `heavy_slug_metal.Host`, and Zig-facing Metal bridge handles/buffers moved
+  from `renderer.zig` into `context.zig`.
+- **Vulkan demo host naming tightened** from generic graphics-context names to
+  `Host`, `SwapchainFrame`, and `renderer_context`.
 
 ### Fixed
 
 - **Vulkan demo build:** initialize Vulkan property/feature `pNext`
   chains with explicit `sType` values and zeroed payload structs so Zig 0.16
   bindings compile the demo path consistently.
+- **Metal bridge teardown:** removed the extra in-flight boolean from frame
+  slots; the bridge now drains frame-slot semaphores directly before teardown.
+
+### Removed
+
+- **Dead backend shim modules:** removed Vulkan/Metal `frame.zig` and
+  `glyph_store.zig` re-export/resource-note modules; public backend types now
+  come directly from each backend root.
 
 ## [3.0.0] - 2026-05-16
 

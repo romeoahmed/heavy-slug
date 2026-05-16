@@ -68,12 +68,12 @@ pub fn validateDeviceProperties(
 /// Caller-owned Vulkan device plus loaded dispatch and queried properties.
 ///
 /// Usage:
-/// 1. Call `VulkanContext.checkDeviceSupport(physical_device, instance_dispatch)` to validate
-/// 2. Create a VkDevice with all extensions in `VulkanContext.required_device_extensions`
-///    and the features validated by `checkDeviceSupport`
-/// 3. Call `VulkanContext.init(physical_device, device, instance_dispatch, get_device_proc_addr)`
-/// 4. Use `Renderer.init(ctx, ...)` to create a renderer
-pub const VulkanContext = struct {
+/// 1. Call `Context.checkDeviceSupport(physical_device, instance_dispatch)` to validate.
+/// 2. Create a VkDevice with all extensions in `Context.required_device_extensions`
+///    and the features validated by `checkDeviceSupport`.
+/// 3. Call `Context.init(physical_device, device, instance_dispatch, get_device_proc_addr)`.
+/// 4. Use `Renderer.init(ctx, ...)` to create a renderer.
+pub const Context = struct {
     device: vk.Device,
     dispatch: DeviceDispatch,
     physical_device: vk.PhysicalDevice,
@@ -121,25 +121,24 @@ pub const VulkanContext = struct {
         instance_dispatch.getPhysicalDeviceProperties2(physical_device, &properties2);
         try validateApiVersion(properties2.properties.api_version);
 
-        var mesh_properties = chains.meshShaderProperties();
-        var vk14_properties = chains.vulkan14Properties(@ptrCast(&mesh_properties));
-        properties2 = chains.physicalDeviceProperties2(@ptrCast(&vk14_properties));
-        instance_dispatch.getPhysicalDeviceProperties2(physical_device, &properties2);
-        try validateDeviceProperties(properties2.properties.api_version, mesh_properties, vk14_properties);
+        var queried_properties = chains.PropertyChain.init();
+        instance_dispatch.getPhysicalDeviceProperties2(physical_device, queried_properties.rootInfo());
+        try validateDeviceProperties(
+            queried_properties.root.properties.api_version,
+            queried_properties.mesh_shader,
+            queried_properties.vulkan14,
+        );
 
-        var mesh_features = chains.meshShaderFeatures();
-        var vk14_features = chains.vulkan14Features(@ptrCast(&mesh_features));
-        var vk13_features = chains.vulkan13Features(@ptrCast(&vk14_features));
-        var features2 = chains.physicalDeviceFeatures2(@ptrCast(&vk13_features));
-        instance_dispatch.getPhysicalDeviceFeatures2(physical_device, &features2);
+        var queried_features = chains.FeatureChain.init();
+        instance_dispatch.getPhysicalDeviceFeatures2(physical_device, queried_features.rootInfo());
 
-        if (vk13_features.dynamic_rendering == .false) {
+        if (queried_features.vulkan13.dynamic_rendering == .false) {
             return FeatureError.DynamicRenderingNotSupported;
         }
-        if (mesh_features.task_shader == .false or mesh_features.mesh_shader == .false) {
+        if (queried_features.mesh_shader.task_shader == .false or queried_features.mesh_shader.mesh_shader == .false) {
             return FeatureError.MeshShaderNotSupported;
         }
-        if (vk14_features.push_descriptor == .false) {
+        if (queried_features.vulkan14.push_descriptor == .false) {
             return FeatureError.PushDescriptorNotSupported;
         }
     }
@@ -157,21 +156,19 @@ pub const VulkanContext = struct {
         device: vk.Device,
         instance_dispatch: InstanceDispatch,
         get_device_proc_addr: vk.PfnGetDeviceProcAddr,
-    ) VulkanContext {
+    ) Context {
         const dispatch = DeviceDispatch.load(device, get_device_proc_addr);
         const mem_props = instance_dispatch.getPhysicalDeviceMemoryProperties(physical_device);
-        var mesh_shader_properties = chains.meshShaderProperties();
-        var vulkan14_properties = chains.vulkan14Properties(@ptrCast(&mesh_shader_properties));
-        var properties2 = chains.physicalDeviceProperties2(@ptrCast(&vulkan14_properties));
-        instance_dispatch.getPhysicalDeviceProperties2(physical_device, &properties2);
+        var queried_properties = chains.PropertyChain.init();
+        instance_dispatch.getPhysicalDeviceProperties2(physical_device, queried_properties.rootInfo());
         return .{
             .device = device,
             .dispatch = dispatch,
             .physical_device = physical_device,
-            .api_version = properties2.properties.api_version,
+            .api_version = queried_properties.root.properties.api_version,
             .memory_properties = mem_props,
-            .mesh_shader_properties = mesh_shader_properties,
-            .vulkan14_properties = vulkan14_properties,
+            .mesh_shader_properties = queried_properties.mesh_shader,
+            .vulkan14_properties = queried_properties.vulkan14,
         };
     }
 };
@@ -239,7 +236,7 @@ test "HeavySlugInstanceDispatch has feature query commands" {
 }
 
 test "required_device_extensions includes mesh shader" {
-    const exts = VulkanContext.required_device_extensions;
+    const exts = Context.required_device_extensions;
     try std.testing.expect(exts.len >= 1);
     var has_mesh = false;
     for (exts) |ext| {

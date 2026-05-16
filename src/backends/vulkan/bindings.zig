@@ -23,33 +23,33 @@ test "FrameParams is 80 bytes with correct field offsets" {
     try std.testing.expectEqual(@as(usize, 72), @offsetOf(FrameParams, "glyph_count"));
 }
 
-pub const DebugStats = if (@import("builtin").mode == .Debug) struct {
-    descriptor_writes: u32 = 0,
-    descriptor_push_calls: u32 = 0,
+pub const PushStats = if (@import("builtin").mode == .Debug) struct {
+    binding_writes: u32 = 0,
+    push_calls: u32 = 0,
 } else struct {};
 
-pub fn frameBindingCount() u32 {
+pub fn frameBufferCount() u32 {
     return if (backend_options.shader_stats) 3 else 2;
 }
 
-pub const BufferBinding = struct {
+pub const BufferView = struct {
     buffer: vk.Buffer,
     offset: vk.DeviceSize,
     range: vk.DeviceSize,
 };
 
-pub const DescriptorLayout = struct {
+pub const FrameBindings = struct {
     device: vk.Device,
     dispatch: gpu_context.DeviceDispatch,
     layout: vk.DescriptorSetLayout,
 
     pub fn init(
-        ctx: gpu_context.VulkanContext,
-    ) !DescriptorLayout {
+        ctx: gpu_context.Context,
+    ) !FrameBindings {
         const device = ctx.device;
         const dispatch = ctx.dispatch;
 
-        const binding_count = frameBindingCount();
+        const binding_count = frameBufferCount();
         const bindings = [3]vk.DescriptorSetLayoutBinding{
             .{
                 .binding = 0,
@@ -88,28 +88,28 @@ pub const DescriptorLayout = struct {
         };
     }
 
-    pub fn deinit(self: *DescriptorLayout) void {
+    pub fn deinit(self: *FrameBindings) void {
         self.dispatch.destroyDescriptorSetLayout(self.device, self.layout, null);
         self.* = undefined;
     }
 
-    pub fn pushFrameBindings(
-        self: DescriptorLayout,
+    pub fn pushFrameBuffers(
+        self: FrameBindings,
         command_buffer: vk.CommandBuffer,
         pipeline_layout: vk.PipelineLayout,
-        glyph_pool: BufferBinding,
-        glyph_instances: BufferBinding,
-        shader_stats: ?BufferBinding,
-    ) DebugStats {
+        glyph_pool: BufferView,
+        glyph_instances: BufferView,
+        shader_stats: ?BufferView,
+    ) PushStats {
         var buffer_infos: [3]vk.DescriptorBufferInfo = undefined;
         var writes: [3]vk.WriteDescriptorSet = undefined;
         var write_count: u32 = 0;
 
-        appendStorageBuffer(&buffer_infos, &writes, &write_count, 0, glyph_pool);
-        appendStorageBuffer(&buffer_infos, &writes, &write_count, 1, glyph_instances);
+        appendBufferWrite(&buffer_infos, &writes, &write_count, 0, glyph_pool);
+        appendBufferWrite(&buffer_infos, &writes, &write_count, 1, glyph_instances);
         if (shader_stats) |stats| {
             std.debug.assert(backend_options.shader_stats);
-            appendStorageBuffer(&buffer_infos, &writes, &write_count, 2, stats);
+            appendBufferWrite(&buffer_infos, &writes, &write_count, 2, stats);
         }
 
         self.dispatch.cmdPushDescriptorSet(
@@ -120,24 +120,22 @@ pub const DescriptorLayout = struct {
             writes[0..write_count],
         );
 
-        if (@import("builtin").mode == .Debug) {
-            return .{
-                .descriptor_writes = write_count,
-                .descriptor_push_calls = 1,
-            };
-        }
+        if (@import("builtin").mode == .Debug) return .{
+            .binding_writes = write_count,
+            .push_calls = 1,
+        };
         return .{};
     }
 
-    fn appendStorageBuffer(
+    fn appendBufferWrite(
         buffer_infos: *[3]vk.DescriptorBufferInfo,
         writes: *[3]vk.WriteDescriptorSet,
         write_count: *u32,
         binding: u32,
-        buffer_binding: BufferBinding,
+        buffer_binding: BufferView,
     ) void {
         const index = write_count.*;
-        std.debug.assert(index < frameBindingCount());
+        std.debug.assert(index < frameBufferCount());
         buffer_infos[index] = .{
             .buffer = buffer_binding.buffer,
             .offset = buffer_binding.offset,
@@ -158,15 +156,15 @@ pub const DescriptorLayout = struct {
     }
 };
 
-test "DescriptorLayout debug stats compile in debug builds" {
-    const stats = DebugStats{};
+test "FrameBindings debug stats compile in debug builds" {
+    const stats = PushStats{};
     if (@import("builtin").mode == .Debug) {
-        try std.testing.expectEqual(@as(u32, 0), stats.descriptor_writes);
-        try std.testing.expectEqual(@as(u32, 0), stats.descriptor_push_calls);
+        try std.testing.expectEqual(@as(u32, 0), stats.binding_writes);
+        try std.testing.expectEqual(@as(u32, 0), stats.push_calls);
     }
 }
 
-test "DescriptorLayout: frame binding count follows shader stats option" {
+test "FrameBindings: frame buffer count follows shader stats option" {
     const expected: u32 = if (backend_options.shader_stats) 3 else 2;
-    try std.testing.expectEqual(expected, frameBindingCount());
+    try std.testing.expectEqual(expected, frameBufferCount());
 }

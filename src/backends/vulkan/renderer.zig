@@ -2,7 +2,7 @@ const std = @import("std");
 const vk = @import("vulkan");
 const heavy_slug = @import("heavy_slug");
 const gpu_context = @import("context.zig");
-const descriptors = @import("descriptors.zig");
+const bindings = @import("bindings.zig");
 const pipeline_mod = @import("pipeline.zig");
 const backend_options = @import("heavy_slug_backend_options");
 const render = heavy_slug.core.render.renderer_core;
@@ -27,8 +27,8 @@ const frames_in_flight = 3;
 
 pub const Stats = if (@import("builtin").mode == .Debug) struct {
     common: render.Stats = .{},
-    descriptor_writes: u32 = 0,
-    descriptor_push_calls: u32 = 0,
+    binding_writes: u32 = 0,
+    binding_pushes: u32 = 0,
     frame_resources_in_use: u32 = 0,
     shader: heavy_slug.ShaderStats = .{},
 
@@ -40,10 +40,10 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
         if (backend_options.shader_stats) {
             const shader_analysis = self.shader.analysis();
             std.log.scoped(.renderer).debug(
-                "vulkan stats: desc_writes={d} desc_pushes={d} frame_busy={d} task_visible={d}/{d} mesh_tiles={d}/{d} tile_culled={d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
+                "vulkan stats: binding_writes={d} binding_pushes={d} frame_busy={d} task_visible={d}/{d} mesh_tiles={d}/{d} tile_culled={d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
                 .{
-                    self.descriptor_writes,
-                    self.descriptor_push_calls,
+                    self.binding_writes,
+                    self.binding_pushes,
                     self.frame_resources_in_use,
                     self.shader.task_glyphs_visible,
                     self.shader.task_glyphs_tested,
@@ -63,10 +63,10 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
             );
         } else {
             std.log.scoped(.renderer).debug(
-                "vulkan stats: desc_writes={d} desc_pushes={d} frame_busy={d}",
+                "vulkan stats: binding_writes={d} binding_pushes={d} frame_busy={d}",
                 .{
-                    self.descriptor_writes,
-                    self.descriptor_push_calls,
+                    self.binding_writes,
+                    self.binding_pushes,
                     self.frame_resources_in_use,
                 },
             );
@@ -84,7 +84,7 @@ pub const Target = struct {
     viewport: [2]f32,
 };
 
-const GlyphBatch = heavy_slug.core.render.GlyphBatch(descriptors.GlyphInstance);
+const GlyphBatch = heavy_slug.core.render.GlyphBatch(bindings.GlyphInstance);
 const ShaderStatsBuffers = if (backend_options.shader_stats) [frames_in_flight]MappedBuffer else void;
 
 pub const Frame = struct {
@@ -137,7 +137,7 @@ fn findMemoryType(
 }
 
 fn createMappedBuffer(
-    ctx: gpu_context.VulkanContext,
+    ctx: gpu_context.Context,
     size: vk.DeviceSize,
     usage: vk.BufferUsageFlags,
 ) !MappedBuffer {
@@ -219,14 +219,14 @@ fn validateTaskDrawWorkgroups(
 pub const Renderer = struct {
     pub const GlyphBlobRef = render.GlyphBlobRef;
     pub const FrameToken = render.FrameToken;
-    pub const GlyphInstance = descriptors.GlyphInstance;
+    pub const GlyphInstance = bindings.GlyphInstance;
 
     device: vk.Device,
     dispatch: gpu_context.DeviceDispatch,
     mesh_shader_properties: vk.PhysicalDeviceMeshShaderPropertiesEXT,
 
     core: render.RendererCore,
-    descriptor_layout: descriptors.DescriptorLayout,
+    frame_bindings: bindings.FrameBindings,
     pipeline: pipeline_mod.Pipeline,
 
     // Host-visible storage buffers.
@@ -245,7 +245,7 @@ pub const Renderer = struct {
     shader_stats_snapshot: heavy_slug.ShaderStats,
 
     pub fn init(
-        ctx: gpu_context.VulkanContext,
+        ctx: gpu_context.Context,
         color_format: vk.Format,
         allocator: std.mem.Allocator,
         options: RendererOptions,
@@ -258,12 +258,12 @@ pub const Renderer = struct {
 
         const device = ctx.device;
         const dispatch = ctx.dispatch;
-        var descriptor_layout = try descriptors.DescriptorLayout.init(ctx);
-        errdefer descriptor_layout.deinit();
+        var frame_bindings = try bindings.FrameBindings.init(ctx);
+        errdefer frame_bindings.deinit();
 
         var pipeline = try pipeline_mod.Pipeline.init(
             ctx,
-            descriptor_layout.layout,
+            frame_bindings.layout,
             color_format,
         );
         errdefer pipeline.deinit();
@@ -281,7 +281,7 @@ pub const Renderer = struct {
 
         // One glyph instance buffer per frame slot.
         const glyph_buffer_size = @as(vk.DeviceSize, options.max_glyphs_per_frame) *
-            @sizeOf(descriptors.GlyphInstance);
+            @sizeOf(bindings.GlyphInstance);
         var glyph_buffers: [frames_in_flight]MappedBuffer = undefined;
         var initialized_glyph_buffers: usize = 0;
         errdefer {
@@ -322,7 +322,7 @@ pub const Renderer = struct {
             .dispatch = dispatch,
             .mesh_shader_properties = ctx.mesh_shader_properties,
             .core = core,
-            .descriptor_layout = descriptor_layout,
+            .frame_bindings = frame_bindings,
             .pipeline = pipeline,
             .pool_buffer = pool_buf,
             .glyph_buffers = glyph_buffers,
@@ -367,7 +367,7 @@ pub const Renderer = struct {
 
     pub fn beginFrame(self: *Renderer) Error!Frame {
         try self.reserveFrameSlot();
-        const glyphs: [*]descriptors.GlyphInstance = @ptrCast(@alignCast(self.glyph_buffers[self.active_frame].mapped));
+        const glyphs: [*]bindings.GlyphInstance = @ptrCast(@alignCast(self.glyph_buffers[self.active_frame].mapped));
         const glyph_slice = glyphs[0..self.core.max_glyphs_per_frame];
         return .{
             .renderer = self,
@@ -459,7 +459,7 @@ pub const Renderer = struct {
         self.dispatch.cmdBindPipeline(vk_cmd, .graphics, self.pipeline.pipeline);
 
         const glyph_buffer = self.glyph_buffers[self.active_frame];
-        const shader_stats_binding: ?descriptors.BufferBinding = if (backend_options.shader_stats) blk: {
+        const shader_stats_binding: ?bindings.BufferView = if (backend_options.shader_stats) blk: {
             const stats_buffer = self.shader_stats_buffers[self.active_frame];
             break :blk .{
                 .buffer = stats_buffer.buffer,
@@ -467,7 +467,7 @@ pub const Renderer = struct {
                 .range = @sizeOf(heavy_slug.ShaderStats),
             };
         } else null;
-        const descriptor_stats = self.descriptor_layout.pushFrameBindings(
+        const push_stats = self.frame_bindings.pushFrameBuffers(
             vk_cmd,
             self.pipeline.pipeline_layout,
             .{
@@ -483,8 +483,8 @@ pub const Renderer = struct {
             shader_stats_binding,
         );
         if (@import("builtin").mode == .Debug) {
-            self.stats.descriptor_writes += descriptor_stats.descriptor_writes;
-            self.stats.descriptor_push_calls += descriptor_stats.descriptor_push_calls;
+            self.stats.binding_writes += push_stats.binding_writes;
+            self.stats.binding_pushes += push_stats.push_calls;
         }
 
         // Scale projection from pixel-space to 26.6 em-space.
@@ -492,7 +492,7 @@ pub const Renderer = struct {
         // Dividing columns 0 and 1 by 64 maps 26.6 world coords to clip space.
         const em_projection = render.projectionToEm(projection);
 
-        const params = descriptors.FrameParams{
+        const params = bindings.FrameParams{
             .projection = em_projection,
             .viewport_size = viewport,
             .glyph_count = glyph_count,
@@ -503,7 +503,7 @@ pub const Renderer = struct {
             self.pipeline.pipeline_layout,
             .{ .task_bit_ext = true, .mesh_bit_ext = true, .fragment_bit = true },
             0,
-            @sizeOf(descriptors.FrameParams),
+            @sizeOf(bindings.FrameParams),
             @ptrCast(&params),
         );
 
@@ -533,7 +533,7 @@ pub const Renderer = struct {
 
         self.core.deinit();
         self.pipeline.deinit();
-        self.descriptor_layout.deinit();
+        self.frame_bindings.deinit();
 
         self.* = undefined;
     }
@@ -602,8 +602,8 @@ test "Stats type compiles and has expected API" {
     stats.reset();
     stats.log();
     if (@import("builtin").mode == .Debug) {
-        try std.testing.expectEqual(@as(u32, 0), stats.descriptor_writes);
-        try std.testing.expectEqual(@as(u32, 0), stats.descriptor_push_calls);
+        try std.testing.expectEqual(@as(u32, 0), stats.binding_writes);
+        try std.testing.expectEqual(@as(u32, 0), stats.binding_pushes);
     }
 }
 

@@ -1,12 +1,10 @@
 //! Metal 4 backend for heavy_slug.
 
 pub const context = @import("context.zig");
-pub const frame = @import("frame.zig");
-pub const glyph_store = @import("glyph_store.zig");
 pub const renderer = @import("renderer.zig");
 
-pub const Context = renderer.Context;
-pub const HostObjects = renderer.HostObjects;
+pub const Context = context.Context;
+pub const Host = context.Host;
 pub const Renderer = renderer.Renderer;
 pub const Frame = renderer.Frame;
 pub const Target = renderer.Target;
@@ -19,7 +17,5 @@ pub const shader_stats_enabled = renderer.shader_stats_enabled;
 
 test {
     _ = context;
-    _ = frame;
-    _ = glyph_store;
     _ = renderer;
 }
