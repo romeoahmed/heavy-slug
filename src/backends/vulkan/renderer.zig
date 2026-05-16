@@ -547,26 +547,9 @@ test "findMemoryType selects correct memory type" {
     try std.testing.expectEqual(@as(?u32, null), filtered);
 }
 
-test "Renderer type compiles with expected fields" {
-    _ = Renderer;
-    try std.testing.expect(@hasField(Renderer, "device"));
-    try std.testing.expect(@hasField(Renderer, "dispatch"));
-    try std.testing.expect(@hasField(Renderer, "core"));
-    try std.testing.expect(@hasField(Renderer, "descriptor_table"));
-    try std.testing.expect(@hasField(Renderer, "pip"));
-    try std.testing.expect(@hasField(Renderer, "pool_buffer"));
-    try std.testing.expect(@hasField(Renderer, "command_buffers"));
-    try std.testing.expect(@hasField(Renderer, "stats"));
-}
-
 test "Renderer satisfies core backend contract" {
     heavy_slug.core.render.BackendContract(Renderer);
     try std.testing.expect(true);
-}
-
-test "Renderer.init compiles" {
-    // Cannot call without a live Vulkan device.
-    _ = @TypeOf(Renderer.init);
 }
 
 test "Stats type compiles and has expected API" {

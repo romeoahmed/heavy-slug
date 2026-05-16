@@ -70,3 +70,16 @@ test "hband: reads packed candidate ids" {
     defer std.testing.allocator.free(ids);
     try std.testing.expectEqualSlices(u32, &.{ 7, 9 }, ids);
 }
+
+test "hband: out-of-range band has no candidate ids" {
+    const texels = [_]format.Texel{
+        .{ .r = 0, .g = 0, .b = 16, .a = 16 },
+        .{ .r = 0, .g = 1, .b = 0, .a = 1 },
+        .{ .r = 0, .g = 0, .b = 0, .a = 0 },
+    };
+    const view = try decode.BlobView.init(std.mem.sliceAsBytes(&texels));
+
+    try std.testing.expectEqual(@as(?Band, null), readBand(view, 1));
+    const ids = try candidateIds(std.testing.allocator, view, 1);
+    try std.testing.expectEqual(@as(usize, 0), ids.len);
+}

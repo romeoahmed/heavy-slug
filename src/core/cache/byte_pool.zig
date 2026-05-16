@@ -255,8 +255,16 @@ test "PoolAllocator: reset clears all state" {
     defer pa.deinit();
 
     _ = pa.alloc(100);
+    const freed = pa.alloc(32).?;
+    pa.free(freed);
     pa.reset();
+
+    const snap = pa.snapshot();
     try std.testing.expectEqual(@as(u32, 0), pa.cursor);
+    try std.testing.expectEqual(@as(u32, 0), snap.used_bytes);
+    try std.testing.expectEqual(@as(u32, 256), snap.free_bytes);
+    try std.testing.expectEqual(@as(u32, 256), snap.largest_free_block);
+    try std.testing.expectEqual(@as(u32, 0), snap.free_blocks);
 
     const a = pa.alloc(10).?;
     try std.testing.expectEqual(@as(u32, 0), a.offset);

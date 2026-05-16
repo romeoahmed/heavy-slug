@@ -62,3 +62,17 @@ test "TextBatch rejects appends after submit" {
     try std.testing.expectError(error.FrameAlreadySubmitted, batch.append(.{ .value = 2 }));
     try std.testing.expectEqual(@as(usize, 1), batch.slice().len);
 }
+
+test "TextBatch reset allows reuse after submit" {
+    const Command = extern struct { value: u32 };
+    var storage: [2]Command = undefined;
+    var batch = TextBatch(Command).init(&storage);
+
+    try batch.append(.{ .value = 1 });
+    batch.markSubmitted();
+    batch.reset();
+    try batch.append(.{ .value = 2 });
+
+    try std.testing.expectEqual(@as(u32, 1), batch.count());
+    try std.testing.expectEqual(@as(u32, 2), batch.slice()[0].value);
+}

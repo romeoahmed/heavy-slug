@@ -41,6 +41,14 @@ test "BlobView rejects short blobs" {
     try std.testing.expectError(Error.BlobTooSmall, BlobView.init(&.{}));
 }
 
+test "BlobView rejects misaligned texel storage" {
+    var bytes: [@sizeOf(format.Texel) * format.header_len + 1]u8 align(@alignOf(format.Texel)) = undefined;
+    try std.testing.expectError(
+        Error.BlobMisaligned,
+        BlobView.init(bytes[1 .. @sizeOf(format.Texel) * format.header_len + 1]),
+    );
+}
+
 test "BlobView decodes header" {
     const texels = [_]format.Texel{
         .{ .r = 0, .g = 0, .b = 4, .a = 4 },

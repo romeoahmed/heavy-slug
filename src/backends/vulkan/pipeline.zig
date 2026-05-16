@@ -209,14 +209,6 @@ fn createShaderModule(
     return dispatch.createShaderModule(device, &ci, null);
 }
 
-test "Pipeline type compiles with expected fields" {
-    _ = Pipeline;
-    try std.testing.expect(@hasField(Pipeline, "device"));
-    try std.testing.expect(@hasField(Pipeline, "dispatch"));
-    try std.testing.expect(@hasField(Pipeline, "pipeline_layout"));
-    try std.testing.expect(@hasField(Pipeline, "pipeline"));
-}
-
 test "push constant range matches PushConstants size" {
     try std.testing.expectEqual(@as(usize, 80), @sizeOf(descriptors.PushConstants));
 }

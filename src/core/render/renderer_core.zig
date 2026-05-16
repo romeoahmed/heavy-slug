@@ -597,3 +597,44 @@ test "render: RendererCore defers evicted glyph retirement until frame token com
         try std.testing.expectEqual(@as(u32, 1), core.stats.retirements_completed);
     }
 }
+
+test "render: RendererCore unloadFont removes handle and defers cached glyph retirement" {
+    var core = try RendererCore.init(std.testing.allocator, .{ .max_glyphs_per_frame = 4 });
+    defer core.deinit();
+
+    var pool: [16 * 1024]u8 = undefined;
+    var backend = FakeBackend{ .pool = &pool };
+    var commands: [4]TestCommand = undefined;
+    var batch = text_batch_mod.TextBatch(TestCommand).init(&commands);
+
+    const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
+    core.beginFrame(0, &backend);
+    try core.appendRun(&backend, &batch, .{
+        .font = font,
+        .text = "A",
+        .color = .white,
+    });
+    try std.testing.expect(backend.next_ref > 0);
+    try std.testing.expect(core.store.glyph_cache.count() > 0);
+
+    core.setRetireAfterToken(9);
+    try core.unloadFont(font);
+
+    try std.testing.expectEqual(@as(?*FontEntry, null), core.fonts.get(font.id));
+    try std.testing.expectEqual(@as(u32, 0), core.store.glyph_cache.count());
+    try std.testing.expectEqual(@as(u32, 0), backend.releases);
+    try std.testing.expect(core.store.retirements.entries.items.len > 0);
+
+    try std.testing.expectError(Error.ShapingFailed, core.appendRun(&backend, &batch, .{
+        .font = font,
+        .text = "A",
+        .color = .white,
+    }));
+
+    core.retireCompleted(8, &backend);
+    try std.testing.expectEqual(@as(u32, 0), backend.releases);
+
+    core.retireCompleted(9, &backend);
+    try std.testing.expectEqual(@as(u32, 1), backend.releases);
+    try std.testing.expectEqual(@as(usize, 0), core.store.retirements.entries.items.len);
+}

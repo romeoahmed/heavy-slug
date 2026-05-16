@@ -424,3 +424,37 @@ test "Motor.compose: rotation+translation matches sequential apply" {
     try testing.expectApproxEqAbs(step2[0], result[0], 1e-5);
     try testing.expectApproxEqAbs(step2[1], result[1], 1e-5);
 }
+
+test "Motor.composeTranslation matches general composition" {
+    const motor = Motor.compose(
+        Motor.fromTranslation(50.0, 30.0),
+        Motor.fromRotation(std.math.pi / 6.0),
+    );
+    const advances = [_]f32{ 640, 1280, 1920 };
+    const point = [2]f32{ 10.0, 5.0 };
+
+    for (advances) |tx| {
+        const specialized = motor.composeTranslation(tx, 0).apply(point);
+        const general = Motor.compose(motor, Motor.fromTranslation(tx, 0)).apply(point);
+
+        try testing.expectApproxEqAbs(general[0], specialized[0], 1e-2);
+        try testing.expectApproxEqAbs(general[1], specialized[1], 1e-2);
+    }
+}
+
+test "Motor.unitize restores rotor norm after repeated composition" {
+    const small = Motor.fromRotation(0.01);
+    var accumulated = small;
+    for (0..999) |_| accumulated = Motor.compose(accumulated, small);
+
+    const fixed = accumulated.unitize();
+    const fixed_norm = fixed.m[0] * fixed.m[0] + fixed.m[1] * fixed.m[1];
+    try testing.expectApproxEqAbs(@as(f32, 1.0), fixed_norm, 1e-6);
+
+    const fresh = Motor.fromRotation(1000.0 * 0.01);
+    const point = [2]f32{ 1, 0 };
+    const fixed_point = fixed.apply(point);
+    const fresh_point = fresh.apply(point);
+    try testing.expectApproxEqAbs(fresh_point[0], fixed_point[0], 0.01);
+    try testing.expectApproxEqAbs(fresh_point[1], fixed_point[1], 0.01);
+}

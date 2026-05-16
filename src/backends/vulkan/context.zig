@@ -184,23 +184,6 @@ pub const FeatureError = error{
     ExtensionNotSupported,
 };
 
-test "vulkan types are available" {
-    _ = vk.PhysicalDevice;
-    _ = vk.Device;
-    _ = vk.CommandBuffer;
-    _ = vk.Format;
-    _ = vk.Queue;
-    _ = vk.DescriptorSetLayout;
-    _ = vk.PipelineLayout;
-    _ = vk.Pipeline;
-    _ = vk.Buffer;
-    _ = vk.DeviceMemory;
-}
-
-test "DeviceDispatch type compiles" {
-    _ = DeviceDispatch;
-}
-
 test "HeavySlugDispatch has buffer and viewport commands" {
     comptime {
         std.debug.assert(@hasField(HeavySlugDispatch, "vkGetBufferMemoryRequirements"));
@@ -209,7 +192,7 @@ test "HeavySlugDispatch has buffer and viewport commands" {
     }
 }
 
-test "InstanceDispatch type compiles" {
+test "HeavySlugInstanceDispatch has feature query commands" {
     _ = InstanceDispatch;
     comptime {
         std.debug.assert(@hasField(HeavySlugInstanceDispatch, "vkGetPhysicalDeviceFeatures2"));
@@ -217,18 +200,6 @@ test "InstanceDispatch type compiles" {
         std.debug.assert(@hasField(HeavySlugInstanceDispatch, "vkEnumerateDeviceExtensionProperties"));
         std.debug.assert(@hasField(HeavySlugInstanceDispatch, "vkGetPhysicalDeviceProperties2"));
     }
-}
-
-test "checkDeviceSupport function signature compiles" {
-    _ = @TypeOf(VulkanContext.checkDeviceSupport);
-}
-
-test "VulkanContext has expected fields" {
-    try std.testing.expect(@hasField(VulkanContext, "device"));
-    try std.testing.expect(@hasField(VulkanContext, "dispatch"));
-    try std.testing.expect(@hasField(VulkanContext, "physical_device"));
-    try std.testing.expect(@hasField(VulkanContext, "memory_properties"));
-    try std.testing.expect(@hasField(VulkanContext, "descriptor_indexing_properties"));
 }
 
 test "required_device_extensions includes mesh shader and robustness2" {

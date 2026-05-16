@@ -344,6 +344,14 @@ test "blob encode: curves round trip through CoverageBlob decoder" {
     try std.testing.expectEqual(@as(usize, format.curve_texel_len), view.curveTexels(0).len);
 }
 
+test "blob encode: empty curve list produces empty blob" {
+    var blob = try curves(std.testing.allocator, &.{});
+    defer blob.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), blob.texels.len);
+    try std.testing.expectEqual(@as(usize, 0), blob.len());
+}
+
 test "blob encode: writes h-band candidate index after curves" {
     const source = [_]RegularizedCubicSpan{
         regularize.lineAsCubic(.{ .x = 0, .y = 0 }, .{ .x = 1, .y = 1 }),

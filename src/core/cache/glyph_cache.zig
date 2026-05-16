@@ -367,12 +367,6 @@ fn testGlyphRef(value: u32) GlyphRef {
     return GlyphRef.from(value);
 }
 
-test "GlyphCache: init and deinit" {
-    var cache = try GlyphCache.init(std.testing.allocator, 4, 8, 3);
-    defer cache.deinit();
-    try std.testing.expectEqual(@as(u32, 0), cache.count());
-}
-
 test "GlyphRef is a typed 32-bit backend resource reference" {
     const ref = GlyphRef.from(42);
     try std.testing.expectEqual(@as(usize, 4), @sizeOf(GlyphRef));
@@ -381,53 +375,38 @@ test "GlyphRef is a typed 32-bit backend resource reference" {
     try std.testing.expect(GlyphRef.empty.isEmpty());
 }
 
-test "GlyphCache: insert hot and lookup" {
+test "GlyphCache: insert and lookup track tiers, counts, and full keys" {
     var cache = try GlyphCache.init(std.testing.allocator, 4, 8, 3);
     defer cache.deinit();
 
-    const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
-    const key = CacheKey{ .font_id = 1, .glyph_id = 65 };
-    try cache.insertHot(key, testGlyphRef(0), .{ .offset = 0, .size = 128 }, dummy_box);
+    const default_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
+    const variation_box = EmBox{ .x_min = -1, .y_min = -2, .x_max = 10, .y_max = 12 };
+    const hot_key = CacheKey{ .font_id = 1, .glyph_id = 1 };
+    const default_key = CacheKey{ .font_id = 1, .glyph_id = 65 };
+    const variation_key = CacheKey{ .font_id = 1, .glyph_id = 65, .variation_key = 7 };
 
-    const entry = cache.lookup(key).?;
-    try std.testing.expectEqual(Tier.hot, entry.tier);
-    try std.testing.expectEqual(testGlyphRef(0), entry.slot);
-}
+    try cache.insertHot(hot_key, testGlyphRef(0), .{ .offset = 0, .size = 64 }, default_box);
+    try cache.insertCold(default_key, testGlyphRef(1), .{ .offset = 64, .size = 64 }, default_box);
+    try cache.insertCold(variation_key, testGlyphRef(2), .{ .offset = 128, .size = 64 }, variation_box);
 
-test "GlyphCache: insert cold and lookup" {
-    var cache = try GlyphCache.init(std.testing.allocator, 4, 8, 3);
-    defer cache.deinit();
-
-    const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
-    const key = CacheKey{ .font_id = 1, .glyph_id = 65 };
-    try cache.insertCold(key, testGlyphRef(5), .{ .offset = 64, .size = 200 }, dummy_box);
-
-    const entry = cache.lookup(key).?;
-    try std.testing.expectEqual(Tier.cold, entry.tier);
-    try std.testing.expectEqual(testGlyphRef(5), entry.slot);
-}
-
-test "GlyphCache: lookup miss returns null" {
-    var cache = try GlyphCache.init(std.testing.allocator, 4, 8, 3);
-    defer cache.deinit();
-
-    try std.testing.expectEqual(
-        @as(?*CacheEntry, null),
-        cache.lookup(.{ .font_id = 1, .glyph_id = 99 }),
-    );
-}
-
-test "GlyphCache: count tracks hot and cold" {
-    var cache = try GlyphCache.init(std.testing.allocator, 4, 8, 3);
-    defer cache.deinit();
-
-    const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
-    try cache.insertHot(.{ .font_id = 1, .glyph_id = 1 }, testGlyphRef(0), .{ .offset = 0, .size = 64 }, dummy_box);
-    try cache.insertCold(.{ .font_id = 1, .glyph_id = 2 }, testGlyphRef(1), .{ .offset = 64, .size = 64 }, dummy_box);
-
-    try std.testing.expectEqual(@as(u32, 2), cache.count());
+    try std.testing.expectEqual(@as(u32, 3), cache.count());
     try std.testing.expectEqual(@as(u32, 1), cache.hot_count);
-    try std.testing.expectEqual(@as(u32, 1), cache.cold_count);
+    try std.testing.expectEqual(@as(u32, 2), cache.cold_count);
+    try std.testing.expectEqual(@as(?*CacheEntry, null), cache.lookup(.{ .font_id = 1, .glyph_id = 99 }));
+
+    const hot = cache.lookup(hot_key).?;
+    try std.testing.expectEqual(Tier.hot, hot.tier);
+    try std.testing.expectEqual(testGlyphRef(0), hot.slot);
+
+    const default_entry = cache.lookup(default_key).?;
+    try std.testing.expectEqual(Tier.cold, default_entry.tier);
+    try std.testing.expectEqual(testGlyphRef(1), default_entry.slot);
+    try std.testing.expectEqual(@as(f32, 1), default_entry.em_box.x_max);
+
+    const variation_entry = cache.lookup(variation_key).?;
+    try std.testing.expectEqual(testGlyphRef(2), variation_entry.slot);
+    try std.testing.expectEqual(@as(f32, -1), variation_entry.em_box.x_min);
+    try std.testing.expectEqual(@as(f32, 12), variation_entry.em_box.y_max);
 }
 
 test "GlyphCache: evict LRU cold entry" {
@@ -601,19 +580,6 @@ test "GlyphCache: duplicate lookup in same frame does not double-count" {
 
     const entry = cache.lookup(key).?;
     try std.testing.expectEqual(@as(u8, 1), entry.consecutive_frames); // still 1
-}
-
-test "CacheEntry has em_box field" {
-    const entry = CacheEntry{
-        .slot = testGlyphRef(0),
-        .pool_alloc = .{ .offset = 0, .size = 64 },
-        .tier = .cold,
-        .last_frame = 0,
-        .consecutive_frames = 1,
-        .em_box = .{ .x_min = -1.0, .y_min = -2.0, .x_max = 10.0, .y_max = 12.0 },
-    };
-    try std.testing.expectEqual(@as(f32, -1.0), entry.em_box.x_min);
-    try std.testing.expectEqual(@as(f32, 12.0), entry.em_box.y_max);
 }
 
 test "GlyphCache: frame counter overflow does not break LRU" {

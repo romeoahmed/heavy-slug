@@ -67,16 +67,11 @@ const SlotAllocator = struct {
     }
 };
 
-test "SlotAllocator: init populates all slots" {
+test "SlotAllocator: allocates unique slots and reuses freed slots" {
     var sa = try SlotAllocator.init(std.testing.allocator, 4);
     defer sa.deinit(std.testing.allocator);
     try std.testing.expectEqual(@as(u32, 4), sa.count);
     try std.testing.expectEqual(@as(u32, 4), sa.capacity);
-}
-
-test "SlotAllocator: alloc returns indices, free returns them" {
-    var sa = try SlotAllocator.init(std.testing.allocator, 4);
-    defer sa.deinit(std.testing.allocator);
 
     const a = sa.alloc().?;
     const b = sa.alloc().?;
@@ -97,16 +92,6 @@ test "SlotAllocator: alloc returns indices, free returns them" {
     try std.testing.expectEqual(@as(u32, 1), sa.count);
     const e = sa.alloc().?;
     try std.testing.expectEqual(b, e);
-}
-
-test "SlotAllocator: free and re-alloc cycle" {
-    var sa = try SlotAllocator.init(std.testing.allocator, 2);
-    defer sa.deinit(std.testing.allocator);
-
-    const x = sa.alloc().?;
-    sa.free(x);
-    const y = sa.alloc().?;
-    try std.testing.expectEqual(x, y);
 }
 
 const max_glyph_descriptors: u32 = 65_536;
@@ -436,25 +421,6 @@ fn validateDescriptorLimits(
     }
 }
 
-test "DescriptorTable type and field layout compiles" {
-    _ = DescriptorTable;
-    try std.testing.expect(@hasField(DescriptorTable, "device"));
-    try std.testing.expect(@hasField(DescriptorTable, "dispatch"));
-    try std.testing.expect(@hasField(DescriptorTable, "layout"));
-    try std.testing.expect(@hasField(DescriptorTable, "pool"));
-    try std.testing.expect(@hasField(DescriptorTable, "sets"));
-    try std.testing.expect(@hasField(DescriptorTable, "slots"));
-    try std.testing.expect(@hasField(DescriptorTable, "pending"));
-    try std.testing.expect(@hasField(DescriptorTable, "debug_stats"));
-}
-
-test "DescriptorTable: pending write buffer type compiles" {
-    try std.testing.expect(@hasField(DescriptorTable, "pending"));
-    _ = @TypeOf(DescriptorTable.flushWrites);
-    _ = @TypeOf(DescriptorTable.debugStats);
-    _ = @TypeOf(DescriptorTable.enqueueWrite);
-}
-
 test "DescriptorTable debug stats reset in debug builds" {
     var stats = DebugStats{};
     stats.reset();
@@ -480,4 +446,13 @@ test "DescriptorTable: limit validation rejects oversized configured capacity" {
     props.max_descriptor_set_update_after_bind_storage_buffers = 1024;
     props.max_update_after_bind_descriptors_in_all_pools = 1024;
     try std.testing.expectError(error.DescriptorLimitExceeded, validateDescriptorLimits(props, 2048, 3));
+}
+
+test "DescriptorTable: limit validation rejects insufficient update-after-bind pool total" {
+    var props = std.mem.zeroes(vk.PhysicalDeviceDescriptorIndexingProperties);
+    props.max_per_stage_descriptor_update_after_bind_storage_buffers = 65_536;
+    props.max_per_stage_update_after_bind_resources = 65_536;
+    props.max_descriptor_set_update_after_bind_storage_buffers = 65_536;
+    props.max_update_after_bind_descriptors_in_all_pools = 65_536 * 2;
+    try std.testing.expectError(error.DescriptorLimitExceeded, validateDescriptorLimits(props, 65_536, 3));
 }
