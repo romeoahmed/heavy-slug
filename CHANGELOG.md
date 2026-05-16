@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Documentation refreshed:** `README.md` now front-loads Quick Start, adds a table of contents, compresses architecture/dependency details into tables, folds long command/API examples, and keeps `AGENTS.md` aligned with the current project rules.
+- **Breaking naming cleanup:** shader build steps are now `zig build spirv` and `zig build msl`, demo backend values are `vulkan` and `metal`, and shader entry files use concise `task.slang`, `mesh.slang`, and `fragment.slang` names.
 - **Breaking architecture refactor completed:** core public types, unit conversions, backend contracts, font/cache/render internals, and demo layout moved under the new `src/core/`, `src/gpu/`, `src/backends/`, and `src/demo/{common,vulkan,metal}/` structure now summarized in `README.md`.
 - **Backend renderer API now exposes `Frame` and `Target` types** so demos submit text through an explicit begin/draw/submit frame boundary.
 - **Backend frame submission now returns `FrameToken`** and glyph/resource retirement is deferred until the backend reports completed tokens.
@@ -18,11 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Slang sources are split into `shaders/core/` and `shaders/entries/`** so shared modules and entry points have distinct ownership.
 - **Build logic split into `build/` modules** for dependency resolution, C libraries, shader compilation, backend modules, and demos.
 - **Root compatibility aliases removed** for old font/cache/pool/render paths; consumers should use top-level public types or explicit `heavy_slug.core.*` modules.
-- **README rewritten** as a richer canonical project overview with architecture, native cubic analytics, task/mesh shader culling, backend boundaries, diagnostics, CI, and explicit credit to the Slug algorithm.
+- **README rewritten** as a richer canonical project overview with architecture, native cubic analytics, task/mesh shader culling, backend boundaries, platform dependency notes, diagnostics, CI, and explicit credit to the Slug algorithm.
 - **Shader resource bindings split by backend** under `shaders/backend_vulkan/` and `shaders/backend_metal/`.
 - **`GlyphStore` extracted** so cache metadata, byte-pool allocations, and deferred retirements have a single private owner.
 - **Vulkan command storage is now frame-ring buffered** and protected by completed `FrameToken` tracking before slot reuse.
-- **Vulkan glyph resources now use a single storage-buffer pool plus byte-offset `GlyphRef` values** instead of per-glyph bindless storage-buffer descriptor slots.
+- **Vulkan glyph resources now use a single storage-buffer pool plus byte-offset `GlyphBlobRef` values** instead of per-glyph bindless storage-buffer descriptor slots.
 - **Vulkan backend requirements simplified** to Vulkan 1.4 plus `VK_EXT_mesh_shader`; `VK_EXT_robustness2`, null descriptors, descriptor indexing, and update-after-bind are no longer required.
 - **Metal backend migrated to the Metal 4 core API** with host-supplied `MTL4CommandQueue`, per-frame `MTL4CommandAllocator`, `MTL4Compiler` pipeline creation, and per-frame `MTL4ArgumentTable` resource binding.
 - **Breaking:** `FontContext` was removed; font loading, shaping, and glyph encoding now live behind `FontSystem`, `LoadedFont`, `ShapePlan`, and `GlyphEncoder`.
@@ -31,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Glyph cache keys are variation-aware** with a reserved variation hash field for future variable-font instances.
 - **CoverageBlob blobs gained an h-band candidate index** that accelerates common fragments while preserving the full-scan path as the correctness fallback.
 - **CoverageBlob header simplified** by removing the unused blob version field and related decoder checks.
-- **Glyph resource references are now typed as `GlyphRef`** and the GPU command ABI uses backend-neutral `glyph_ref` instead of Vulkan-specific descriptor naming.
+- **Glyph resource references are now typed as `GlyphBlobRef`** and the GPU command ABI uses backend-neutral `blob_ref` instead of Vulkan-specific descriptor naming.
 - **Shader build steps now track Slang import files** so ABI reflection and compiled shaders regenerate when shared modules change.
 - **Zig 0.16 API usage tightened** by replacing deprecated `std.ArrayListUnmanaged` aliases and old `std.mem.indexOf` calls.
 - **CI expanded** to run tests and ReleaseFast builds on both `ubuntu-latest` and `macos-26`, including `-Dvulkan=true` on Ubuntu and `-Dmetal=true` on macOS ARM64.
@@ -58,7 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Breaking:** Public API split into a lightweight `heavy_slug` core module plus opt-in `heavy_slug_vulkan` and `heavy_slug_metal` backend modules.
 - **Breaking:** GPU contexts are externally supplied; core code no longer owns windowing or graphics-device creation.
-- **Breaking:** Demo build selection is platform/backend explicit: `-Ddemo-backend=vulkan_spirv16` for Windows/Linux and `-Ddemo-backend=metal4` for macOS.
+- **Breaking:** Demo build selection became platform/backend explicit for Windows/Linux Vulkan and macOS Metal paths.
 - **Vulkan renderer simplified** to use shared renderer core logic, reducing duplicated shaping, caching, and command encoding logic.
 - **Glyph cache eviction made current-frame safe** so pool storage referenced by the frame being assembled is not reused prematurely.
 - **Build graph cleaned up** so `vulkan`, `vulkan_headers`, and `glfw_src` remain lazy, and FreeType/HarfBuzz dependencies are resolved once.
