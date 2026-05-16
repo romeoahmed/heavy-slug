@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-05-17
+
 ### Changed
 
 - **Vulkan frame bindings now use core 1.4 push descriptors** instead of
@@ -158,7 +160,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial core Slug text renderer with FreeType, HarfBuzz, Vulkan mesh shaders, PGA motor math, Slang shaders, generated GPU structs, interactive demo, Wayland GLFW support, and unit/integration tests.
 
-[Unreleased]: https://github.com/romeoahmed/heavy-slug/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/romeoahmed/heavy-slug/compare/v3.1.0...HEAD
+[3.1.0]: https://github.com/romeoahmed/heavy-slug/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/romeoahmed/heavy-slug/compare/v2.0.0...v3.0.0
 [2.0.0]: https://github.com/romeoahmed/heavy-slug/compare/v1.2.0...v2.0.0
 [1.2.0]: https://github.com/romeoahmed/heavy-slug/compare/v1.1.0...v1.2.0
