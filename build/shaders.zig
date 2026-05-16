@@ -17,17 +17,17 @@ pub const MetalShaders = struct {
 };
 
 pub fn buildSpirv(b: *std.Build, shader_stats: bool) SpirvShaders {
-    const task_spv = compileSlangSpirv(b, "slug_task.spv", "shaders/entries/slug_task.slang", "taskMain", "amplification", "spvGroupNonUniform+spvGroupNonUniformBallot+spvGroupNonUniformArithmetic", shader_stats);
-    const mesh_spv = compileSlangSpirv(b, "slug_mesh.spv", "shaders/entries/slug_mesh.slang", "meshMain", "mesh", "SPV_EXT_descriptor_indexing+spvShaderNonUniform+SPV_GOOGLE_user_type+spvDerivativeControl+spvImageQuery+spvImageGatherExtended+spvSparseResidency+spvMinLod+spvFragmentFullyCoveredEXT", shader_stats);
-    const frag_spv = compileSlangSpirv(
+    const task_spv = compileSlangSpirv(
         b,
-        "slug_fragment.spv",
-        "shaders/entries/slug_fragment.slang",
-        "fragmentMain",
-        "fragment",
-        "SPV_EXT_descriptor_indexing+spvShaderNonUniform+SPV_GOOGLE_user_type+spvDerivativeControl+spvImageQuery+spvImageGatherExtended+spvSparseResidency+spvMinLod+spvFragmentFullyCoveredEXT",
+        "slug_task.spv",
+        "shaders/entries/slug_task.slang",
+        "taskMain",
+        "amplification",
+        "spvGroupNonUniform+spvGroupNonUniformBallot+spvGroupNonUniformArithmetic",
         shader_stats,
     );
+    const mesh_spv = compileSlangSpirv(b, "slug_mesh.spv", "shaders/entries/slug_mesh.slang", "meshMain", "mesh", "", shader_stats);
+    const frag_spv = compileSlangSpirv(b, "slug_fragment.spv", "shaders/entries/slug_fragment.slang", "fragmentMain", "fragment", "", shader_stats);
 
     const shader_wf = b.addWriteFiles();
     _ = shader_wf.addCopyFile(task_spv, "slug_task.spv");

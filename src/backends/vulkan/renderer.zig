@@ -12,6 +12,7 @@ const pool_mod = heavy_slug.core.cache.byte_pool;
 pub const Error = error{
     NoSuitableMemoryType,
     FrameResourcesInUse,
+    MeshTaskWorkgroupLimitExceeded,
 };
 
 pub const RendererOptions = render.RendererOptions;
@@ -99,7 +100,7 @@ pub const Frame = struct {
 
     pub fn submit(self: *Frame, target: Target) !render.FrameToken {
         if (self.submitted) return error.FrameAlreadySubmitted;
-        const token = self.renderer.submitFrame(target, self.batch.count());
+        const token = try self.renderer.submitFrame(target, self.batch.count());
         self.batch.markSubmitted();
         self.submitted = true;
         return token;
@@ -195,6 +196,23 @@ fn destroyMappedBuffer(self: MappedBuffer, device: vk.Device, dispatch: gpu_cont
     dispatch.freeMemory(device, self.memory, null);
 }
 
+fn taskWorkgroupCount(glyph_count: u32) u32 {
+    const group_size = heavy_slug.gpu.mesh_limits.task_group_size;
+    return (glyph_count / group_size) + @intFromBool(glyph_count % group_size != 0);
+}
+
+fn validateTaskDrawWorkgroups(
+    props: vk.PhysicalDeviceMeshShaderPropertiesEXT,
+    workgroup_count: u32,
+) Error!void {
+    if (workgroup_count == 0) return;
+    if (workgroup_count > props.max_task_work_group_count[0] or
+        workgroup_count > props.max_task_work_group_total_count)
+    {
+        return Error.MeshTaskWorkgroupLimitExceeded;
+    }
+}
+
 /// GPU text renderer using the Slug algorithm for exact glyph coverage.
 ///
 /// **Thread safety:** Not thread-safe. `beginFrame`, `Frame.drawText`,
@@ -236,6 +254,10 @@ pub const Renderer = struct {
         options: RendererOptions,
     ) !Renderer {
         try gpu_context.validateDeviceProperties(ctx.api_version, ctx.mesh_shader_properties);
+        try validateTaskDrawWorkgroups(
+            ctx.mesh_shader_properties,
+            taskWorkgroupCount(options.max_glyphs_per_frame),
+        );
 
         const device = ctx.device;
         const dispatch = ctx.dispatch;
@@ -417,8 +439,11 @@ pub const Renderer = struct {
     ///
     /// `proj`: column-major 4×4 projection matrix (e.g. orthographic).
     /// `viewport`: viewport dimensions in pixels [width, height].
-    fn submitFrame(self: *Renderer, target: Target, glyph_count: u32) render.FrameToken {
+    fn submitFrame(self: *Renderer, target: Target, glyph_count: u32) Error!render.FrameToken {
         if (glyph_count == 0) return self.last_submitted_frame;
+        const workgroup_count = taskWorkgroupCount(glyph_count);
+        try validateTaskDrawWorkgroups(self.mesh_shader_properties, workgroup_count);
+
         const cmd_buf = target.command_buffer;
         const proj = target.projection;
         const viewport = target.viewport;
@@ -488,8 +513,6 @@ pub const Renderer = struct {
             @ptrCast(&push),
         );
 
-        // The task shader handles 32 glyphs per workgroup.
-        const workgroup_count = (glyph_count + 31) / 32;
         self.dispatch.cmdDrawMeshTasksEXT(cmd_buf, workgroup_count, 1, 1);
         if (@import("builtin").mode == .Debug) {
             self.core.stats.glyphs_submitted += glyph_count;
@@ -561,6 +584,23 @@ test "findMemoryType selects correct memory type" {
 
     const filtered = findMemoryType(props, 0b011, .{ .host_visible_bit = true, .host_coherent_bit = true });
     try std.testing.expectEqual(@as(?u32, null), filtered);
+}
+
+test "task workgroup validation follows Vulkan mesh shader draw limits" {
+    var props = std.mem.zeroes(vk.PhysicalDeviceMeshShaderPropertiesEXT);
+    props.max_task_work_group_total_count = 4;
+    props.max_task_work_group_count = .{ 4, 1, 1 };
+
+    try validateTaskDrawWorkgroups(props, 4);
+    try std.testing.expectError(Error.MeshTaskWorkgroupLimitExceeded, validateTaskDrawWorkgroups(props, 5));
+
+    props.max_task_work_group_total_count = 3;
+    try std.testing.expectError(Error.MeshTaskWorkgroupLimitExceeded, validateTaskDrawWorkgroups(props, 4));
+
+    try std.testing.expectEqual(@as(u32, 0), taskWorkgroupCount(0));
+    try std.testing.expectEqual(@as(u32, 1), taskWorkgroupCount(1));
+    try std.testing.expectEqual(@as(u32, 1), taskWorkgroupCount(heavy_slug.gpu.mesh_limits.task_group_size));
+    try std.testing.expectEqual(@as(u32, 2), taskWorkgroupCount(heavy_slug.gpu.mesh_limits.task_group_size + 1));
 }
 
 test "Renderer satisfies core backend contract" {

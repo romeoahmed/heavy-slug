@@ -205,6 +205,11 @@ fn readShaderStatsBuffer(buffer: MappedBuffer) heavy_slug.ShaderStats {
     return heavy_slug.gpu.shader_stats.Snapshot.fromCounters(counters);
 }
 
+fn taskWorkgroupCount(glyph_count: u32) u32 {
+    const group_size = heavy_slug.gpu.mesh_limits.task_group_size;
+    return (glyph_count / group_size) + @intFromBool(glyph_count % group_size != 0);
+}
+
 fn monotonicNs() u64 {
     var ts: std.posix.timespec = undefined;
     switch (std.posix.errno(std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts))) {
@@ -433,7 +438,7 @@ pub const Renderer = struct {
         const push_bytes = frame_slot.push_constants.mapped[0..@sizeOf(PushConstants)];
         @memcpy(push_bytes, std.mem.asBytes(&push));
 
-        const workgroup_count = (glyph_count + 31) / 32;
+        const workgroup_count = taskWorkgroupCount(glyph_count);
         var error_buf: [2048]u8 = undefined;
         if (hs_metal_context_draw(
             self.context.handle,
@@ -503,14 +508,17 @@ test "Metal bridge resource indices match generated Slang MSL" {
     try std.testing.expectEqual(@as(u32, 2), indices.shader_stats);
 
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.task, "GlyphCommand_0 device* commands_1 [[buffer(1)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.task, "[[buffer(0)]]") == null);
     const push_pattern = if (backend_options.shader_stats)
         "PushConstants_natural_0 constant* pc_1 [[buffer(3)]]"
     else
         "PushConstants_natural_0 constant* pc_1 [[buffer(2)]]";
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.task, push_pattern) != null);
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "GlyphCommand_0 device* commands_1 [[buffer(1)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "uint32_t device* glyphPool_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "[[buffer(0)]]") != null);
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, push_pattern) != null);
-    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "glyphPool_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "uint32_t device* glyphPool_") != null);
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "[[buffer(0)]]") != null);
     if (backend_options.shader_stats) {
         try std.testing.expect(std.mem.indexOf(u8, metal_shaders.task, "shaderStats_") != null);
@@ -527,4 +535,12 @@ test "Metal bridge resource indices match generated Slang MSL" {
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "[[user(TEXCOORD_1)]]") != null);
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "[[user(TEXCOORD_1)]]") != null);
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "user(TEXCOORD__1)") == null);
+}
+
+test "Metal task workgroup count uses mesh ABI group size" {
+    const group_size = heavy_slug.gpu.mesh_limits.task_group_size;
+    try std.testing.expectEqual(@as(u32, 0), taskWorkgroupCount(0));
+    try std.testing.expectEqual(@as(u32, 1), taskWorkgroupCount(1));
+    try std.testing.expectEqual(@as(u32, 1), taskWorkgroupCount(group_size));
+    try std.testing.expectEqual(@as(u32, 2), taskWorkgroupCount(group_size + 1));
 }

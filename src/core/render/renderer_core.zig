@@ -401,9 +401,8 @@ const FakeBackend = struct {
 
     pub fn uploadBlob(self: *FakeBackend, allocation: pool_mod.Allocation, data: []const u8) !cache_mod.GlyphRef {
         @memcpy(self.pool[allocation.offset..][0..data.len], data);
-        const ref = self.next_ref;
         self.next_ref += 1;
-        return cache_mod.GlyphRef.from(ref);
+        return cache_mod.GlyphRef.from(allocation.offset);
     }
 
     pub fn retireBlob(self: *FakeBackend, _: cache_mod.GlyphRef) void {
@@ -421,6 +420,11 @@ test "render: FakeBackend satisfies backend contract" {
     backend_contract.BackendContract(FakeBackend);
     backend_contract.BackendContract(*FakeBackend);
     try std.testing.expect(true);
+}
+
+fn texelAt(bytes: []const u8, offset: u32) blob_format.Texel {
+    const start: usize = @intCast(offset);
+    return std.mem.bytesToValue(blob_format.Texel, bytes[start..][0..@sizeOf(blob_format.Texel)]);
 }
 
 test "RendererOptions mirrors current default capacities" {
@@ -478,6 +482,10 @@ test "render: RendererCore appends shaped glyph commands and caches blobs" {
     try std.testing.expect(backend.next_ref > 0);
     try std.testing.expect(commands[0].glyph_ref != GlyphRef.empty.value);
     try std.testing.expect(commands[0].motor[2] != 0);
+
+    const meta = texelAt(&pool, commands[0].glyph_ref + @sizeOf(blob_format.Texel));
+    try std.testing.expect(meta.r > 0);
+    try std.testing.expect(meta.a > 0);
     if (@import("builtin").mode == .Debug) {
         try std.testing.expectEqual(@as(u32, 1), core.stats.runs_shaped);
         try std.testing.expect(core.stats.glyphs_shaped >= core.glyph_count);

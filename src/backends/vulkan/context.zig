@@ -29,10 +29,14 @@ fn validateApiVersion(api_version: u32) FeatureError!void {
 }
 
 pub fn validateMeshShaderLimits(props: vk.PhysicalDeviceMeshShaderPropertiesEXT) FeatureError!void {
-    if (props.max_task_work_group_invocations < mesh_limits.task_group_size or
+    if (props.max_task_work_group_total_count == 0 or
+        props.max_task_work_group_count[0] == 0 or
+        props.max_task_work_group_invocations < mesh_limits.task_group_size or
         props.max_task_work_group_size[0] < mesh_limits.task_group_size or
         props.max_task_payload_size < mesh_limits.task_payload_bytes or
         props.max_task_payload_and_shared_memory_size < mesh_limits.task_payload_bytes or
+        props.max_mesh_work_group_total_count < mesh_limits.task_max_meshlets or
+        props.max_mesh_work_group_count[0] < mesh_limits.task_max_meshlets or
         props.max_mesh_work_group_invocations < mesh_limits.mesh_thread_count or
         props.max_mesh_work_group_size[0] < mesh_limits.mesh_thread_count or
         props.max_mesh_output_vertices < mesh_limits.mesh_output_vertices or
@@ -244,10 +248,14 @@ test "required_api_version is Vulkan 1.4" {
 
 fn supportedMeshProps() vk.PhysicalDeviceMeshShaderPropertiesEXT {
     var props = std.mem.zeroes(vk.PhysicalDeviceMeshShaderPropertiesEXT);
+    props.max_task_work_group_total_count = 1;
+    props.max_task_work_group_count = .{ 1, 1, 1 };
     props.max_task_work_group_invocations = mesh_limits.task_group_size;
     props.max_task_work_group_size = .{ mesh_limits.task_group_size, 1, 1 };
     props.max_task_payload_size = mesh_limits.task_payload_bytes;
     props.max_task_payload_and_shared_memory_size = mesh_limits.task_payload_bytes;
+    props.max_mesh_work_group_total_count = mesh_limits.task_max_meshlets;
+    props.max_mesh_work_group_count = .{ mesh_limits.task_max_meshlets, 1, 1 };
     props.max_mesh_work_group_invocations = mesh_limits.mesh_thread_count;
     props.max_mesh_work_group_size = .{ mesh_limits.mesh_thread_count, 1, 1 };
     props.max_mesh_output_vertices = mesh_limits.mesh_output_vertices;
@@ -269,6 +277,20 @@ test "validateDeviceProperties requires Vulkan 1.4 and mesh shader budgets" {
     try std.testing.expectError(
         FeatureError.MeshShaderLimitsNotSupported,
         validateDeviceProperties(vk.API_VERSION_1_4.toU32(), low_payload),
+    );
+
+    var no_task_grid = supportedMeshProps();
+    no_task_grid.max_task_work_group_count[0] = 0;
+    try std.testing.expectError(
+        FeatureError.MeshShaderLimitsNotSupported,
+        validateDeviceProperties(vk.API_VERSION_1_4.toU32(), no_task_grid),
+    );
+
+    var low_mesh_grid = supportedMeshProps();
+    low_mesh_grid.max_mesh_work_group_count[0] = mesh_limits.task_max_meshlets - 1;
+    try std.testing.expectError(
+        FeatureError.MeshShaderLimitsNotSupported,
+        validateDeviceProperties(vk.API_VERSION_1_4.toU32(), low_mesh_grid),
     );
 
     var low_output = supportedMeshProps();

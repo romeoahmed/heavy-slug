@@ -27,11 +27,13 @@ struct hs_metal_context {
     __unsafe_unretained id<MTL4CommandQueue> command_queue;
     __strong id<MTL4Compiler> compiler;
     __strong id<MTLRenderPipelineState> pipeline_state;
+    __strong id<MTLResidencySet> residency_set;
     __unsafe_unretained CAMetalLayer *layer;
     hs_metal_frame_slot frame_slots[kFrameSlotCount];
 };
 
 struct hs_metal_buffer {
+    hs_metal_context *context;
     __strong id<MTLBuffer> buffer;
 };
 
@@ -186,11 +188,23 @@ hs_metal_context *hs_metal_context_create(
             return nullptr;
         }
 
+        MTLResidencySetDescriptor *residency_desc = [MTLResidencySetDescriptor new];
+        residency_desc.label = @"heavy-slug residency set";
+        residency_desc.initialCapacity = 8;
+        NSError *residency_error = nil;
+        id<MTLResidencySet> residency_set = [device newResidencySetWithDescriptor:residency_desc
+                                                                            error:&residency_error];
+        if (!residency_set) {
+            write_error(error_buffer, error_buffer_len, residency_error.localizedDescription);
+            return nullptr;
+        }
+
         hs_metal_context *context = new hs_metal_context();
         context->device = device;
         context->command_queue = command_queue;
         context->compiler = compiler;
         context->pipeline_state = pipeline_state;
+        context->residency_set = residency_set;
         context->layer = layer;
         for (uint32_t i = 0; i < kFrameSlotCount; i++) {
             context->frame_slots[i].semaphore = dispatch_semaphore_create(1);
@@ -213,6 +227,10 @@ hs_metal_context *hs_metal_context_create(
             context->frame_slots[i].failed = false;
             context->frame_slots[i].message = nil;
         }
+        // MTL4 argument tables bind GPU addresses, not MTLBuffer objects.
+        // Keep bridge-owned buffers resident so address-only shader bindings
+        // remain valid across object, mesh, and fragment stages.
+        [command_queue addResidencySet:residency_set];
         return context;
     }
 }
@@ -265,7 +283,11 @@ void hs_metal_context_wait_submitted(hs_metal_context *context) {
 }
 
 void hs_metal_context_destroy(hs_metal_context *context) {
+    if (!context) return;
     hs_metal_context_wait_submitted(context);
+    if (context->command_queue && context->residency_set) {
+        [context->command_queue removeResidencySet:context->residency_set];
+    }
     delete context;
 }
 
@@ -275,12 +297,19 @@ hs_metal_buffer *hs_metal_buffer_create(hs_metal_context *context, size_t size) 
         id<MTLBuffer> buffer = [context->device newBufferWithLength:size options:MTLResourceStorageModeShared];
         if (!buffer) return nullptr;
         hs_metal_buffer *result = new hs_metal_buffer();
+        result->context = context;
         result->buffer = buffer;
+        [context->residency_set addAllocation:buffer];
+        [context->residency_set commit];
         return result;
     }
 }
 
 void hs_metal_buffer_destroy(hs_metal_buffer *buffer) {
+    if (buffer && buffer->context && buffer->buffer) {
+        [buffer->context->residency_set removeAllocation:buffer->buffer];
+        [buffer->context->residency_set commit];
+    }
     delete buffer;
 }
 
@@ -319,6 +348,12 @@ int hs_metal_context_draw(
             write_error(error_buffer, error_buffer_len, @"Metal draw received a null handle");
             return 0;
         }
+#if HEAVY_SLUG_SHADER_STATS
+        if (!shader_stats) {
+            write_error(error_buffer, error_buffer_len, @"Metal draw requires a shader-stats buffer");
+            return 0;
+        }
+#endif
         if (!valid_slot(slot_index)) {
             write_error(error_buffer, error_buffer_len, @"invalid Metal frame slot");
             return 0;
@@ -366,9 +401,9 @@ int hs_metal_context_draw(
         bind_buffer(slot->argument_table, glyph_pool, HS_METAL_BUFFER_GLYPH_POOL);
         bind_buffer(slot->argument_table, commands, HS_METAL_BUFFER_COMMANDS);
         bind_buffer(slot->argument_table, push_constants, HS_METAL_BUFFER_PUSH_CONSTANTS);
-        if (shader_stats) {
-            bind_buffer(slot->argument_table, shader_stats, HS_METAL_BUFFER_SHADER_STATS);
-        }
+#if HEAVY_SLUG_SHADER_STATS
+        bind_buffer(slot->argument_table, shader_stats, HS_METAL_BUFFER_SHADER_STATS);
+#endif
 
         [encoder setViewport:(MTLViewport){0, 0, (double)width, (double)height, 0, 1}];
         [encoder setRenderPipelineState:context->pipeline_state];
