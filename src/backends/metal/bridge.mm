@@ -287,6 +287,7 @@ int hs_metal_context_draw(
         [encoder setRenderPipelineState:context->pipeline_state];
         [encoder setObjectBuffer:commands->buffer offset:0 atIndex:HS_METAL_BUFFER_COMMANDS];
         [encoder setObjectBuffer:push_constants->buffer offset:0 atIndex:HS_METAL_BUFFER_PUSH_CONSTANTS];
+        [encoder setMeshBuffer:glyph_pool->buffer offset:0 atIndex:HS_METAL_BUFFER_GLYPH_POOL];
         [encoder setMeshBuffer:commands->buffer offset:0 atIndex:HS_METAL_BUFFER_COMMANDS];
         [encoder setMeshBuffer:push_constants->buffer offset:0 atIndex:HS_METAL_BUFFER_PUSH_CONSTANTS];
         [encoder setFragmentBuffer:glyph_pool->buffer offset:0 atIndex:HS_METAL_BUFFER_GLYPH_POOL];
@@ -297,7 +298,7 @@ int hs_metal_context_draw(
         }
         [encoder drawMeshThreadgroups:MTLSizeMake(workgroup_count, 1, 1)
             threadsPerObjectThreadgroup:MTLSizeMake(32, 1, 1)
-              threadsPerMeshThreadgroup:MTLSizeMake(4, 1, 1)];
+              threadsPerMeshThreadgroup:MTLSizeMake(32, 1, 1)];
         [encoder endEncoding];
         [cb presentDrawable:drawable];
         slot->reserved = false;

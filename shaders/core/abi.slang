@@ -23,3 +23,5 @@ struct PushConstants
 };
 
 static const uint kTaskGroupSize = 32;
+static const uint kMaxSubdivisionsPerGlyph = 16;
+static const uint kTaskMaxMeshlets = kTaskGroupSize * kMaxSubdivisionsPerGlyph;

@@ -17,8 +17,8 @@ pub const MetalShaders = struct {
 };
 
 pub fn buildSpirv(b: *std.Build, shader_stats: bool) SpirvShaders {
-    const task_spv = compileSlangSpirv(b, "slug_task.spv", "shaders/entries/slug_task.slang", "taskMain", "amplification", "spvGroupNonUniform+spvGroupNonUniformBallot", shader_stats);
-    const mesh_spv = compileSlangSpirv(b, "slug_mesh.spv", "shaders/entries/slug_mesh.slang", "meshMain", "mesh", "", shader_stats);
+    const task_spv = compileSlangSpirv(b, "slug_task.spv", "shaders/entries/slug_task.slang", "taskMain", "amplification", "spvGroupNonUniform+spvGroupNonUniformBallot+spvGroupNonUniformArithmetic", shader_stats);
+    const mesh_spv = compileSlangSpirv(b, "slug_mesh.spv", "shaders/entries/slug_mesh.slang", "meshMain", "mesh", "SPV_EXT_descriptor_indexing+spvShaderNonUniform+SPV_GOOGLE_user_type+spvDerivativeControl+spvImageQuery+spvImageGatherExtended+spvSparseResidency+spvMinLod+spvFragmentFullyCoveredEXT", shader_stats);
     const frag_spv = compileSlangSpirv(
         b,
         "slug_fragment.spv",
@@ -101,7 +101,7 @@ pub fn generateReflectionJson(b: *std.Build) std.Build.LazyPath {
     cmd.addFileArg(b.path("shaders/entries/slug_task.slang"));
     addSharedSlangArgs(cmd, "taskMain", "amplification", false, false);
     cmd.addArgs(&.{ "-target", "spirv" });
-    cmd.addArgs(&.{ "-profile", "spirv_1_6+spvGroupNonUniform+spvGroupNonUniformBallot" });
+    cmd.addArgs(&.{ "-profile", "spirv_1_6+spvGroupNonUniform+spvGroupNonUniformBallot+spvGroupNonUniformArithmetic" });
     addSharedIncludeAndOptArgs(b, cmd, .vulkan);
     cmd.addArg("-o");
     _ = cmd.addOutputFileArg("reflection_task.spv");

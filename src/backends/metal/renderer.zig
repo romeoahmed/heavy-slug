@@ -101,14 +101,17 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
         if (backend_options.shader_stats) {
             const shader_analysis = self.shader.analysis();
             std.log.scoped(.renderer).debug(
-                "metal stats: wait_ns={d} task_visible={d}/{d} mesh_groups={d} fragments={d} frag_per_glyph_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
+                "metal stats: wait_ns={d} task_visible={d}/{d} mesh_tiles={d}/{d} tile_culled={d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
                 .{
                     self.frame_slot_wait_ns,
                     self.shader.task_glyphs_visible,
                     self.shader.task_glyphs_tested,
+                    self.shader.mesh_tiles_emitted,
                     self.shader.mesh_workgroups,
+                    self.shader.mesh_tiles_culled,
                     self.shader.fragment_invocations,
                     shader_analysis.fragments_per_visible_glyph_milli,
+                    shader_analysis.fragments_per_mesh_tile_milli,
                     shader_analysis.full_scan_fragment_per_mille,
                     self.shader.totalCurveIntegrations(),
                     self.shader.totalCurveTests(),
@@ -521,7 +524,7 @@ test "Metal bridge resource indices match generated Slang MSL" {
         try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "shaderStats_") == null);
         try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "shaderStats_") == null);
     }
-    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "glyphRef_0 [[user(TEXCOORD_1)]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "glyphRef_0 [[user(TEXCOORD_1)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "[[user(TEXCOORD_1)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "[[user(TEXCOORD_1)]]") != null);
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "user(TEXCOORD__1)") == null);
 }

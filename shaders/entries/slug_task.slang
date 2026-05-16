@@ -1,13 +1,15 @@
-// Task shader: frustum-cull glyphs and compact visible indices for mesh workgroups.
+// Task shader: frustum-cull glyphs and compact visible h-band meshlets.
 
 import pga;
 import abi;
 import resources;
 
+static const float kTargetMeshletExtentPixels = 96.0;
+
 struct TaskPayload
 {
-    uint glyphIndices[kTaskGroupSize];
-    float2 emPerPixels[kTaskGroupSize];  // precomputed em-per-pixel for dilation
+    uint glyphIndices[kTaskMaxMeshlets];
+    uint sliceInfos[kTaskMaxMeshlets];
 };
 
 #if HEAVY_SLUG_SHADER_STATS
@@ -18,9 +20,9 @@ static const uint kShaderStatTaskGlyphsCulled = 9;
 #endif
 
 groupshared TaskPayload s_payload;
-groupshared float2 s_invPixelsPerEm;
 #if HEAVY_SLUG_METAL
 groupshared uint s_survivorCount;
+groupshared uint s_meshletCount;
 #endif
 
 #if HEAVY_SLUG_SHADER_STATS
@@ -47,6 +49,33 @@ bool isVisible(float4 c0, float4 c1, float4 c2, float4 c3)
     return true;
 }
 
+uint packSliceInfo(uint sliceIndex, uint sliceCount)
+{
+    return (sliceCount << 16) | sliceIndex;
+}
+
+float2 visiblePixelExtent(float4 c0, float4 c1, float4 c2, float4 c3)
+{
+    float2 ndc0 = c0.xy / c0.w;
+    float2 ndc1 = c1.xy / c1.w;
+    float2 ndc2 = c2.xy / c2.w;
+    float2 ndc3 = c3.xy / c3.w;
+
+    float2 ndcMin = max(min(min(ndc0, ndc1), min(ndc2, ndc3)), float2(-1.0, -1.0));
+    float2 ndcMax = min(max(max(ndc0, ndc1), max(ndc2, ndc3)), float2(1.0, 1.0));
+    return max(ndcMax - ndcMin, float2(0.0, 0.0)) * (pc.viewport_dim * 0.5);
+}
+
+uint subdivisionCount(float4 c0, float4 c1, float4 c2, float4 c3)
+{
+    float2 extent = visiblePixelExtent(c0, c1, c2, c3);
+    float maxExtent = max(extent.x, extent.y);
+    uint count = uint(ceil(maxExtent / kTargetMeshletExtentPixels));
+    if (maxExtent >= 16.0)
+        count = max(count, 4u);
+    return clamp(count, 1u, kMaxSubdivisionsPerGlyph);
+}
+
 [shader("amplification")]
 [numthreads(kTaskGroupSize, 1, 1)]
 void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
@@ -58,19 +87,15 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
     uint localIndex = groupBase + gtid;
     uint glyphIndex = pc.glyph_base + localIndex;
     bool alive = false;
+    uint slices = 0;
 
     GlyphCommand cmd;
 
     if (gtid == 0)
     {
-        float2 halfDim = pc.viewport_dim * 0.5;
-        float2 ppe = float2(
-            length(float2(pc.proj[0][0] * halfDim.x, pc.proj[1][0] * halfDim.y)),
-            length(float2(pc.proj[0][1] * halfDim.x, pc.proj[1][1] * halfDim.y))
-        );
-        s_invPixelsPerEm = 1.0 / ppe;
 #if HEAVY_SLUG_METAL
         s_survivorCount = 0;
+        s_meshletCount = 0;
 #endif
     }
     GroupMemoryBarrierWithGroupSync();
@@ -90,35 +115,43 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
         float4 c3 = mul(pc.proj, float4(affine.apply(float2(emMin.x, emMax.y)), 0, 1));
 
         alive = isVisible(c0, c1, c2, c3);
+        slices = alive ? subdivisionCount(c0, c1, c2, c3) : 0;
     }
 
 #if HEAVY_SLUG_METAL
     // Slang's Metal target lacks wave ballot intrinsics for object functions.
-    // Use one taskgroup-local atomic counter instead.
+    // Use taskgroup-local atomics for variable-rate meshlet allocation.
     uint survivorCount = 0;
-    uint localIdx = 0;
+    uint meshletBase = 0;
     if (alive)
     {
-        InterlockedAdd(s_survivorCount, 1, localIdx);
-        s_payload.glyphIndices[localIdx] = glyphIndex;
-
-        float ms = cmd.motor.x * cmd.motor.x + cmd.motor.y * cmd.motor.y;
-        s_payload.emPerPixels[localIdx] = s_invPixelsPerEm / ms;
+        InterlockedAdd(s_survivorCount, 1);
+        InterlockedAdd(s_meshletCount, slices, meshletBase);
+        for (uint sliceIndex = 0; sliceIndex < slices; sliceIndex++)
+        {
+            uint meshletIndex = meshletBase + sliceIndex;
+            s_payload.glyphIndices[meshletIndex] = glyphIndex;
+            s_payload.sliceInfos[meshletIndex] = packSliceInfo(sliceIndex, slices);
+        }
     }
 
     GroupMemoryBarrierWithGroupSync();
     survivorCount = s_survivorCount;
+    uint meshletCount = s_meshletCount;
 #else
-    // Wave ballot compaction avoids shared-memory atomics.
+    // Wave prefix sums compact a variable number of glyph meshlets without shared atomics.
     uint survivorCount = WaveActiveCountBits(alive);
-    uint localIdx = WavePrefixCountBits(alive);
+    uint meshletCount = WaveActiveSum(slices);
+    uint meshletBase = WavePrefixSum(slices);
 
     if (alive)
     {
-        s_payload.glyphIndices[localIdx] = glyphIndex;
-
-        float ms = cmd.motor.x * cmd.motor.x + cmd.motor.y * cmd.motor.y;
-        s_payload.emPerPixels[localIdx] = s_invPixelsPerEm / ms;
+        for (uint sliceIndex = 0; sliceIndex < slices; sliceIndex++)
+        {
+            uint meshletIndex = meshletBase + sliceIndex;
+            s_payload.glyphIndices[meshletIndex] = glyphIndex;
+            s_payload.sliceInfos[meshletIndex] = packSliceInfo(sliceIndex, slices);
+        }
     }
 
     GroupMemoryBarrierWithGroupSync();
@@ -132,6 +165,6 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
         addShaderStat(kShaderStatTaskGlyphsVisible, survivorCount);
         addShaderStat(kShaderStatTaskGlyphsCulled, groupSize - survivorCount);
 #endif
-        DispatchMesh(survivorCount, 1, 1, s_payload);
+        DispatchMesh(meshletCount, 1, 1, s_payload);
     }
 }
