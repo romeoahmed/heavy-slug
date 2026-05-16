@@ -52,17 +52,29 @@ struct BlobReader
         idBase = bandBase + bandCount;
     }
 
-    void readCurve(uint curveBase, uint curveIndex, out float2 p0, out float2 p1,
-                   out float2 p2, out float2 p3, out float4 bbox)
+    float4 readCurveBounds(uint curveBase, uint curveIndex)
+    {
+        uint off = curveBase + curveIndex * CURVE_TEXEL_LEN;
+        return readTexelF(off + 2);
+    }
+
+    void readCurvePoints(uint curveBase, uint curveIndex, out float2 p0, out float2 p1,
+                         out float2 p2, out float2 p3)
     {
         uint off = curveBase + curveIndex * CURVE_TEXEL_LEN;
         float4 a = readTexelF(off);
         float4 b = readTexelF(off + 1);
-        bbox = readTexelF(off + 2);
         p0 = a.xy;
         p1 = a.zw;
         p2 = b.xy;
         p3 = b.zw;
+    }
+
+    void readCurve(uint curveBase, uint curveIndex, out float2 p0, out float2 p1,
+                   out float2 p2, out float2 p3, out float4 bbox)
+    {
+        bbox = readCurveBounds(curveBase, curveIndex);
+        readCurvePoints(curveBase, curveIndex, p0, p1, p2, p3);
     }
 
     void readBand(uint bandBase, uint bandIndex, out uint idStart, out uint bandIdCount)

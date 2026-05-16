@@ -16,6 +16,7 @@ static const uint kShaderStatTaskGlyphsVisible = 8;
 static const uint kShaderStatTaskGlyphsCulled = 9;
 
 groupshared TaskPayload s_payload;
+groupshared float2 s_invPixelsPerEm;
 #if HEAVY_SLUG_METAL
 groupshared uint s_survivorCount;
 #endif
@@ -60,18 +61,33 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
 
     GlyphCommand cmd;
 
+    if (gtid == 0)
+    {
+        float2 halfDim = pc.viewport_dim * 0.5;
+        float2 ppe = float2(
+            length(float2(pc.proj[0][0] * halfDim.x, pc.proj[1][0] * halfDim.y)),
+            length(float2(pc.proj[0][1] * halfDim.x, pc.proj[1][1] * halfDim.y))
+        );
+        s_invPixelsPerEm = 1.0 / ppe;
+#if HEAVY_SLUG_METAL
+        s_survivorCount = 0;
+#endif
+    }
+    GroupMemoryBarrierWithGroupSync();
+
     if (localIndex < pc.glyph_count)
     {
         cmd = commands[glyphIndex];
         Motor motor = { cmd.motor };
+        MotorAffine affine = motor.affine();
 
         float2 emMin = float2(cmd.em_x_min, cmd.em_y_min);
         float2 emMax = float2(cmd.em_x_max, cmd.em_y_max);
 
-        float4 c0 = mul(pc.proj, float4(motor.apply(emMin), 0, 1));
-        float4 c1 = mul(pc.proj, float4(motor.apply(float2(emMax.x, emMin.y)), 0, 1));
-        float4 c2 = mul(pc.proj, float4(motor.apply(emMax), 0, 1));
-        float4 c3 = mul(pc.proj, float4(motor.apply(float2(emMin.x, emMax.y)), 0, 1));
+        float4 c0 = mul(pc.proj, float4(affine.apply(emMin), 0, 1));
+        float4 c1 = mul(pc.proj, float4(affine.apply(float2(emMax.x, emMin.y)), 0, 1));
+        float4 c2 = mul(pc.proj, float4(affine.apply(emMax), 0, 1));
+        float4 c3 = mul(pc.proj, float4(affine.apply(float2(emMin.x, emMax.y)), 0, 1));
 
         alive = isVisible(c0, c1, c2, c3);
     }
@@ -79,9 +95,6 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
 #if HEAVY_SLUG_METAL
     // Slang's Metal target lacks wave ballot intrinsics for object functions.
     // Use one taskgroup-local atomic counter instead.
-    if (gtid == 0) s_survivorCount = 0;
-    GroupMemoryBarrierWithGroupSync();
-
     uint survivorCount = 0;
     uint localIdx = 0;
     if (alive)
@@ -90,12 +103,7 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
         s_payload.glyphIndices[localIdx] = glyphIndex;
 
         float ms = cmd.motor.x * cmd.motor.x + cmd.motor.y * cmd.motor.y;
-        float2 halfDim = pc.viewport_dim * 0.5;
-        float2 ppe = float2(
-            length(float2(pc.proj[0][0] * halfDim.x, pc.proj[1][0] * halfDim.y)),
-            length(float2(pc.proj[0][1] * halfDim.x, pc.proj[1][1] * halfDim.y))
-        );
-        s_payload.emPerPixels[localIdx] = 1.0 / (ppe * ms);
+        s_payload.emPerPixels[localIdx] = s_invPixelsPerEm / ms;
     }
 
     GroupMemoryBarrierWithGroupSync();
@@ -109,14 +117,8 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
     {
         s_payload.glyphIndices[localIdx] = glyphIndex;
 
-        // Avoid two sqrt operations per mesh workgroup.
         float ms = cmd.motor.x * cmd.motor.x + cmd.motor.y * cmd.motor.y;
-        float2 halfDim = pc.viewport_dim * 0.5;
-        float2 ppe = float2(
-            length(float2(pc.proj[0][0] * halfDim.x, pc.proj[1][0] * halfDim.y)),
-            length(float2(pc.proj[0][1] * halfDim.x, pc.proj[1][1] * halfDim.y))
-        );
-        s_payload.emPerPixels[localIdx] = 1.0 / (ppe * ms);
+        s_payload.emPerPixels[localIdx] = s_invPixelsPerEm / ms;
     }
 
     GroupMemoryBarrierWithGroupSync();

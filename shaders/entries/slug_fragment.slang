@@ -27,6 +27,8 @@ static const uint kShaderStatFullScanFragments = 2;
 static const uint kShaderStatCandidateCurveTests = 3;
 static const uint kShaderStatFullScanCurveTests = 4;
 static const uint kShaderStatEmptyFragments = 5;
+static const uint kShaderStatCandidateCurveBboxRejects = 11;
+static const uint kShaderStatFullScanCurveBboxRejects = 12;
 
 void addShaderStat(uint index, uint value)
 {
@@ -47,20 +49,24 @@ float integrateCandidateCurves(
     float2 renderCoord,
     float2 dx,
     float2 dy,
-    float invDet)
+    float invDet,
+    out uint bboxRejects)
 {
     uint idStart;
     uint bandIdCount;
     blob.readBand(bandBase, bandIndex, idStart, bandIdCount);
 
     float signedArea = 0.0;
+    bboxRejects = 0;
     for (uint i = 0; i < bandIdCount; i++)
     {
         uint idIndex = idStart + i;
         uint curveIndex = blob.readCurveId(idBase, idIndex);
         if (curveIndex < curveCount)
         {
-            signedArea += integrateCurveFromBlob(blob, curveBase, curveIndex, renderCoord, dx, dy, invDet);
+            bool bboxRejected;
+            signedArea += integrateCurveFromBlob(blob, curveBase, curveIndex, renderCoord, dx, dy, invDet, bboxRejected);
+            bboxRejects += bboxRejected ? 1u : 0u;
         }
     }
     return signedArea;
@@ -124,6 +130,7 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
         addShaderStat(kShaderStatCandidatePathFragments, 1);
         addShaderStat(kShaderStatCandidateCurveTests, bandIdCountForStats);
 #endif
+        uint bboxRejects;
         signedArea = integrateCandidateCurves(
             blob,
             curveBase,
@@ -134,13 +141,17 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
             renderCoord,
             dx,
             dy,
-            invDet);
+            invDet,
+            bboxRejects);
+        addShaderStat(kShaderStatCandidateCurveBboxRejects, bboxRejects);
     }
     else
     {
         addShaderStat(kShaderStatFullScanFragments, 1);
         addShaderStat(kShaderStatFullScanCurveTests, curveCount);
-        signedArea = integrateFullScan(blob, curveBase, curveCount, renderCoord, dx, dy, invDet);
+        uint bboxRejects;
+        signedArea = integrateFullScan(blob, curveBase, curveCount, renderCoord, dx, dy, invDet, bboxRejects);
+        addShaderStat(kShaderStatFullScanCurveBboxRejects, bboxRejects);
     }
 
     return resolveCoverage(signedArea, fillSign, detSign, flags);

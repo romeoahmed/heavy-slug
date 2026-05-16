@@ -264,6 +264,7 @@ pub const RendererCore = struct {
             self.stats.glyphs_shaped += @intCast(infos.len);
         }
         const em_motor = motorToEm(run.transform.toMotor());
+        const em_translation = em_motor.translationComposer();
         const color = run.color.rgba;
         const flags = run.fill_rule.commandFlags();
         const start_count = self.glyph_count;
@@ -279,7 +280,7 @@ pub const RendererCore = struct {
         for (infos, positions) |info, pos| {
             const glyph_x = pen_x + @as(f32, @floatFromInt(pos.x_offset));
             const glyph_y = pen_y + @as(f32, @floatFromInt(pos.y_offset));
-            const glyph_motor = em_motor.composeTranslation(glyph_x, glyph_y);
+            const glyph_motor = em_translation.compose(glyph_x, glyph_y);
 
             const cache_key = cache_mod.CacheKey{
                 .font_id = font.id,

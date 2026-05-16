@@ -98,7 +98,7 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
 
     pub fn log(self: *const @This()) void {
         std.log.scoped(.renderer).debug(
-            "metal stats: wait_ns={d} task_visible={d}/{d} mesh_groups={d} shader_fragments={d} shader_fullscan={d}",
+            "metal stats: wait_ns={d} task_visible={d}/{d} mesh_groups={d} shader_fragments={d} shader_fullscan={d} bbox_rejects={d}",
             .{
                 self.frame_slot_wait_ns,
                 self.shader.task_glyphs_visible,
@@ -106,6 +106,7 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
                 self.shader.mesh_workgroups,
                 self.shader.fragment_invocations,
                 self.shader.full_scan_fragments,
+                self.shader.candidate_curve_bbox_rejects + self.shader.full_scan_curve_bbox_rejects,
             },
         );
         self.common.log(.renderer);

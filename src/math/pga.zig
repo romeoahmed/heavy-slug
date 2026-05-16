@@ -10,6 +10,35 @@ pub const Motor = extern struct {
     /// Identity motor (no rotation, no translation).
     pub const identity = Motor{ .m = .{ 1, 0, 0, 0 } };
 
+    /// Precomputed state for composing many translations onto the same motor.
+    pub const TranslationComposer = struct {
+        base: Motor,
+        c3: f32,
+        s3: f32,
+
+        pub fn compose(self: TranslationComposer, tx: f32, ty: f32) Motor {
+            const half: @Vector(2, f32) = .{ tx * 0.5, ty * 0.5 };
+            const row_x: @Vector(2, f32) = .{ self.c3, -self.s3 };
+            const row_y: @Vector(2, f32) = .{ self.s3, self.c3 };
+            return .{ .m = .{
+                self.base.m[0],
+                self.base.m[1],
+                @reduce(.Add, row_x * half) + self.base.m[2],
+                @reduce(.Add, row_y * half) + self.base.m[3],
+            } };
+        }
+    };
+
+    /// Precompute constants used by repeated `composeTranslation()` calls.
+    pub fn translationComposer(self: Motor) TranslationComposer {
+        const a2 = self.m[1] * self.m[1];
+        return .{
+            .base = self,
+            .c3 = self.m[0] * (1.0 - 4.0 * a2),
+            .s3 = self.m[1] * (3.0 - 4.0 * a2),
+        };
+    }
+
     /// Motor from pure translation (tx, ty).
     /// Encoding: s=1, e12=0, e01=tx/2, e02=ty/2
     pub fn fromTranslation(tx: f32, ty: f32) Motor {
@@ -64,17 +93,7 @@ pub const Motor = extern struct {
     ///   e01' = c3·htx − s3·hty + txA
     ///   e02' = s3·htx + c3·hty + tyA
     pub fn composeTranslation(self: Motor, tx: f32, ty: f32) Motor {
-        const htx = tx * 0.5;
-        const hty = ty * 0.5;
-        const a2 = self.m[1] * self.m[1];
-        const c3 = self.m[0] * (1.0 - 4.0 * a2);
-        const s3 = self.m[1] * (3.0 - 4.0 * a2);
-        return .{ .m = .{
-            self.m[0],
-            self.m[1],
-            c3 * htx - s3 * hty + self.m[2],
-            s3 * htx + c3 * hty + self.m[3],
-        } };
+        return self.translationComposer().compose(tx, ty);
     }
 
     /// Expand motor to a column-major 4×4 matrix, pre-multiplied by `proj`.
@@ -436,6 +455,33 @@ test "Motor.composeTranslation matches general composition" {
 
         try testing.expectApproxEqAbs(general[0], specialized[0], 1e-2);
         try testing.expectApproxEqAbs(general[1], specialized[1], 1e-2);
+    }
+}
+
+test "Motor.translationComposer matches repeated translation composition" {
+    const motor = Motor.compose(
+        Motor.fromTranslation(10.0, -20.0),
+        Motor.fromRotation(std.math.pi / 3.0),
+    );
+    const composer = motor.translationComposer();
+    const translations = [_][2]f32{
+        .{ 0, 0 },
+        .{ 64, 0 },
+        .{ 64, -32 },
+        .{ 128, 96 },
+    };
+
+    for (translations) |translation| {
+        const cached = composer.compose(translation[0], translation[1]);
+        const direct = motor.composeTranslation(translation[0], translation[1]);
+        const general = Motor.compose(motor, Motor.fromTranslation(translation[0], translation[1]));
+
+        for (cached.m, direct.m) |actual, expected| {
+            try testing.expectApproxEqAbs(expected, actual, 1.0e-6);
+        }
+        for (cached.m, general.m) |actual, expected| {
+            try testing.expectApproxEqAbs(expected, actual, 1.0e-6);
+        }
     }
 }
 
