@@ -28,7 +28,7 @@ const frames_in_flight = 3;
 pub const Stats = if (@import("builtin").mode == .Debug) struct {
     common: render.Stats = .{},
     descriptor_writes: u32 = 0,
-    descriptor_flush_calls: u32 = 0,
+    descriptor_push_calls: u32 = 0,
     frame_resources_in_use: u32 = 0,
     shader: heavy_slug.ShaderStats = .{},
 
@@ -40,10 +40,10 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
         if (backend_options.shader_stats) {
             const shader_analysis = self.shader.analysis();
             std.log.scoped(.renderer).debug(
-                "vulkan stats: desc_writes={d} desc_flushes={d} frame_busy={d} task_visible={d}/{d} mesh_tiles={d}/{d} tile_culled={d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
+                "vulkan stats: desc_writes={d} desc_pushes={d} frame_busy={d} task_visible={d}/{d} mesh_tiles={d}/{d} tile_culled={d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
                 .{
                     self.descriptor_writes,
-                    self.descriptor_flush_calls,
+                    self.descriptor_push_calls,
                     self.frame_resources_in_use,
                     self.shader.task_glyphs_visible,
                     self.shader.task_glyphs_tested,
@@ -63,10 +63,10 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
             );
         } else {
             std.log.scoped(.renderer).debug(
-                "vulkan stats: desc_writes={d} desc_flushes={d} frame_busy={d}",
+                "vulkan stats: desc_writes={d} desc_pushes={d} frame_busy={d}",
                 .{
                     self.descriptor_writes,
-                    self.descriptor_flush_calls,
+                    self.descriptor_push_calls,
                     self.frame_resources_in_use,
                 },
             );
@@ -226,7 +226,7 @@ pub const Renderer = struct {
     mesh_shader_properties: vk.PhysicalDeviceMeshShaderPropertiesEXT,
 
     core: render.RendererCore,
-    descriptor_table: descriptors.DescriptorTable,
+    descriptor_layout: descriptors.DescriptorLayout,
     pipeline: pipeline_mod.Pipeline,
 
     // Host-visible storage buffers.
@@ -250,7 +250,7 @@ pub const Renderer = struct {
         allocator: std.mem.Allocator,
         options: RendererOptions,
     ) !Renderer {
-        try gpu_context.validateDeviceProperties(ctx.api_version, ctx.mesh_shader_properties);
+        try gpu_context.validateDeviceProperties(ctx.api_version, ctx.mesh_shader_properties, ctx.vulkan14_properties);
         try validateTaskDrawWorkgroups(
             ctx.mesh_shader_properties,
             mesh_limits.taskWorkgroupCount(options.max_glyphs_per_frame),
@@ -258,16 +258,12 @@ pub const Renderer = struct {
 
         const device = ctx.device;
         const dispatch = ctx.dispatch;
-        var descriptor_table = try descriptors.DescriptorTable.init(
-            ctx,
-            allocator,
-            frames_in_flight,
-        );
-        errdefer descriptor_table.deinit(allocator);
+        var descriptor_layout = try descriptors.DescriptorLayout.init(ctx);
+        errdefer descriptor_layout.deinit();
 
         var pipeline = try pipeline_mod.Pipeline.init(
             ctx,
-            descriptor_table.layout,
+            descriptor_layout.layout,
             color_format,
         );
         errdefer pipeline.deinit();
@@ -326,7 +322,7 @@ pub const Renderer = struct {
             .dispatch = dispatch,
             .mesh_shader_properties = ctx.mesh_shader_properties,
             .core = core,
-            .descriptor_table = descriptor_table,
+            .descriptor_layout = descriptor_layout,
             .pipeline = pipeline,
             .pool_buffer = pool_buf,
             .glyph_buffers = glyph_buffers,
@@ -364,7 +360,6 @@ pub const Renderer = struct {
         }
         self.active_frame = next_frame;
         self.stats.reset();
-        self.descriptor_table.resetDebugStats();
         if (backend_options.shader_stats) resetShaderStatsBuffer(self.shader_stats_buffers[self.active_frame]);
         self.core.setRetireAfterToken(self.last_submitted_frame);
         self.core.beginFrame(self.completed_frame, self);
@@ -391,10 +386,7 @@ pub const Renderer = struct {
     pub fn statsSnapshot(self: *const Renderer) Stats {
         if (@import("builtin").mode != .Debug) return .{};
         var out = self.stats;
-        const desc_stats = self.descriptor_table.debugStats();
         out.common = self.core.stats;
-        out.descriptor_writes = desc_stats.descriptor_writes;
-        out.descriptor_flush_calls = desc_stats.descriptor_flush_calls;
         if (backend_options.shader_stats) out.shader = self.shader_stats_snapshot;
         return out;
     }
@@ -467,28 +459,33 @@ pub const Renderer = struct {
         self.dispatch.cmdBindPipeline(vk_cmd, .graphics, self.pipeline.pipeline);
 
         const glyph_buffer = self.glyph_buffers[self.active_frame];
-        self.descriptor_table.updateGlyphPool(self.active_frame, self.pool_buffer.buffer, 0, self.pool_buffer.size);
-        self.descriptor_table.updateGlyphBuffer(self.active_frame, glyph_buffer.buffer, 0, glyph_buffer.size);
-        if (backend_options.shader_stats) {
+        const shader_stats_binding: ?descriptors.BufferBinding = if (backend_options.shader_stats) blk: {
             const stats_buffer = self.shader_stats_buffers[self.active_frame];
-            self.descriptor_table.updateShaderStatsBuffer(
-                self.active_frame,
-                stats_buffer.buffer,
-                0,
-                @sizeOf(heavy_slug.ShaderStats),
-            );
-        }
-        // Commit all descriptor writes before binding the frame-local set.
-        self.descriptor_table.flushWrites();
-
-        self.dispatch.cmdBindDescriptorSets(
+            break :blk .{
+                .buffer = stats_buffer.buffer,
+                .offset = 0,
+                .range = @sizeOf(heavy_slug.ShaderStats),
+            };
+        } else null;
+        const descriptor_stats = self.descriptor_layout.pushFrameBindings(
             vk_cmd,
-            .graphics,
             self.pipeline.pipeline_layout,
-            0,
-            &.{self.descriptor_table.setForFrame(self.active_frame)},
-            null,
+            .{
+                .buffer = self.pool_buffer.buffer,
+                .offset = 0,
+                .range = self.pool_buffer.size,
+            },
+            .{
+                .buffer = glyph_buffer.buffer,
+                .offset = 0,
+                .range = glyph_buffer.size,
+            },
+            shader_stats_binding,
         );
+        if (@import("builtin").mode == .Debug) {
+            self.stats.descriptor_writes += descriptor_stats.descriptor_writes;
+            self.stats.descriptor_push_calls += descriptor_stats.descriptor_push_calls;
+        }
 
         // Scale projection from pixel-space to 26.6 em-space.
         // Motor translations and em-box extents are in 26.6 units (64x pixels).
@@ -536,7 +533,7 @@ pub const Renderer = struct {
 
         self.core.deinit();
         self.pipeline.deinit();
-        self.descriptor_table.deinit(self.allocator);
+        self.descriptor_layout.deinit();
 
         self.* = undefined;
     }
@@ -606,7 +603,7 @@ test "Stats type compiles and has expected API" {
     stats.log();
     if (@import("builtin").mode == .Debug) {
         try std.testing.expectEqual(@as(u32, 0), stats.descriptor_writes);
-        try std.testing.expectEqual(@as(u32, 0), stats.descriptor_flush_calls);
+        try std.testing.expectEqual(@as(u32, 0), stats.descriptor_push_calls);
     }
 }
 

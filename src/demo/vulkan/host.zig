@@ -3,11 +3,18 @@
 const std = @import("std");
 const vk = @import("vulkan");
 const glfw = @import("demo_glfw");
-const gpu_context = @import("heavy_slug_vulkan").context;
+const heavy_slug_vulkan = @import("heavy_slug_vulkan");
+const gpu_context = heavy_slug_vulkan.context;
+const vk_chains = heavy_slug_vulkan.chains;
 
 // Manual externs avoid including vulkan.h alongside vulkan-zig types.
 extern fn glfwGetInstanceProcAddress(instance: vk.Instance, procname: [*:0]const u8) vk.PfnVoidFunction;
 extern fn glfwCreateWindowSurface(instance: vk.Instance, window: glfw.Window, allocator: ?*const anyopaque, surface: *vk.SurfaceKHR) vk.Result;
+
+const demo_device_extensions = [_][*:0]const u8{
+    "VK_KHR_swapchain",
+    "VK_EXT_mesh_shader",
+};
 
 fn getRequiredInstanceExtensions() []const [*:0]const u8 {
     return glfw.getRequiredInstanceExtensions();
@@ -150,7 +157,9 @@ pub const GraphicsContext = struct {
         var chosen_gfx: u32 = undefined;
         var chosen_present: u32 = undefined;
         for (devices[0..dev_count]) |pdev| {
+            if (!try supportsDeviceExtensions(pdev, lib_idisp, allocator, &demo_device_extensions)) continue;
             gpu_context.VulkanContext.checkDeviceSupport(pdev, lib_idisp, allocator) catch continue;
+            if (!supportsRequiredDemoFeatures(pdev, lib_idisp)) continue;
 
             const families = findQueueFamilies(pdev, surface, demo_idisp, allocator) catch continue;
             chosen_gfx = families[0];
@@ -177,28 +186,15 @@ pub const GraphicsContext = struct {
 
         // Feature chain (pNext traversal order): features2 -> vk13 -> vk14 -> mesh_shader.
         // Bool32 enum fields use .true/.false (not vk.TRUE/vk.FALSE).
-        var mesh_shader = vk.PhysicalDeviceMeshShaderFeaturesEXT{
-            .task_shader = .true,
-            .mesh_shader = .true,
-        };
-        var vk14_features = vk.PhysicalDeviceVulkan14Features{
-            .p_next = @ptrCast(&mesh_shader),
-        };
-        var vk13_features = vk.PhysicalDeviceVulkan13Features{
-            .p_next = @ptrCast(&vk14_features),
-            .dynamic_rendering = .true,
-            .synchronization_2 = .true,
-            .maintenance_4 = .true,
-        };
-        var features2 = vk.PhysicalDeviceFeatures2{
-            .p_next = @ptrCast(&vk13_features),
-            .features = .{},
-        };
-
-        const all_device_exts = [_][*:0]const u8{
-            "VK_KHR_swapchain",
-            "VK_EXT_mesh_shader",
-        };
+        var mesh_shader = vk_chains.meshShaderFeatures();
+        mesh_shader.task_shader = .true;
+        mesh_shader.mesh_shader = .true;
+        var vk14_features = vk_chains.vulkan14Features(@ptrCast(&mesh_shader));
+        vk14_features.push_descriptor = .true;
+        var vk13_features = vk_chains.vulkan13Features(@ptrCast(&vk14_features));
+        vk13_features.dynamic_rendering = .true;
+        vk13_features.synchronization_2 = .true;
+        var features2 = vk_chains.physicalDeviceFeatures2(@ptrCast(&vk13_features));
 
         // pp_enabled_layer_names is *const *const u8 (non-optional in this vk.zig version).
         // We pass 0 layers; the pointer is never dereferenced by the driver when count=0.
@@ -209,8 +205,8 @@ pub const GraphicsContext = struct {
             .p_queue_create_infos = &queue_cis,
             .enabled_layer_count = 0,
             .pp_enabled_layer_names = @ptrCast(&empty_layers),
-            .enabled_extension_count = all_device_exts.len,
-            .pp_enabled_extension_names = &all_device_exts,
+            .enabled_extension_count = demo_device_extensions.len,
+            .pp_enabled_extension_names = &demo_device_extensions,
             .p_enabled_features = null,
         }, null);
 
@@ -578,6 +574,52 @@ pub const GraphicsContext = struct {
         self.demo_idisp.destroyInstance(self.instance, null);
     }
 };
+
+fn supportsDeviceExtensions(
+    pdev: vk.PhysicalDevice,
+    idisp: gpu_context.InstanceDispatch,
+    allocator: std.mem.Allocator,
+    required_extensions: []const [*:0]const u8,
+) error{OutOfMemory}!bool {
+    const available = idisp.enumerateDeviceExtensionPropertiesAlloc(
+        pdev,
+        null,
+        allocator,
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return false,
+    };
+    defer allocator.free(available);
+
+    for (required_extensions) |required| {
+        const req_name = std.mem.span(required);
+        var found = false;
+        for (available) |ext| {
+            const ext_name = std.mem.sliceTo(&ext.extension_name, 0);
+            if (std.mem.eql(u8, ext_name, req_name)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return true;
+}
+
+fn supportsRequiredDemoFeatures(
+    pdev: vk.PhysicalDevice,
+    idisp: gpu_context.InstanceDispatch,
+) bool {
+    var mesh_shader = vk_chains.meshShaderFeatures();
+    var vk14_features = vk_chains.vulkan14Features(@ptrCast(&mesh_shader));
+    var vk13_features = vk_chains.vulkan13Features(@ptrCast(&vk14_features));
+    var features2 = vk_chains.physicalDeviceFeatures2(@ptrCast(&vk13_features));
+    idisp.getPhysicalDeviceFeatures2(pdev, &features2);
+
+    return vk13_features.dynamic_rendering == .true and
+        vk13_features.synchronization_2 == .true and
+        vk14_features.push_descriptor == .true;
+}
 
 fn findQueueFamilies(
     pdev: vk.PhysicalDevice,

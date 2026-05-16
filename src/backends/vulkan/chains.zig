@@ -1,0 +1,76 @@
+//! Vulkan pNext chain initializers with explicit sType values.
+
+const std = @import("std");
+const vk = @import("vulkan");
+
+pub fn meshShaderProperties() vk.PhysicalDeviceMeshShaderPropertiesEXT {
+    var props = std.mem.zeroes(vk.PhysicalDeviceMeshShaderPropertiesEXT);
+    props.s_type = .physical_device_mesh_shader_properties_ext;
+    props.p_next = null;
+    return props;
+}
+
+pub fn vulkan14Properties(p_next: ?*anyopaque) vk.PhysicalDeviceVulkan14Properties {
+    var props = std.mem.zeroes(vk.PhysicalDeviceVulkan14Properties);
+    props.s_type = .physical_device_vulkan_1_4_properties;
+    props.p_next = p_next;
+    return props;
+}
+
+pub fn physicalDeviceProperties2(p_next: ?*anyopaque) vk.PhysicalDeviceProperties2 {
+    var props = std.mem.zeroes(vk.PhysicalDeviceProperties2);
+    props.s_type = .physical_device_properties_2;
+    props.p_next = p_next;
+    return props;
+}
+
+pub fn meshShaderFeatures() vk.PhysicalDeviceMeshShaderFeaturesEXT {
+    var features = std.mem.zeroes(vk.PhysicalDeviceMeshShaderFeaturesEXT);
+    features.s_type = .physical_device_mesh_shader_features_ext;
+    features.p_next = null;
+    return features;
+}
+
+pub fn vulkan14Features(p_next: ?*anyopaque) vk.PhysicalDeviceVulkan14Features {
+    var features = std.mem.zeroes(vk.PhysicalDeviceVulkan14Features);
+    features.s_type = .physical_device_vulkan_1_4_features;
+    features.p_next = p_next;
+    return features;
+}
+
+pub fn vulkan13Features(p_next: ?*anyopaque) vk.PhysicalDeviceVulkan13Features {
+    var features = std.mem.zeroes(vk.PhysicalDeviceVulkan13Features);
+    features.s_type = .physical_device_vulkan_1_3_features;
+    features.p_next = p_next;
+    return features;
+}
+
+pub fn physicalDeviceFeatures2(p_next: ?*anyopaque) vk.PhysicalDeviceFeatures2 {
+    var features = std.mem.zeroes(vk.PhysicalDeviceFeatures2);
+    features.s_type = .physical_device_features_2;
+    features.p_next = p_next;
+    return features;
+}
+
+test "properties2 chain roots keep sType and zeroed payloads" {
+    var mesh_props = meshShaderProperties();
+    var vk14_props = vulkan14Properties(@ptrCast(&mesh_props));
+    const properties2 = physicalDeviceProperties2(@ptrCast(&vk14_props));
+
+    try std.testing.expectEqual(vk.StructureType.physical_device_properties_2, properties2.s_type);
+    try std.testing.expectEqual(vk.StructureType.physical_device_vulkan_1_4_properties, vk14_props.s_type);
+    try std.testing.expectEqual(vk.StructureType.physical_device_mesh_shader_properties_ext, mesh_props.s_type);
+    try std.testing.expectEqual(@as(u32, 0), properties2.properties.api_version);
+}
+
+test "features2 chain roots keep sType values" {
+    var mesh_features = meshShaderFeatures();
+    var vk14_features = vulkan14Features(@ptrCast(&mesh_features));
+    var vk13_features = vulkan13Features(@ptrCast(&vk14_features));
+    const features2 = physicalDeviceFeatures2(@ptrCast(&vk13_features));
+
+    try std.testing.expectEqual(vk.StructureType.physical_device_features_2, features2.s_type);
+    try std.testing.expectEqual(vk.StructureType.physical_device_vulkan_1_3_features, vk13_features.s_type);
+    try std.testing.expectEqual(vk.StructureType.physical_device_vulkan_1_4_features, vk14_features.s_type);
+    try std.testing.expectEqual(vk.StructureType.physical_device_mesh_shader_features_ext, mesh_features.s_type);
+}

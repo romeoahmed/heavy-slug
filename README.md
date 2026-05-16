@@ -118,9 +118,9 @@ workflow.
 | Target | Required to build | Extra for demo/runtime |
 | --- | --- | --- |
 | Core, all platforms | Zig `0.16.0`; C/C++ toolchain; first-build network access for pinned Zig packages | No `slangc`, Vulkan, Metal, or GLFW required |
-| Vulkan backend, Linux | Zig; `slangc`; lazy `vulkan_headers`; lazy `vulkan-zig` | Vulkan loader/driver; Vulkan 1.4; `VK_EXT_mesh_shader`; task/mesh features; sufficient mesh limits |
+| Vulkan backend, Linux | Zig; `slangc`; lazy `vulkan_headers`; lazy `vulkan-zig` | Vulkan loader/driver; Vulkan 1.4; core `pushDescriptor`; `VK_EXT_mesh_shader`; task/mesh features; sufficient mesh limits |
 | Vulkan demo, Linux | Vulkan backend deps; lazy GLFW source; `wayland-scanner`; `wayland-client`; `wayland-cursor`; `wayland-egl`; `xkbcommon` dev libraries | Wayland-capable desktop/session and Vulkan runtime |
-| Vulkan backend/demo, Windows | Zig; `slangc`; lazy `vulkan_headers`; lazy `vulkan-zig`; lazy GLFW source | Vulkan loader/runtime; Vulkan 1.4 driver; `VK_EXT_mesh_shader`; links `gdi32`, `user32`, `shell32` |
+| Vulkan backend/demo, Windows | Zig; `slangc`; lazy `vulkan_headers`; lazy `vulkan-zig`; lazy GLFW source | Vulkan loader/runtime; Vulkan 1.4 driver; core `pushDescriptor`; `VK_EXT_mesh_shader`; links `gdi32`, `user32`, `shell32` |
 | Metal backend, macOS | Zig; `slangc`; Apple SDK with Metal 4 APIs; Objective-C++ support; `Metal`, `QuartzCore`, `Foundation` | GPU supporting `MTLGPUFamilyMetal4`; host supplies `id<MTLDevice>`, `id<MTL4CommandQueue>`, `CAMetalLayer *` |
 | Metal demo, macOS | Metal backend deps; lazy GLFW source; Cocoa GLFW backend | `Cocoa`, `IOKit`, `CoreFoundation` |
 
@@ -241,12 +241,14 @@ UTF-8 text
 
 | Backend | Resource model | Required API path |
 | --- | --- | --- |
-| Vulkan | One glyph blob storage buffer; one frame-local `GlyphInstance[]`; optional shader stats buffer | Vulkan 1.4, SPIR-V 1.6, `VK_EXT_mesh_shader`, dynamic rendering |
+| Vulkan | One glyph blob storage buffer; one frame-local `GlyphInstance[]`; optional shader stats buffer; pushed frame bindings | Vulkan 1.4, SPIR-V 1.6, core `pushDescriptor`, `VK_EXT_mesh_shader`, dynamic rendering |
 | Metal | Bridge-owned buffers; per-frame `MTL4ArgumentTable`; Metal residency set | Metal 4, `MTL4CommandQueue`, `MTL4CommandAllocator`, `MTL4Compiler`, `MTL4MeshRenderPipelineDescriptor` |
 
 The current Vulkan hot path is the single glyph-pool buffer plus `GlyphBlobRef`
-byte offsets. The Metal backend follows the Metal 4 command and argument-table
-model rather than the older command-buffer and stage-specific setter model.
+byte offsets. Vulkan frame bindings use core 1.4 push descriptors, so there is
+no per-frame descriptor pool or descriptor set allocation. The Metal backend
+follows the Metal 4 command and argument-table model rather than the older
+command-buffer and stage-specific setter model.
 
 ## Shader Layout
 
@@ -277,7 +279,7 @@ zig-out/shaders/msl/fragment.metal
 
 | Diagnostic source | Signals |
 | --- | --- |
-| CPU/backend debug stats | Shaping counts, cache hits/misses, encoded spans, uploaded bytes, pool fragmentation, deferred retirements, descriptor writes, frame-slot waits. |
+| CPU/backend debug stats | Shaping counts, cache hits/misses, encoded spans, uploaded bytes, pool fragmentation, deferred retirements, descriptor writes/pushes, frame-slot waits. |
 | Shader stats opt-in | Visible glyphs, emitted mesh tiles, mesh culls, fragment counts, candidate-path usage, full-scan fallback, curve tests, zero-coverage fragments. |
 
 Enable shader counters only when investigating performance:

@@ -67,8 +67,8 @@ demos. Core-only `zig build` and `zig build test` do not require `slangc`.
 
 Vulkan builds use lazy `vulkan` and `vulkan_headers` package dependencies.
 Runtime/demo execution needs a Vulkan loader, a Vulkan 1.4 driver, and
-`VK_EXT_mesh_shader` with task/mesh shader features and sufficient mesh limits.
-The Vulkan demo is supported on Windows and Linux.
+core `pushDescriptor` plus `VK_EXT_mesh_shader` with task/mesh shader features
+and sufficient mesh limits. The Vulkan demo is supported on Windows and Linux.
 
 Linux Vulkan demo builds also need `wayland-scanner` plus development libraries
 for `wayland-client`, `wayland-cursor`, `wayland-egl`, and `xkbcommon`.
@@ -110,7 +110,7 @@ Preserve the single glyph-pool buffer model unless profiling proves a stronger
 alternative. Do not reintroduce per-glyph Vulkan descriptor slots, Vulkan
 descriptor indexing as the glyph addressing model, or `VK_EXT_descriptor_heap`
 as architectural churn. The current hot path deliberately uses byte-offset
-`GlyphBlobRef` values.
+`GlyphBlobRef` values and Vulkan 1.4 push descriptors for per-frame bindings.
 
 For Metal, new command submission and resource binding work should use the
 Metal 4 API family: `MTL4CommandQueue`, `MTL4CommandAllocator`,

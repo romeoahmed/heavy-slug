@@ -3,8 +3,10 @@
 const std = @import("std");
 const vk = @import("vulkan");
 const heavy_slug = @import("heavy_slug");
+const chains = @import("chains.zig");
 
 const mesh_limits = heavy_slug.gpu.mesh_limits;
+const required_push_descriptors: u32 = 3;
 
 /// Device extensions that callers must enable on the VkDevice.
 const required_extensions = [_][*:0]const u8{
@@ -47,12 +49,20 @@ pub fn validateMeshShaderLimits(props: vk.PhysicalDeviceMeshShaderPropertiesEXT)
     }
 }
 
+pub fn validatePushDescriptorSupport(props: vk.PhysicalDeviceVulkan14Properties) FeatureError!void {
+    if (props.max_push_descriptors < required_push_descriptors) {
+        return FeatureError.PushDescriptorLimitNotSupported;
+    }
+}
+
 pub fn validateDeviceProperties(
     api_version: u32,
     mesh_props: vk.PhysicalDeviceMeshShaderPropertiesEXT,
+    vk14_props: vk.PhysicalDeviceVulkan14Properties,
 ) FeatureError!void {
     try validateApiVersion(api_version);
     try validateMeshShaderLimits(mesh_props);
+    try validatePushDescriptorSupport(vk14_props);
 }
 
 /// Caller-owned Vulkan device plus loaded dispatch and queried properties.
@@ -70,6 +80,7 @@ pub const VulkanContext = struct {
     api_version: u32,
     memory_properties: vk.PhysicalDeviceMemoryProperties,
     mesh_shader_properties: vk.PhysicalDeviceMeshShaderPropertiesEXT,
+    vulkan14_properties: vk.PhysicalDeviceVulkan14Properties,
 
     /// Required device extensions. Enable all of these in VkDeviceCreateInfo.
     pub const required_device_extensions = required_extensions;
@@ -106,25 +117,20 @@ pub const VulkanContext = struct {
             if (!found) return FeatureError.ExtensionNotSupported;
         }
 
-        var mesh_properties = vk.PhysicalDeviceMeshShaderPropertiesEXT{};
-        var properties2 = vk.PhysicalDeviceProperties2{
-            .p_next = @ptrCast(&mesh_properties),
-            .properties = .{},
-        };
+        var properties2 = chains.physicalDeviceProperties2(null);
         instance_dispatch.getPhysicalDeviceProperties2(physical_device, &properties2);
-        try validateDeviceProperties(properties2.properties.api_version, mesh_properties);
+        try validateApiVersion(properties2.properties.api_version);
 
-        var mesh_features = vk.PhysicalDeviceMeshShaderFeaturesEXT{};
-        var vk14_features = vk.PhysicalDeviceVulkan14Features{
-            .p_next = @ptrCast(&mesh_features),
-        };
-        var vk13_features = vk.PhysicalDeviceVulkan13Features{
-            .p_next = @ptrCast(&vk14_features),
-        };
-        var features2 = vk.PhysicalDeviceFeatures2{
-            .p_next = @ptrCast(&vk13_features),
-            .features = .{},
-        };
+        var mesh_properties = chains.meshShaderProperties();
+        var vk14_properties = chains.vulkan14Properties(@ptrCast(&mesh_properties));
+        properties2 = chains.physicalDeviceProperties2(@ptrCast(&vk14_properties));
+        instance_dispatch.getPhysicalDeviceProperties2(physical_device, &properties2);
+        try validateDeviceProperties(properties2.properties.api_version, mesh_properties, vk14_properties);
+
+        var mesh_features = chains.meshShaderFeatures();
+        var vk14_features = chains.vulkan14Features(@ptrCast(&mesh_features));
+        var vk13_features = chains.vulkan13Features(@ptrCast(&vk14_features));
+        var features2 = chains.physicalDeviceFeatures2(@ptrCast(&vk13_features));
         instance_dispatch.getPhysicalDeviceFeatures2(physical_device, &features2);
 
         if (vk13_features.dynamic_rendering == .false) {
@@ -132,6 +138,9 @@ pub const VulkanContext = struct {
         }
         if (mesh_features.task_shader == .false or mesh_features.mesh_shader == .false) {
             return FeatureError.MeshShaderNotSupported;
+        }
+        if (vk14_features.push_descriptor == .false) {
+            return FeatureError.PushDescriptorNotSupported;
         }
     }
 
@@ -151,11 +160,9 @@ pub const VulkanContext = struct {
     ) VulkanContext {
         const dispatch = DeviceDispatch.load(device, get_device_proc_addr);
         const mem_props = instance_dispatch.getPhysicalDeviceMemoryProperties(physical_device);
-        var mesh_shader_properties = vk.PhysicalDeviceMeshShaderPropertiesEXT{};
-        var properties2 = vk.PhysicalDeviceProperties2{
-            .p_next = @ptrCast(&mesh_shader_properties),
-            .properties = .{},
-        };
+        var mesh_shader_properties = chains.meshShaderProperties();
+        var vulkan14_properties = chains.vulkan14Properties(@ptrCast(&mesh_shader_properties));
+        var properties2 = chains.physicalDeviceProperties2(@ptrCast(&vulkan14_properties));
         instance_dispatch.getPhysicalDeviceProperties2(physical_device, &properties2);
         return .{
             .device = device,
@@ -164,6 +171,7 @@ pub const VulkanContext = struct {
             .api_version = properties2.properties.api_version,
             .memory_properties = mem_props,
             .mesh_shader_properties = mesh_shader_properties,
+            .vulkan14_properties = vulkan14_properties,
         };
     }
 };
@@ -173,10 +181,6 @@ const HeavySlugDispatch = struct {
     vkDestroyDevice: ?vk.PfnDestroyDevice = null,
     vkCreateDescriptorSetLayout: ?vk.PfnCreateDescriptorSetLayout = null,
     vkDestroyDescriptorSetLayout: ?vk.PfnDestroyDescriptorSetLayout = null,
-    vkCreateDescriptorPool: ?vk.PfnCreateDescriptorPool = null,
-    vkDestroyDescriptorPool: ?vk.PfnDestroyDescriptorPool = null,
-    vkAllocateDescriptorSets: ?vk.PfnAllocateDescriptorSets = null,
-    vkUpdateDescriptorSets: ?vk.PfnUpdateDescriptorSets = null,
     vkCreatePipelineLayout: ?vk.PfnCreatePipelineLayout = null,
     vkDestroyPipelineLayout: ?vk.PfnDestroyPipelineLayout = null,
     vkCreateGraphicsPipelines: ?vk.PfnCreateGraphicsPipelines = null,
@@ -191,7 +195,7 @@ const HeavySlugDispatch = struct {
     vkMapMemory: ?vk.PfnMapMemory = null,
     vkUnmapMemory: ?vk.PfnUnmapMemory = null,
     vkCmdBindPipeline: ?vk.PfnCmdBindPipeline = null,
-    vkCmdBindDescriptorSets: ?vk.PfnCmdBindDescriptorSets = null,
+    vkCmdPushDescriptorSet: ?vk.PfnCmdPushDescriptorSet = null,
     vkCmdPushConstants: ?vk.PfnCmdPushConstants = null,
     vkCmdDrawMeshTasksEXT: ?vk.PfnCmdDrawMeshTasksEXT = null,
     vkQueueSubmit2: ?vk.PfnQueueSubmit2 = null,
@@ -210,14 +214,17 @@ pub const FeatureError = error{
     MeshShaderNotSupported,
     MeshShaderLimitsNotSupported,
     DynamicRenderingNotSupported,
+    PushDescriptorNotSupported,
+    PushDescriptorLimitNotSupported,
     ExtensionNotSupported,
 };
 
-test "HeavySlugDispatch has buffer and viewport commands" {
+test "HeavySlugDispatch has buffer, viewport, and push descriptor commands" {
     comptime {
         std.debug.assert(@hasField(HeavySlugDispatch, "vkGetBufferMemoryRequirements"));
         std.debug.assert(@hasField(HeavySlugDispatch, "vkCmdSetViewport"));
         std.debug.assert(@hasField(HeavySlugDispatch, "vkCmdSetScissor"));
+        std.debug.assert(@hasField(HeavySlugDispatch, "vkCmdPushDescriptorSet"));
     }
 }
 
@@ -247,7 +254,7 @@ test "required_api_version is Vulkan 1.4" {
 }
 
 fn supportedMeshProps() vk.PhysicalDeviceMeshShaderPropertiesEXT {
-    var props = std.mem.zeroes(vk.PhysicalDeviceMeshShaderPropertiesEXT);
+    var props = chains.meshShaderProperties();
     props.max_task_work_group_total_count = 1;
     props.max_task_work_group_count = .{ 1, 1, 1 };
     props.max_task_work_group_invocations = mesh_limits.task_group_size;
@@ -264,39 +271,54 @@ fn supportedMeshProps() vk.PhysicalDeviceMeshShaderPropertiesEXT {
     return props;
 }
 
+fn supportedVulkan14Props() vk.PhysicalDeviceVulkan14Properties {
+    var props = chains.vulkan14Properties(null);
+    props.max_push_descriptors = required_push_descriptors;
+    return props;
+}
+
 test "validateDeviceProperties requires Vulkan 1.4 and mesh shader budgets" {
-    try validateDeviceProperties(vk.API_VERSION_1_4.toU32(), supportedMeshProps());
+    try validateDeviceProperties(vk.API_VERSION_1_4.toU32(), supportedMeshProps(), supportedVulkan14Props());
 
     try std.testing.expectError(
         FeatureError.Vulkan14NotSupported,
-        validateDeviceProperties(vk.API_VERSION_1_3.toU32(), supportedMeshProps()),
+        validateDeviceProperties(vk.API_VERSION_1_3.toU32(), supportedMeshProps(), supportedVulkan14Props()),
     );
 
     var low_payload = supportedMeshProps();
     low_payload.max_task_payload_size = mesh_limits.task_payload_bytes - 1;
     try std.testing.expectError(
         FeatureError.MeshShaderLimitsNotSupported,
-        validateDeviceProperties(vk.API_VERSION_1_4.toU32(), low_payload),
+        validateDeviceProperties(vk.API_VERSION_1_4.toU32(), low_payload, supportedVulkan14Props()),
     );
 
     var no_task_grid = supportedMeshProps();
     no_task_grid.max_task_work_group_count[0] = 0;
     try std.testing.expectError(
         FeatureError.MeshShaderLimitsNotSupported,
-        validateDeviceProperties(vk.API_VERSION_1_4.toU32(), no_task_grid),
+        validateDeviceProperties(vk.API_VERSION_1_4.toU32(), no_task_grid, supportedVulkan14Props()),
     );
 
     var low_mesh_grid = supportedMeshProps();
     low_mesh_grid.max_mesh_work_group_count[0] = mesh_limits.task_max_meshlets - 1;
     try std.testing.expectError(
         FeatureError.MeshShaderLimitsNotSupported,
-        validateDeviceProperties(vk.API_VERSION_1_4.toU32(), low_mesh_grid),
+        validateDeviceProperties(vk.API_VERSION_1_4.toU32(), low_mesh_grid, supportedVulkan14Props()),
     );
 
     var low_output = supportedMeshProps();
     low_output.max_mesh_output_vertices = mesh_limits.mesh_output_vertices - 1;
     try std.testing.expectError(
         FeatureError.MeshShaderLimitsNotSupported,
-        validateDeviceProperties(vk.API_VERSION_1_4.toU32(), low_output),
+        validateDeviceProperties(vk.API_VERSION_1_4.toU32(), low_output, supportedVulkan14Props()),
+    );
+}
+
+test "validateDeviceProperties requires enough Vulkan 1.4 push descriptors" {
+    var low_push_descriptors = supportedVulkan14Props();
+    low_push_descriptors.max_push_descriptors = required_push_descriptors - 1;
+    try std.testing.expectError(
+        FeatureError.PushDescriptorLimitNotSupported,
+        validateDeviceProperties(vk.API_VERSION_1_4.toU32(), supportedMeshProps(), low_push_descriptors),
     );
 }

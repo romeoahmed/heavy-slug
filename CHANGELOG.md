@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Vulkan frame bindings now use core 1.4 push descriptors** instead of
+  frame-local descriptor pools, descriptor set allocation, and
+  `vkUpdateDescriptorSets`.
+
+### Fixed
+
+- **Vulkan demo build:** initialize Vulkan property/feature `pNext`
+  chains with explicit `sType` values and zeroed payload structs so Zig 0.16
+  bindings compile the demo path consistently.
+
 ## [3.0.0] - 2026-05-16
 
 ### Changed
