@@ -36,6 +36,7 @@ pub fn main() !void {
     var scene: demo_scene.Scene = .{};
     var submitted_text_tokens = [_]heavy_slug_vulkan.FrameToken{0} ** demo_vk.GraphicsContext.FRAMES_IN_FLIGHT;
     var last_time = glfw.getTime();
+    var stats_log_time = last_time;
 
     while (!glfw.shouldClose(window)) {
         glfw.pollEvents();
@@ -55,6 +56,10 @@ pub fn main() !void {
             continue;
         };
         text_renderer.markFrameComplete(submitted_text_tokens[frame.frame_index]);
+        if (now - stats_log_time >= 1.0) {
+            text_renderer.statsSnapshot().log();
+            stats_log_time = now;
+        }
 
         const viewport = [2]f32{ w, h };
         var text_frame = try text_renderer.beginFrame();

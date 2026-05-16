@@ -50,6 +50,7 @@ pub fn main() !void {
 
     var scene: demo_scene.Scene = .{};
     var last_time = glfw.getTime();
+    var stats_log_time = last_time;
 
     while (!glfw.shouldClose(window)) {
         glfw.pollEvents();
@@ -73,5 +74,9 @@ pub fn main() !void {
             .projection = scene.projection(w, h),
             .clear_color = scene.clearColor(),
         });
+        if (now - stats_log_time >= 1.0) {
+            text_renderer.statsSnapshot().log();
+            stats_log_time = now;
+        }
     }
 }

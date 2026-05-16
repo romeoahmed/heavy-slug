@@ -3,6 +3,7 @@
 const std = @import("std");
 const cache_mod = @import("../cache/glyph_cache.zig");
 const pool_mod = @import("../cache/byte_pool.zig");
+const blob_format = @import("../blob/format.zig");
 const font_mod = @import("../font/root.zig");
 const glyph_store_mod = @import("glyph_store.zig");
 const backend_contract = @import("backend_contract.zig");
@@ -111,6 +112,17 @@ pub fn emBoxFromExtents(ext: hb.GlyphExtents) cache_mod.EmBox {
         .y_min = @min(y0, y1),
         .x_max = @max(x0, x1),
         .y_max = @max(y0, y1),
+    };
+}
+
+pub fn emBoxFromBlobBounds(blob: blob_format.CoverageBlob) cache_mod.EmBox {
+    std.debug.assert(blob.texels.len >= blob_format.header_len);
+    const bounds = blob.texels[0];
+    return .{
+        .x_min = units.blobUnitsToPixels(bounds.r),
+        .y_min = units.blobUnitsToPixels(bounds.g),
+        .x_max = units.blobUnitsToPixels(bounds.b),
+        .y_max = units.blobUnitsToPixels(bounds.a),
     };
 }
 
@@ -332,7 +344,7 @@ pub const RendererCore = struct {
             self.stats.regularized_spans += encoded.regularized_spans;
         }
 
-        const em_box = emBoxFromExtents(encoded.extents);
+        const extent_box = emBoxFromExtents(encoded.extents);
 
         if (self.store.glyph_cache.cold_count >= self.store.glyph_cache.cold_capacity) {
             if (self.store.glyph_cache.evictLruNotUsedInFrame(self.store.glyph_cache.current_frame)) |evicted| {
@@ -344,10 +356,11 @@ pub const RendererCore = struct {
         }
 
         if (encoded.data.len == 0) {
-            try self.store.glyph_cache.insertCold(cache_key, GlyphRef.empty, .{ .offset = 0, .size = 0 }, em_box);
-            return .{ .ref = GlyphRef.empty, .em_box = em_box };
+            try self.store.glyph_cache.insertCold(cache_key, GlyphRef.empty, .{ .offset = 0, .size = 0 }, extent_box);
+            return .{ .ref = GlyphRef.empty, .em_box = extent_box };
         }
 
+        const em_box = emBoxFromBlobBounds(encoded.blob);
         const pool_alloc = self.store.pool_alloc.alloc(@intCast(encoded.data.len)) orelse {
             if (@import("builtin").mode == .Debug) self.stats.pool_alloc_failures += 1;
             return Error.PoolExhausted;
@@ -429,6 +442,20 @@ test "render: projectionToEm scales x and y rows only" {
     try std.testing.expectEqual(@as(f32, -1), em[1][0]);
     try std.testing.expectEqual(@as(f32, 3), em[2][2]);
     try std.testing.expectEqual(@as(f32, 8), em[3][3]);
+}
+
+test "render: emBoxFromBlobBounds uses encoded curve bounds" {
+    const texels = try std.testing.allocator.alloc(blob_format.Texel, blob_format.header_len);
+    defer std.testing.allocator.free(texels);
+    texels[0] = .{ .r = -4, .g = -2, .b = 12, .a = 18 };
+    texels[1] = .{ .r = 1, .g = 1, .b = 0, .a = 0 };
+
+    const blob = blob_format.CoverageBlob.init(std.testing.allocator, texels);
+    const em_box = emBoxFromBlobBounds(blob);
+    try std.testing.expectApproxEqAbs(@as(f32, -1.0), em_box.x_min, 1.0e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, -0.5), em_box.y_min, 1.0e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), em_box.x_max, 1.0e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 4.5), em_box.y_max, 1.0e-6);
 }
 
 test "render: RendererCore appends shaped glyph commands and caches blobs" {

@@ -3,7 +3,7 @@
 const std = @import("std");
 
 /// Number of u32 counters exposed by the shader ABI.
-pub const counter_count: usize = 13;
+pub const counter_count: usize = 17;
 
 /// Counter order must match the shader-stage constants in `shaders/entries/`.
 pub const CounterIndex = enum(u32) {
@@ -20,6 +20,10 @@ pub const CounterIndex = enum(u32) {
     mesh_workgroups = 10,
     candidate_curve_bbox_rejects = 11,
     full_scan_curve_bbox_rejects = 12,
+    candidate_curve_integrations = 13,
+    full_scan_curve_integrations = 14,
+    bbox_empty_fragments = 15,
+    coverage_zero_fragments = 16,
 };
 
 /// Snapshot copied from the shader counter buffer.
@@ -37,6 +41,10 @@ pub const Snapshot = extern struct {
     mesh_workgroups: u32 = 0,
     candidate_curve_bbox_rejects: u32 = 0,
     full_scan_curve_bbox_rejects: u32 = 0,
+    candidate_curve_integrations: u32 = 0,
+    full_scan_curve_integrations: u32 = 0,
+    bbox_empty_fragments: u32 = 0,
+    coverage_zero_fragments: u32 = 0,
 
     pub fn reset(self: *Snapshot) void {
         self.* = .{};
@@ -57,13 +65,59 @@ pub const Snapshot = extern struct {
             .mesh_workgroups = counters[@intFromEnum(CounterIndex.mesh_workgroups)],
             .candidate_curve_bbox_rejects = counters[@intFromEnum(CounterIndex.candidate_curve_bbox_rejects)],
             .full_scan_curve_bbox_rejects = counters[@intFromEnum(CounterIndex.full_scan_curve_bbox_rejects)],
+            .candidate_curve_integrations = counters[@intFromEnum(CounterIndex.candidate_curve_integrations)],
+            .full_scan_curve_integrations = counters[@intFromEnum(CounterIndex.full_scan_curve_integrations)],
+            .bbox_empty_fragments = counters[@intFromEnum(CounterIndex.bbox_empty_fragments)],
+            .coverage_zero_fragments = counters[@intFromEnum(CounterIndex.coverage_zero_fragments)],
+        };
+    }
+
+    pub fn totalCurveTests(self: Snapshot) u32 {
+        return self.candidate_curve_tests + self.full_scan_curve_tests;
+    }
+
+    pub fn totalCurveBboxRejects(self: Snapshot) u32 {
+        return self.candidate_curve_bbox_rejects + self.full_scan_curve_bbox_rejects;
+    }
+
+    pub fn totalCurveIntegrations(self: Snapshot) u32 {
+        return self.candidate_curve_integrations + self.full_scan_curve_integrations;
+    }
+
+    pub fn analysis(self: Snapshot) Analysis {
+        return .{
+            .task_cull_per_mille = perMille(self.task_glyphs_culled, self.task_glyphs_tested),
+            .full_scan_fragment_per_mille = perMille(self.full_scan_fragments, self.fragment_invocations),
+            .bbox_reject_per_mille = perMille(self.totalCurveBboxRejects(), self.totalCurveTests()),
+            .bbox_empty_fragment_per_mille = perMille(self.bbox_empty_fragments, self.fragment_invocations),
+            .coverage_zero_fragment_per_mille = perMille(self.coverage_zero_fragments, self.fragment_invocations),
+            .fragments_per_visible_glyph_milli = perMille(self.fragment_invocations, self.task_glyphs_visible),
+            .curve_tests_per_fragment_milli = perMille(self.totalCurveTests(), self.fragment_invocations),
+            .curve_integrations_per_fragment_milli = perMille(self.totalCurveIntegrations(), self.fragment_invocations),
         };
     }
 };
 
+/// Integer ratios scaled by 1000 for stable debug logging.
+pub const Analysis = struct {
+    task_cull_per_mille: u32 = 0,
+    full_scan_fragment_per_mille: u32 = 0,
+    bbox_reject_per_mille: u32 = 0,
+    bbox_empty_fragment_per_mille: u32 = 0,
+    coverage_zero_fragment_per_mille: u32 = 0,
+    fragments_per_visible_glyph_milli: u32 = 0,
+    curve_tests_per_fragment_milli: u32 = 0,
+    curve_integrations_per_fragment_milli: u32 = 0,
+};
+
+fn perMille(numerator: u32, denominator: u32) u32 {
+    if (denominator == 0) return 0;
+    return @intCast((@as(u64, numerator) * 1000) / denominator);
+}
+
 test "shader stats counter ABI is a packed u32 array" {
     try std.testing.expectEqual(@as(usize, counter_count * @sizeOf(u32)), @sizeOf(Snapshot));
-    try std.testing.expectEqual(@as(u32, 12), @intFromEnum(CounterIndex.full_scan_curve_bbox_rejects));
+    try std.testing.expectEqual(@as(u32, 16), @intFromEnum(CounterIndex.coverage_zero_fragments));
 }
 
 test "shader stats snapshot maps task and mesh counters" {
@@ -75,6 +129,10 @@ test "shader stats snapshot maps task and mesh counters" {
     counters[@intFromEnum(CounterIndex.mesh_workgroups)] = 60;
     counters[@intFromEnum(CounterIndex.candidate_curve_bbox_rejects)] = 400;
     counters[@intFromEnum(CounterIndex.full_scan_curve_bbox_rejects)] = 12;
+    counters[@intFromEnum(CounterIndex.candidate_curve_integrations)] = 500;
+    counters[@intFromEnum(CounterIndex.full_scan_curve_integrations)] = 8;
+    counters[@intFromEnum(CounterIndex.bbox_empty_fragments)] = 20;
+    counters[@intFromEnum(CounterIndex.coverage_zero_fragments)] = 30;
 
     const snapshot = Snapshot.fromCounters(&counters);
     try std.testing.expectEqual(@as(u32, 3), snapshot.task_workgroups);
@@ -84,4 +142,40 @@ test "shader stats snapshot maps task and mesh counters" {
     try std.testing.expectEqual(@as(u32, 60), snapshot.mesh_workgroups);
     try std.testing.expectEqual(@as(u32, 400), snapshot.candidate_curve_bbox_rejects);
     try std.testing.expectEqual(@as(u32, 12), snapshot.full_scan_curve_bbox_rejects);
+    try std.testing.expectEqual(@as(u32, 500), snapshot.candidate_curve_integrations);
+    try std.testing.expectEqual(@as(u32, 8), snapshot.full_scan_curve_integrations);
+    try std.testing.expectEqual(@as(u32, 20), snapshot.bbox_empty_fragments);
+    try std.testing.expectEqual(@as(u32, 30), snapshot.coverage_zero_fragments);
+}
+
+test "shader stats analysis derives bottleneck ratios" {
+    const snapshot = Snapshot{
+        .fragment_invocations = 100,
+        .full_scan_fragments = 25,
+        .candidate_curve_tests = 200,
+        .full_scan_curve_tests = 100,
+        .task_glyphs_tested = 80,
+        .task_glyphs_visible = 20,
+        .task_glyphs_culled = 20,
+        .candidate_curve_bbox_rejects = 150,
+        .full_scan_curve_bbox_rejects = 30,
+        .candidate_curve_integrations = 50,
+        .full_scan_curve_integrations = 70,
+        .bbox_empty_fragments = 10,
+        .coverage_zero_fragments = 15,
+    };
+
+    try std.testing.expectEqual(@as(u32, 300), snapshot.totalCurveTests());
+    try std.testing.expectEqual(@as(u32, 180), snapshot.totalCurveBboxRejects());
+    try std.testing.expectEqual(@as(u32, 120), snapshot.totalCurveIntegrations());
+
+    const analysis_result = snapshot.analysis();
+    try std.testing.expectEqual(@as(u32, 250), analysis_result.task_cull_per_mille);
+    try std.testing.expectEqual(@as(u32, 250), analysis_result.full_scan_fragment_per_mille);
+    try std.testing.expectEqual(@as(u32, 600), analysis_result.bbox_reject_per_mille);
+    try std.testing.expectEqual(@as(u32, 100), analysis_result.bbox_empty_fragment_per_mille);
+    try std.testing.expectEqual(@as(u32, 150), analysis_result.coverage_zero_fragment_per_mille);
+    try std.testing.expectEqual(@as(u32, 5000), analysis_result.fragments_per_visible_glyph_milli);
+    try std.testing.expectEqual(@as(u32, 3000), analysis_result.curve_tests_per_fragment_milli);
+    try std.testing.expectEqual(@as(u32, 1200), analysis_result.curve_integrations_per_fragment_milli);
 }

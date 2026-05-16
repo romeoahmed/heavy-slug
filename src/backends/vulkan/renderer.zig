@@ -34,8 +34,9 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
     }
 
     pub fn log(self: *const @This()) void {
+        const shader_analysis = self.shader.analysis();
         std.log.scoped(.renderer).debug(
-            "vulkan stats: desc_writes={d} desc_flushes={d} frame_busy={d} task_visible={d}/{d} mesh_groups={d} shader_fragments={d} shader_fullscan={d} bbox_rejects={d}",
+            "vulkan stats: desc_writes={d} desc_flushes={d} frame_busy={d} task_visible={d}/{d} mesh_groups={d} fragments={d} frag_per_glyph_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
             .{
                 self.descriptor_writes,
                 self.descriptor_flush_calls,
@@ -44,8 +45,13 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
                 self.shader.task_glyphs_tested,
                 self.shader.mesh_workgroups,
                 self.shader.fragment_invocations,
-                self.shader.full_scan_fragments,
-                self.shader.candidate_curve_bbox_rejects + self.shader.full_scan_curve_bbox_rejects,
+                shader_analysis.fragments_per_visible_glyph_milli,
+                shader_analysis.full_scan_fragment_per_mille,
+                self.shader.totalCurveIntegrations(),
+                self.shader.totalCurveTests(),
+                shader_analysis.bbox_reject_per_mille,
+                shader_analysis.bbox_empty_fragment_per_mille,
+                shader_analysis.coverage_zero_fragment_per_mille,
             },
         );
         self.common.log(.renderer);

@@ -428,15 +428,18 @@ float integrateFullScan(
     float2 dx,
     float2 dy,
     float invDet,
-    out uint bboxRejects)
+    out uint bboxRejects,
+    out uint integrations)
 {
     float signedArea = 0.0;
     bboxRejects = 0;
+    integrations = 0;
     for (uint ci = 0; ci < curveCount; ci++)
     {
         bool bboxRejected;
         signedArea += integrateCurveFromBlob(blob, curveBase, ci, renderCoord, dx, dy, invDet, bboxRejected);
         bboxRejects += bboxRejected ? 1u : 0u;
+        integrations += bboxRejected ? 0u : 1u;
     }
     return signedArea;
 }
