@@ -6,12 +6,6 @@ import resources;
 
 static const float kTargetMeshletExtentPixels = 96.0;
 
-struct TaskPayload
-{
-    uint glyphIndices[kTaskMaxMeshlets];
-    uint sliceInfos[kTaskMaxMeshlets];
-};
-
 #if HEAVY_SLUG_SHADER_STATS
 static const uint kShaderStatTaskWorkgroups = 6;
 static const uint kShaderStatTaskGlyphsTested = 7;

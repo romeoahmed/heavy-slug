@@ -5,15 +5,8 @@ import abi;
 import coverage_blob;
 import resources;
 
-static const uint kMeshThreadCount = 32;
 static const float kNoBoundsMin = 1.0e20;
 static const float kNoBoundsMax = -1.0e20;
-
-struct TaskPayload
-{
-    uint glyphIndices[kTaskMaxMeshlets];
-    uint sliceInfos[kTaskMaxMeshlets];
-};
 
 struct VertexOutput
 {
@@ -139,8 +132,8 @@ void meshMain(
     uint gtid : SV_GroupThreadID,
     uint gid  : SV_GroupID,
     in payload TaskPayload taskPayload,
-    OutputVertices<VertexOutput, 4> verts,
-    OutputIndices<uint3, 2> tris)
+    OutputVertices<VertexOutput, kMeshOutputVertices> verts,
+    OutputIndices<uint3, kMeshOutputPrimitives> tris)
 {
 #if HEAVY_SLUG_SHADER_STATS
     if (gtid == 0)
@@ -226,7 +219,9 @@ void meshMain(
     }
 
     GroupMemoryBarrierWithGroupSync();
-    SetMeshOutputCounts(s_emit != 0 ? 4 : 0, s_emit != 0 ? 2 : 0);
+    SetMeshOutputCounts(
+        s_emit != 0 ? kMeshOutputVertices : 0,
+        s_emit != 0 ? kMeshOutputPrimitives : 0);
     if (s_emit == 0)
         return;
 

@@ -44,37 +44,6 @@ void addShaderStat(uint index, uint value)
 }
 #endif
 
-float integrateCandidateCurves(
-    BlobReader blob,
-    uint curveBase,
-    uint curveCount,
-    uint bandBase,
-    uint idBase,
-    uint bandIndex,
-    float2 renderCoord,
-    float2 dx,
-    float2 dy,
-    float invDet)
-{
-    uint idStart;
-    uint bandIdCount;
-    blob.readBand(bandBase, bandIndex, idStart, bandIdCount);
-
-    float signedArea = 0.0;
-    for (uint i = 0; i < bandIdCount; i++)
-    {
-        uint idIndex = idStart + i;
-        uint curveIndex = blob.readCurveId(idBase, idIndex);
-        if (curveIndex < curveCount)
-        {
-            float4 bbox = blob.readCurveBounds(curveBase, curveIndex);
-            if (curveBboxMayContribute(bbox, renderCoord, dx, dy, invDet))
-                signedArea += integrateCurvePayload(blob, curveBase, curveIndex, renderCoord, dx, dy, invDet);
-        }
-    }
-    return signedArea;
-}
-
 float integrateCandidateBandRange(
     BlobReader blob,
     uint curveBase,
@@ -135,42 +104,6 @@ float integrateCandidateBandRange(
 }
 
 #if HEAVY_SLUG_SHADER_STATS
-float integrateCandidateCurvesWithStats(
-    BlobReader blob,
-    uint curveBase,
-    uint curveCount,
-    uint bandBase,
-    uint idBase,
-    uint bandIndex,
-    float2 renderCoord,
-    float2 dx,
-    float2 dy,
-    float invDet,
-    out uint bboxRejects,
-    out uint integrations)
-{
-    uint idStart;
-    uint bandIdCount;
-    blob.readBand(bandBase, bandIndex, idStart, bandIdCount);
-
-    float signedArea = 0.0;
-    bboxRejects = 0;
-    integrations = 0;
-    for (uint i = 0; i < bandIdCount; i++)
-    {
-        uint idIndex = idStart + i;
-        uint curveIndex = blob.readCurveId(idBase, idIndex);
-        if (curveIndex < curveCount)
-        {
-            bool bboxRejected;
-            signedArea += integrateCurveFromBlobWithStats(blob, curveBase, curveIndex, renderCoord, dx, dy, invDet, bboxRejected);
-            bboxRejects += bboxRejected ? 1u : 0u;
-            integrations += bboxRejected ? 0u : 1u;
-        }
-    }
-    return signedArea;
-}
-
 float integrateCandidateBandRangeWithStats(
     BlobReader blob,
     uint curveBase,

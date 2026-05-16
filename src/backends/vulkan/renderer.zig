@@ -236,6 +236,8 @@ pub const Renderer = struct {
         allocator: std.mem.Allocator,
         options: RendererOptions,
     ) !Renderer {
+        try gpu_context.validateDeviceProperties(ctx.api_version, ctx.mesh_shader_properties);
+
         const device = ctx.device;
         const dispatch = ctx.dispatch;
         var desc_table = try descriptors.DescriptorTable.init(

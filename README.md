@@ -43,8 +43,9 @@ Backends are separate modules:
 2. HarfBuzz outline callbacks emit native outline segments. TrueType quadratic curves and CFF/CFF2 cubic curves are preserved at capture time; lines and quadratics are raised to cubic form for one common representation.
 3. Cubics are split at x/y derivative roots and inflection roots. The CPU encoder then recursively subdivides spans until the quantized control polygon remains monotone enough for stable GPU evaluation.
 4. The encoder writes `CoverageBlob` texels: header, cubic control points, and an h-band candidate index. The h-band only filters likely curves; correctness still comes from the full analytic path.
-5. The mesh path emits one glyph quad. The fragment shader transforms each cubic into pixel-local coordinates, splits it into monotone intervals, solves cubic crossings with safeguarded Newton/bisection, and integrates clipped `x dy` coverage with a small Gauss rule.
-6. Fill is resolved with non-zero or even-odd rules. If a fragment cannot use a single h-band candidate range, it falls back to full curve scanning.
+5. The task shader culls glyph boxes and subdivides surviving glyphs into h-band meshlets. The mesh shader emits only non-empty tightened strips, so fragment work starts from smaller screen-space regions.
+6. The fragment shader transforms each cubic into pixel-local coordinates, splits it into monotone intervals, solves cubic crossings with safeguarded Newton/bisection, and integrates clipped `x dy` coverage with a small Gauss rule.
+7. Fill is resolved with non-zero or even-odd rules. If a fragment cannot use a compact merged h-band candidate range, it falls back to full curve scanning.
 
 This is still related to Slug at the architectural level: GPU-side analytic outline coverage, compact glyph blobs, and mesh/fragment evaluation. It differs in the details: native cubic support, a custom blob format, CPU-side regularization, h-band candidate filtering, and shared Vulkan/Metal Slang backends.
 
@@ -183,7 +184,7 @@ zig build test -Dvulkan=true -Dshader-stats=true
 zig build test -Dmetal=true -Dshader-stats=true
 ```
 
-The most useful GPU ratios are candidate-path fragments versus full-scan fragments, and candidate curve tests versus full-scan curve tests. High full-scan counts usually mean the h-band filter is not isolating fragments well for the current transform or glyph geometry.
+The most useful GPU ratios are task-visible glyphs, emitted mesh tiles, fragments per tile, candidate-path fragments versus full-scan fragments, and candidate curve tests versus full-scan curve tests. High full-scan or high fragments-per-tile counts usually mean the h-band subdivision is not isolating fragments well for the current transform or glyph geometry.
 
 ## CI
 

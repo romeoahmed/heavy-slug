@@ -116,6 +116,12 @@ hs_metal_context *hs_metal_context_create(
         pipeline_desc.objectFunction = task_function;
         pipeline_desc.meshFunction = mesh_function;
         pipeline_desc.fragmentFunction = fragment_function;
+        pipeline_desc.maxTotalThreadsPerObjectThreadgroup = HS_METAL_TASK_THREADGROUP_SIZE;
+        pipeline_desc.maxTotalThreadsPerMeshThreadgroup = HS_METAL_MESH_THREADGROUP_SIZE;
+        pipeline_desc.requiredThreadsPerObjectThreadgroup = MTLSizeMake(HS_METAL_TASK_THREADGROUP_SIZE, 1, 1);
+        pipeline_desc.requiredThreadsPerMeshThreadgroup = MTLSizeMake(HS_METAL_MESH_THREADGROUP_SIZE, 1, 1);
+        pipeline_desc.payloadMemoryLength = HS_METAL_TASK_PAYLOAD_BYTES;
+        pipeline_desc.maxTotalThreadgroupsPerMeshGrid = HS_METAL_TASK_MAX_MESHLETS;
         pipeline_desc.colorAttachments[0].pixelFormat = layer.pixelFormat;
         pipeline_desc.colorAttachments[0].blendingEnabled = YES;
         pipeline_desc.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
@@ -297,8 +303,8 @@ int hs_metal_context_draw(
             [encoder setFragmentBuffer:shader_stats->buffer offset:0 atIndex:HS_METAL_BUFFER_SHADER_STATS];
         }
         [encoder drawMeshThreadgroups:MTLSizeMake(workgroup_count, 1, 1)
-            threadsPerObjectThreadgroup:MTLSizeMake(32, 1, 1)
-              threadsPerMeshThreadgroup:MTLSizeMake(32, 1, 1)];
+            threadsPerObjectThreadgroup:MTLSizeMake(HS_METAL_TASK_THREADGROUP_SIZE, 1, 1)
+              threadsPerMeshThreadgroup:MTLSizeMake(HS_METAL_MESH_THREADGROUP_SIZE, 1, 1)];
         [encoder endEncoding];
         [cb presentDrawable:drawable];
         slot->reserved = false;

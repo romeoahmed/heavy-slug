@@ -1,4 +1,4 @@
-//! Vulkan SPIR-V 1.6 backend for heavy_slug.
+//! Vulkan 1.4 / SPIR-V 1.6 mesh-shader backend for heavy_slug.
 
 pub const vk = @import("vulkan");
 pub const context = @import("context.zig");
@@ -22,6 +22,7 @@ pub const FrameToken = renderer.FrameToken;
 pub const Stats = renderer.Stats;
 pub const shader_stats_enabled = renderer.shader_stats_enabled;
 
+pub const required_api_version = context.required_api_version;
 pub const required_device_extensions = Context.required_device_extensions;
 
 test {

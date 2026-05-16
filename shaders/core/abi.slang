@@ -23,5 +23,14 @@ struct PushConstants
 };
 
 static const uint kTaskGroupSize = 32;
+static const uint kMeshThreadCount = 32;
 static const uint kMaxSubdivisionsPerGlyph = 16;
 static const uint kTaskMaxMeshlets = kTaskGroupSize * kMaxSubdivisionsPerGlyph;
+static const uint kMeshOutputVertices = 4;
+static const uint kMeshOutputPrimitives = 2;
+
+struct TaskPayload
+{
+    uint glyphIndices[kTaskMaxMeshlets];
+    uint sliceInfos[kTaskMaxMeshlets];
+};

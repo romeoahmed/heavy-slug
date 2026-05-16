@@ -42,6 +42,14 @@ enum {
     HS_METAL_BUFFER_COMMANDS = 1,
     HS_METAL_BUFFER_PUSH_CONSTANTS = HEAVY_SLUG_SHADER_STATS ? 3 : 2,
     HS_METAL_BUFFER_SHADER_STATS = 2,
+    /*
+     * Keep geometry limits in lockstep with shaders/core/abi.slang
+     * and src/gpu/mesh_limits.zig.
+     */
+    HS_METAL_TASK_THREADGROUP_SIZE = 32,
+    HS_METAL_MESH_THREADGROUP_SIZE = 32,
+    HS_METAL_TASK_MAX_MESHLETS = 512,
+    HS_METAL_TASK_PAYLOAD_BYTES = 4096,
 };
 
 hs_metal_resource_indices hs_metal_get_resource_indices(void);

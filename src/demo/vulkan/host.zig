@@ -175,8 +175,8 @@ pub const GraphicsContext = struct {
             };
         }
 
-        // Feature chain (pNext traversal order): features2 → vk12 → vk13 → mesh_shader → robustness2
-        // Bool32 enum fields use .true/.false (not vk.TRUE/vk.FALSE)
+        // Feature chain (pNext traversal order): features2 -> vk12 -> vk13 -> vk14 -> mesh_shader -> robustness2.
+        // Bool32 enum fields use .true/.false (not vk.TRUE/vk.FALSE).
         var robustness2 = vk.PhysicalDeviceRobustness2FeaturesEXT{
             .null_descriptor = .true,
         };
@@ -185,8 +185,11 @@ pub const GraphicsContext = struct {
             .task_shader = .true,
             .mesh_shader = .true,
         };
-        var vk13_features = vk.PhysicalDeviceVulkan13Features{
+        var vk14_features = vk.PhysicalDeviceVulkan14Features{
             .p_next = @ptrCast(&mesh_shader),
+        };
+        var vk13_features = vk.PhysicalDeviceVulkan13Features{
+            .p_next = @ptrCast(&vk14_features),
             .dynamic_rendering = .true,
             .synchronization_2 = .true,
             .maintenance_4 = .true,
