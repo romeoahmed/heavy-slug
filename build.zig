@@ -9,11 +9,11 @@ pub fn build(b: *std.Build) void {
     const opts = deps.resolve(b);
 
     const shader_step = b.step("shaders", "Compile Slang shaders to SPIR-V");
-    const spirv = shaders.buildSpirv(b);
+    const spirv = shaders.buildSpirv(b, opts.shader_stats);
     shaders.addSpirvInstallSteps(b, shader_step, spirv);
 
     const metal_shader_step = b.step("metal-shaders", "Compile Slang shaders to Metal source");
-    const metal_shaders = shaders.buildMetal(b);
+    const metal_shaders = shaders.buildMetal(b, opts.shader_stats);
     shaders.addMetalInstallSteps(b, metal_shader_step, metal_shaders);
 
     const core_mod = b.addModule("heavy_slug", .{
@@ -35,7 +35,7 @@ pub fn build(b: *std.Build) void {
     addToolTests(b, test_step);
 
     const vulkan_backend = if (opts.build_vulkan)
-        backends.buildVulkan(b, opts.target, core_mod, spirv) orelse return
+        backends.buildVulkan(b, opts.target, core_mod, spirv, opts.shader_stats) orelse return
     else
         null;
     if (vulkan_backend) |backend| {
@@ -43,7 +43,7 @@ pub fn build(b: *std.Build) void {
     }
 
     const metal_backend = if (opts.build_metal)
-        backends.buildMetal(b, opts.target, core_mod, metal_shaders)
+        backends.buildMetal(b, opts.target, core_mod, metal_shaders, opts.shader_stats)
     else
         null;
     if (metal_backend) |backend| {

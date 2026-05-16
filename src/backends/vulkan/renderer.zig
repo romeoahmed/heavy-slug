@@ -4,6 +4,7 @@ const heavy_slug = @import("heavy_slug");
 const gpu_context = @import("context.zig");
 const descriptors = @import("descriptors.zig");
 const pipeline_mod = @import("pipeline.zig");
+const backend_options = @import("heavy_slug_backend_options");
 const render = heavy_slug.core.render.renderer_core;
 const core_types = heavy_slug.core.types;
 const pool_mod = heavy_slug.core.cache.byte_pool;
@@ -23,7 +24,10 @@ const frames_in_flight = 3;
 
 pub const Stats = if (@import("builtin").mode == .Debug) struct {
     common: render.Stats = .{},
-    descriptors_flushed: u32 = 0,
+    descriptor_writes: u32 = 0,
+    descriptor_flush_calls: u32 = 0,
+    frame_resources_in_use: u32 = 0,
+    shader: heavy_slug.ShaderStats = .{},
 
     pub fn reset(self: *@This()) void {
         self.* = .{};
@@ -31,8 +35,14 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
 
     pub fn log(self: *const @This()) void {
         std.log.scoped(.renderer).debug(
-            "frame stats: desc_flushes={d}",
-            .{self.descriptors_flushed},
+            "vulkan stats: desc_writes={d} desc_flushes={d} frame_busy={d} shader_fragments={d} shader_fullscan={d}",
+            .{
+                self.descriptor_writes,
+                self.descriptor_flush_calls,
+                self.frame_resources_in_use,
+                self.shader.fragment_invocations,
+                self.shader.full_scan_fragments,
+            },
         );
         self.common.log(.renderer);
     }
@@ -48,6 +58,7 @@ pub const Target = struct {
 };
 
 const CommandBatch = heavy_slug.core.render.TextBatch(descriptors.GlyphCommand);
+const ShaderStatsBuffers = if (backend_options.shader_stats) [frames_in_flight]MappedBuffer else void;
 
 pub const Frame = struct {
     renderer: *Renderer,
@@ -181,6 +192,7 @@ pub const Renderer = struct {
     // Vulkan buffers
     pool_buffer: MappedBuffer,
     command_buffers: [frames_in_flight]MappedBuffer,
+    shader_stats_buffers: ShaderStatsBuffers,
     active_frame: u32,
 
     // Per-frame debug counters (zero-cost in release)
@@ -192,6 +204,7 @@ pub const Renderer = struct {
     last_submitted_frame: render.FrameToken,
     completed_frame: render.FrameToken,
     frame_tokens: [frames_in_flight]render.FrameToken,
+    shader_stats_snapshot: heavy_slug.ShaderStats,
 
     pub fn init(
         ctx: gpu_context.VulkanContext,
@@ -248,6 +261,25 @@ pub const Renderer = struct {
             initialized_command_buffers += 1;
         }
 
+        var shader_stats_buffers: ShaderStatsBuffers = undefined;
+        if (backend_options.shader_stats) {
+            var initialized_shader_stats: usize = 0;
+            errdefer {
+                for (shader_stats_buffers[0..initialized_shader_stats]) |stats_buf| {
+                    destroyMappedBuffer(stats_buf, device, dispatch);
+                }
+            }
+            for (&shader_stats_buffers) |*stats_buf| {
+                stats_buf.* = try createMappedBuffer(
+                    ctx,
+                    @sizeOf(heavy_slug.ShaderStats),
+                    .{ .storage_buffer_bit = true },
+                );
+                resetShaderStatsBuffer(stats_buf.*);
+                initialized_shader_stats += 1;
+            }
+        }
+
         return .{
             .device = device,
             .dispatch = dispatch,
@@ -256,6 +288,7 @@ pub const Renderer = struct {
             .pip = pip,
             .pool_buffer = pool_buf,
             .command_buffers = command_buffers,
+            .shader_stats_buffers = shader_stats_buffers,
             .active_frame = frames_in_flight - 1,
             .stats = .{},
             .memory_properties = ctx.memory_properties,
@@ -263,6 +296,7 @@ pub const Renderer = struct {
             .last_submitted_frame = 0,
             .completed_frame = 0,
             .frame_tokens = .{0} ** frames_in_flight,
+            .shader_stats_snapshot = .{},
         };
     }
 
@@ -286,11 +320,16 @@ pub const Renderer = struct {
 
     fn reserveFrameSlot(self: *Renderer) Error!void {
         const next_frame = (self.active_frame + 1) % frames_in_flight;
-        if (self.frame_tokens[next_frame] > self.completed_frame) return Error.FrameResourcesInUse;
+        if (self.frame_tokens[next_frame] > self.completed_frame) {
+            if (@import("builtin").mode == .Debug) self.stats.frame_resources_in_use += 1;
+            return Error.FrameResourcesInUse;
+        }
         self.active_frame = next_frame;
+        self.stats.reset();
+        self.descriptor_table.resetDebugStats();
+        if (backend_options.shader_stats) resetShaderStatsBuffer(self.shader_stats_buffers[self.active_frame]);
         self.core.setRetireAfterToken(self.last_submitted_frame);
         self.core.beginFrame(self.completed_frame, self);
-        self.stats.reset();
     }
 
     pub fn beginFrame(self: *Renderer) Error!Frame {
@@ -305,13 +344,41 @@ pub const Renderer = struct {
 
     pub fn markFrameComplete(self: *Renderer, token: render.FrameToken) void {
         if (token > self.completed_frame) {
+            self.captureCompletedShaderStats(token);
             self.completed_frame = token;
             self.core.retireCompleted(self.completed_frame, self);
         }
     }
 
+    pub fn statsSnapshot(self: *const Renderer) Stats {
+        if (@import("builtin").mode != .Debug) return .{};
+        var out = self.stats;
+        const desc_stats = self.descriptor_table.debugStats();
+        out.common = self.core.stats;
+        out.descriptor_writes = desc_stats.descriptor_writes;
+        out.descriptor_flush_calls = desc_stats.descriptor_flush_calls;
+        out.shader = self.shader_stats_snapshot;
+        return out;
+    }
+
     pub fn completedFrameToken(self: *const Renderer) render.FrameToken {
         return self.completed_frame;
+    }
+
+    fn captureCompletedShaderStats(self: *Renderer, completed_token: render.FrameToken) void {
+        if (!backend_options.shader_stats) return;
+        var best_slot: ?usize = null;
+        var best_token: render.FrameToken = 0;
+        for (self.frame_tokens, 0..) |slot_token, slot_i| {
+            if (slot_token == 0 or slot_token > completed_token or slot_token <= self.completed_frame) continue;
+            if (best_slot == null or slot_token >= best_token) {
+                best_slot = slot_i;
+                best_token = slot_token;
+            }
+        }
+        if (best_slot) |slot_i| {
+            self.shader_stats_snapshot = readShaderStatsBuffer(self.shader_stats_buffers[slot_i]);
+        }
     }
 
     pub fn uploadBlob(self: *Renderer, pool_alloc: pool_mod.Allocation, data: []const u8) !GlyphRef {
@@ -371,8 +438,16 @@ pub const Renderer = struct {
 
         const command_buffer = self.command_buffers[self.active_frame];
         self.descriptor_table.updateCommandBuffer(self.active_frame, command_buffer.buffer, 0, command_buffer.size);
+        if (backend_options.shader_stats) {
+            const stats_buffer = self.shader_stats_buffers[self.active_frame];
+            self.descriptor_table.updateShaderStatsBuffer(
+                self.active_frame,
+                stats_buffer.buffer,
+                0,
+                @sizeOf(heavy_slug.ShaderStats),
+            );
+        }
         // Commit all descriptor writes before binding the frame-local set.
-        if (@import("builtin").mode == .Debug) self.stats.descriptors_flushed += self.descriptor_table.pending.len;
         self.descriptor_table.flushWrites();
 
         // Bind descriptor set
@@ -411,7 +486,7 @@ pub const Renderer = struct {
         self.dispatch.cmdDrawMeshTasksEXT(cmd_buf, workgroup_count, 1, 1);
         if (@import("builtin").mode == .Debug) {
             self.core.stats.glyphs_submitted += glyph_count;
-            self.core.stats.pool_free_blocks = self.core.poolFreeBlockCount();
+            self.core.stats.pool = self.core.poolSnapshot();
         }
 
         self.last_submitted_frame +%= 1;
@@ -426,6 +501,11 @@ pub const Renderer = struct {
         for (self.command_buffers) |cmd_buf| {
             destroyMappedBuffer(cmd_buf, self.device, self.dispatch);
         }
+        if (backend_options.shader_stats) {
+            for (self.shader_stats_buffers) |stats_buf| {
+                destroyMappedBuffer(stats_buf, self.device, self.dispatch);
+            }
+        }
         destroyMappedBuffer(self.pool_buffer, self.device, self.dispatch);
 
         // Destroy subsystems (reverse init order)
@@ -436,6 +516,15 @@ pub const Renderer = struct {
         self.* = undefined;
     }
 };
+
+fn resetShaderStatsBuffer(buffer: MappedBuffer) void {
+    @memset(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)], 0);
+}
+
+fn readShaderStatsBuffer(buffer: MappedBuffer) heavy_slug.ShaderStats {
+    const counters: *const [heavy_slug.gpu.shader_stats.counter_count]u32 = @ptrCast(@alignCast(buffer.mapped));
+    return heavy_slug.gpu.shader_stats.Snapshot.fromCounters(counters);
+}
 
 test "RendererOptions has correct defaults" {
     const opts = RendererOptions{};
@@ -504,6 +593,7 @@ test "Stats type compiles and has expected API" {
     stats.reset();
     stats.log();
     if (@import("builtin").mode == .Debug) {
-        try std.testing.expectEqual(@as(u32, 0), stats.descriptors_flushed);
+        try std.testing.expectEqual(@as(u32, 0), stats.descriptor_writes);
+        try std.testing.expectEqual(@as(u32, 0), stats.descriptor_flush_calls);
     }
 }

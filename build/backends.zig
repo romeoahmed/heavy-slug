@@ -16,6 +16,7 @@ pub fn buildVulkan(
     target: std.Build.ResolvedTarget,
     core_mod: *std.Build.Module,
     spirv: shaders.SpirvShaders,
+    shader_stats: bool,
 ) ?VulkanBackend {
     const vk_headers = b.lazyDependency("vulkan_headers", .{});
     const vk_dep = b.lazyDependency("vulkan", .{});
@@ -37,10 +38,13 @@ pub fn buildVulkan(
         .root_source_file = b.path("src/backends/vulkan/root.zig"),
         .target = target,
     });
+    const options = b.addOptions();
+    options.addOption(bool, "shader_stats", shader_stats);
     mod.addImport("heavy_slug", core_mod);
     mod.addImport("vulkan", vulkan_zig);
     mod.addImport("shader_spv", spirv.module);
     mod.addImport("gpu_structs", gpu_structs_mod);
+    mod.addOptions("heavy_slug_backend_options", options);
 
     return .{
         .module = mod,
@@ -54,6 +58,7 @@ pub fn buildMetal(
     target: std.Build.ResolvedTarget,
     core_mod: *std.Build.Module,
     metal_shaders: shaders.MetalShaders,
+    shader_stats: bool,
 ) MetalBackend {
     const reflection_json = shaders.generateReflectionJson(b);
     const gpu_structs_zig = shaders.generateGpuStructs(b, reflection_json);
@@ -63,9 +68,12 @@ pub fn buildMetal(
         .root_source_file = b.path("src/backends/metal/root.zig"),
         .target = target,
     });
+    const options = b.addOptions();
+    options.addOption(bool, "shader_stats", shader_stats);
     mod.addImport("heavy_slug", core_mod);
     mod.addImport("metal_shaders", metal_shaders.module);
     mod.addImport("gpu_structs", gpu_structs_mod);
+    mod.addOptions("heavy_slug_backend_options", options);
     mod.addIncludePath(b.path("src/backends/metal"));
     mod.link_libcpp = true;
     mod.linkFramework("QuartzCore", .{});
@@ -74,7 +82,11 @@ pub fn buildMetal(
     mod.addCSourceFiles(.{
         .root = b.path("src/backends/metal"),
         .files = &.{"bridge.mm"},
-        .flags = &.{ "-std=c++17", "-fobjc-arc" },
+        .flags = &.{
+            "-std=c++17",
+            "-fobjc-arc",
+            if (shader_stats) "-DHEAVY_SLUG_SHADER_STATS=1" else "-DHEAVY_SLUG_SHADER_STATS=0",
+        },
     });
 
     return .{ .module = mod };

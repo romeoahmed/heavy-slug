@@ -37,11 +37,22 @@ pub const TextRun = struct {
 };
 
 pub const Stats = if (@import("builtin").mode == .Debug) struct {
+    runs_shaped: u32 = 0,
+    glyphs_shaped: u32 = 0,
+    commands_written: u32 = 0,
+    empty_glyphs_skipped: u32 = 0,
     cache_hits: u32 = 0,
     cache_misses: u32 = 0,
+    glyphs_encoded: u32 = 0,
+    outline_segments: u32 = 0,
+    regularized_spans: u32 = 0,
+    blob_bytes_uploaded: u64 = 0,
     evictions: u32 = 0,
+    retirements_queued: u32 = 0,
+    retirements_completed: u32 = 0,
+    pool_alloc_failures: u32 = 0,
     glyphs_submitted: u32 = 0,
-    pool_free_blocks: u32 = 0,
+    pool: pool_mod.Snapshot = .{},
 
     pub fn reset(self: *@This()) void {
         self.* = .{};
@@ -49,8 +60,25 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
 
     pub fn log(self: *const @This(), comptime scope: anytype) void {
         std.log.scoped(scope).debug(
-            "frame stats: hits={d} misses={d} evictions={d} glyphs={d} free_blocks={d}",
-            .{ self.cache_hits, self.cache_misses, self.evictions, self.glyphs_submitted, self.pool_free_blocks },
+            "core stats: runs={d} shaped={d} commands={d} empty={d} hits={d} misses={d} encoded={d} spans={d} upload_bytes={d} evictions={d} retire_q={d} retire_done={d} pool_used={d} pool_free={d} largest_free={d} free_blocks={d}",
+            .{
+                self.runs_shaped,
+                self.glyphs_shaped,
+                self.commands_written,
+                self.empty_glyphs_skipped,
+                self.cache_hits,
+                self.cache_misses,
+                self.glyphs_encoded,
+                self.regularized_spans,
+                self.blob_bytes_uploaded,
+                self.evictions,
+                self.retirements_queued,
+                self.retirements_completed,
+                self.pool.used_bytes,
+                self.pool.free_bytes,
+                self.pool.largest_free_block,
+                self.pool.free_blocks,
+            },
         );
     }
 } else struct {
@@ -162,7 +190,11 @@ pub const RendererCore = struct {
     pub fn unloadFont(self: *RendererCore, handle: FontHandle) !void {
         const evicted = try self.store.glyph_cache.removeFont(self.allocator, handle.id);
         defer if (evicted.len > 0) self.allocator.free(evicted);
-        for (evicted) |entry| try self.store.deferEvicted(entry);
+        for (evicted) |entry| {
+            if (try self.store.deferEvicted(entry)) {
+                if (@import("builtin").mode == .Debug) self.stats.retirements_queued += 1;
+            }
+        }
 
         if (self.fonts.fetchRemove(handle.id)) |removed| {
             removed.value.loaded.deinit();
@@ -172,9 +204,13 @@ pub const RendererCore = struct {
 
     pub fn beginFrame(self: *RendererCore, completed_token: FrameToken, backend: anytype) void {
         comptime backend_contract.BackendContract(@TypeOf(backend));
-        self.store.beginFrame(completed_token, backend);
         self.glyph_count = 0;
         self.stats.reset();
+        const retired = self.store.beginFrame(completed_token, backend);
+        if (@import("builtin").mode == .Debug) {
+            self.stats.retirements_completed += retired;
+            self.stats.pool = self.store.poolSnapshot();
+        }
     }
 
     pub fn setRetireAfterToken(self: *RendererCore, token: FrameToken) void {
@@ -183,11 +219,19 @@ pub const RendererCore = struct {
 
     pub fn retireCompleted(self: *RendererCore, completed_token: FrameToken, backend: anytype) void {
         comptime backend_contract.BackendContract(@TypeOf(backend));
-        self.store.retireCompleted(completed_token, backend);
+        const retired = self.store.retireCompleted(completed_token, backend);
+        if (@import("builtin").mode == .Debug) {
+            self.stats.retirements_completed += retired;
+            self.stats.pool = self.store.poolSnapshot();
+        }
     }
 
     pub fn poolFreeBlockCount(self: *const RendererCore) u32 {
         return self.store.poolFreeBlockCount();
+    }
+
+    pub fn poolSnapshot(self: *const RendererCore) pool_mod.Snapshot {
+        return self.store.poolSnapshot();
     }
 
     pub fn commandCount(self: *const RendererCore) u32 {
@@ -213,6 +257,10 @@ pub const RendererCore = struct {
         const shaped = font_entry.loaded.shape(self.shape_plan, run.text, .{}) catch return Error.ShapingFailed;
         const infos = shaped.infos;
         const positions = shaped.positions;
+        if (@import("builtin").mode == .Debug) {
+            self.stats.runs_shaped += 1;
+            self.stats.glyphs_shaped += @intCast(infos.len);
+        }
         const em_motor = motorToEm(run.transform.toMotor());
         const color = run.color.rgba;
         const flags = run.fill_rule.commandFlags();
@@ -256,6 +304,9 @@ pub const RendererCore = struct {
                     .flags = flags,
                 });
                 self.glyph_count = batch.count();
+                if (@import("builtin").mode == .Debug) self.stats.commands_written += 1;
+            } else {
+                if (@import("builtin").mode == .Debug) self.stats.empty_glyphs_skipped += 1;
             }
 
             pen_x += @as(f32, @floatFromInt(pos.x_advance));
@@ -272,13 +323,20 @@ pub const RendererCore = struct {
         const encoded = font_entry.loaded.encodeGlyph(cache_key.glyph_id) catch
             return Error.ShapingFailed;
         defer encoded.destroy();
+        if (@import("builtin").mode == .Debug) {
+            self.stats.glyphs_encoded += 1;
+            self.stats.outline_segments += encoded.outline_segments;
+            self.stats.regularized_spans += encoded.regularized_spans;
+        }
 
         const em_box = emBoxFromExtents(encoded.extents);
 
         if (self.store.glyph_cache.cold_count >= self.store.glyph_cache.cold_capacity) {
             if (self.store.glyph_cache.evictLruNotUsedInFrame(self.store.glyph_cache.current_frame)) |evicted| {
                 if (@import("builtin").mode == .Debug) self.stats.evictions += 1;
-                try self.store.deferEvicted(evicted);
+                if (try self.store.deferEvicted(evicted)) {
+                    if (@import("builtin").mode == .Debug) self.stats.retirements_queued += 1;
+                }
             } else return Error.PoolExhausted;
         }
 
@@ -287,12 +345,18 @@ pub const RendererCore = struct {
             return .{ .ref = GlyphRef.empty, .em_box = em_box };
         }
 
-        const pool_alloc = self.store.pool_alloc.alloc(@intCast(encoded.data.len)) orelse
+        const pool_alloc = self.store.pool_alloc.alloc(@intCast(encoded.data.len)) orelse {
+            if (@import("builtin").mode == .Debug) self.stats.pool_alloc_failures += 1;
             return Error.PoolExhausted;
+        };
         errdefer self.store.pool_alloc.free(pool_alloc);
 
         const glyph_ref = try backend.uploadBlob(pool_alloc, encoded.data);
         errdefer backend.retireBlob(glyph_ref);
+        if (@import("builtin").mode == .Debug) {
+            self.stats.blob_bytes_uploaded += encoded.data.len;
+            self.stats.pool = self.store.poolSnapshot();
+        }
 
         try self.store.glyph_cache.insertCold(cache_key, glyph_ref, pool_alloc, em_box);
         return .{ .ref = glyph_ref, .em_box = em_box };
@@ -386,6 +450,17 @@ test "render: RendererCore appends shaped glyph commands and caches blobs" {
     try std.testing.expect(backend.next_ref > 0);
     try std.testing.expect(commands[0].glyph_ref != GlyphRef.empty.value);
     try std.testing.expect(commands[0].motor[2] != 0);
+    if (@import("builtin").mode == .Debug) {
+        try std.testing.expectEqual(@as(u32, 1), core.stats.runs_shaped);
+        try std.testing.expect(core.stats.glyphs_shaped >= core.glyph_count);
+        try std.testing.expectEqual(core.glyph_count, core.stats.commands_written);
+        try std.testing.expect(core.stats.cache_misses > 0);
+        try std.testing.expect(core.stats.glyphs_encoded > 0);
+        try std.testing.expect(core.stats.outline_segments > 0);
+        try std.testing.expect(core.stats.regularized_spans > 0);
+        try std.testing.expect(core.stats.blob_bytes_uploaded > 0);
+        try std.testing.expect(core.stats.pool.used_bytes > 0);
+    }
 
     const refs_after_first = backend.next_ref;
     try core.appendRun(&backend, &batch, .{
@@ -395,6 +470,10 @@ test "render: RendererCore appends shaped glyph commands and caches blobs" {
         .color = .white,
     });
     try std.testing.expectEqual(refs_after_first, backend.next_ref);
+    if (@import("builtin").mode == .Debug) {
+        try std.testing.expect(core.stats.cache_hits > 0);
+        try std.testing.expectEqual(core.glyph_count, core.stats.commands_written);
+    }
 }
 
 test "render: RendererCore skips empty glyph commands while preserving cache entry" {
@@ -417,6 +496,12 @@ test "render: RendererCore skips empty glyph commands while preserving cache ent
     try std.testing.expectEqual(@as(u32, 0), core.glyph_count);
     try std.testing.expectEqual(@as(u32, 0), backend.next_ref);
     try std.testing.expect(core.store.glyph_cache.count() > 0);
+    if (@import("builtin").mode == .Debug) {
+        try std.testing.expectEqual(@as(u32, 1), core.stats.runs_shaped);
+        try std.testing.expect(core.stats.empty_glyphs_skipped > 0);
+        try std.testing.expect(core.stats.glyphs_encoded > 0);
+        try std.testing.expectEqual(@as(u64, 0), core.stats.blob_bytes_uploaded);
+    }
 }
 
 test "render: RendererCore enforces command capacity after skipping empty glyphs" {
@@ -495,6 +580,10 @@ test "render: RendererCore defers evicted glyph retirement until frame token com
 
     try std.testing.expectEqual(@as(u32, 0), backend.releases);
     try std.testing.expectEqual(@as(usize, 1), core.store.retirements.entries.items.len);
+    if (@import("builtin").mode == .Debug) {
+        try std.testing.expectEqual(@as(u32, 1), core.stats.evictions);
+        try std.testing.expectEqual(@as(u32, 1), core.stats.retirements_queued);
+    }
 
     core.retireCompleted(6, &backend);
     try std.testing.expectEqual(@as(u32, 0), backend.releases);
@@ -502,4 +591,7 @@ test "render: RendererCore defers evicted glyph retirement until frame token com
     core.retireCompleted(7, &backend);
     try std.testing.expectEqual(@as(u32, 1), backend.releases);
     try std.testing.expectEqual(@as(usize, 0), core.store.retirements.entries.items.len);
+    if (@import("builtin").mode == .Debug) {
+        try std.testing.expectEqual(@as(u32, 1), core.stats.retirements_completed);
+    }
 }

@@ -25,17 +25,20 @@ pub fn DeferredRetirementQueue(comptime FrameToken: type, comptime Resource: typ
             try self.entries.append(self.allocator, .{ .token = token, .resource = resource });
         }
 
-        pub fn retireCompleted(self: *Self, completed_token: FrameToken, retiree: anytype) void {
+        pub fn retireCompleted(self: *Self, completed_token: FrameToken, retiree: anytype) u32 {
+            var retired: u32 = 0;
             var i: usize = 0;
             while (i < self.entries.items.len) {
                 const entry = self.entries.items[i];
                 if (tokenLe(entry.token, completed_token)) {
                     retiree.retire(entry.resource);
                     _ = self.entries.orderedRemove(i);
+                    retired += 1;
                 } else {
                     i += 1;
                 }
             }
+            return retired;
         }
 
         fn tokenLe(a: FrameToken, b: FrameToken) bool {
@@ -70,9 +73,10 @@ test "DeferredRetirementQueue retires only completed resources" {
     var retire: Retire = .{};
     defer retire.values.deinit(std.testing.allocator);
 
-    queue.retireCompleted(2, &retire);
+    const retired = queue.retireCompleted(2, &retire);
 
     try std.testing.expectEqual(@as(usize, 1), queue.entries.items.len);
     try std.testing.expectEqual(@as(u32, 30), queue.entries.items[0].resource);
+    try std.testing.expectEqual(@as(u32, 2), retired);
     try std.testing.expectEqual(@as(usize, 2), retire.values.items.len);
 }

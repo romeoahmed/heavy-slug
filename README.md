@@ -133,9 +133,13 @@ zig build metal-shaders               # Slang -> Metal 4 MSL
 zig build -Doptimize=ReleaseFast      # release build
 zig build -Dthinlto=on                # require ThinLTO
 zig build -Dthinlto=off               # disable ThinLTO
+zig build test -Dvulkan=true -Dshader-stats=true
+                                      # compile backend with opt-in GPU shader counters
 ```
 
 `-Dthinlto=auto` is the default. Zig 0.16 requires LLD for LTO, while Mach-O LLD linking is unsupported, so native macOS release builds skip ThinLTO unless `-Dthinlto=on` is used to require a hard failure.
+
+`-Dshader-stats=true` adds backend-owned GPU counter buffers for fragment-path diagnostics such as candidate-vs-full-scan usage and curve-test counts. It is off by default so normal debug and release builds do not pay for shader atomics or extra bindings.
 
 ## Dependencies
 

@@ -226,6 +226,7 @@ hs_metal_resource_indices hs_metal_get_resource_indices(void) {
         HS_METAL_BUFFER_GLYPH_POOL,
         HS_METAL_BUFFER_COMMANDS,
         HS_METAL_BUFFER_PUSH_CONSTANTS,
+        HS_METAL_BUFFER_SHADER_STATS,
     };
 }
 
@@ -240,6 +241,7 @@ int hs_metal_context_draw(
     hs_metal_buffer *commands,
     hs_metal_buffer *push_constants,
     hs_metal_buffer *glyph_pool,
+    hs_metal_buffer *shader_stats,
     uint32_t workgroup_count,
     uint32_t slot_index,
     char *error_buffer,
@@ -286,6 +288,9 @@ int hs_metal_context_draw(
         [encoder setMeshBuffer:commands->buffer offset:0 atIndex:HS_METAL_BUFFER_COMMANDS];
         [encoder setMeshBuffer:push_constants->buffer offset:0 atIndex:HS_METAL_BUFFER_PUSH_CONSTANTS];
         [encoder setFragmentBuffer:glyph_pool->buffer offset:0 atIndex:HS_METAL_BUFFER_GLYPH_POOL];
+        if (shader_stats) {
+            [encoder setFragmentBuffer:shader_stats->buffer offset:0 atIndex:HS_METAL_BUFFER_SHADER_STATS];
+        }
         [encoder drawMeshThreadgroups:MTLSizeMake(workgroup_count, 1, 1)
             threadsPerObjectThreadgroup:MTLSizeMake(32, 1, 1)
               threadsPerMeshThreadgroup:MTLSizeMake(4, 1, 1)];

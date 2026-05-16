@@ -79,6 +79,10 @@ jobs:
             cache: ubuntu-vulkan
             os: ubuntu-latest
             command: zig build test -Dvulkan=true
+          - name: ubuntu vulkan shader stats
+            cache: ubuntu-vulkan-shader-stats
+            os: ubuntu-latest
+            command: zig build test -Dvulkan=true -Dshader-stats=true
           - name: macos core
             cache: macos-core
             os: macos-26
@@ -87,6 +91,10 @@ jobs:
             cache: macos-metal
             os: macos-26
             command: zig build test -Dmetal=true
+          - name: macos metal shader stats
+            cache: macos-metal-shader-stats
+            os: macos-26
+            command: zig build test -Dmetal=true -Dshader-stats=true
     steps:
       - uses: actions/checkout@v6
 

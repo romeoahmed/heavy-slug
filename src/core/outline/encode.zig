@@ -100,6 +100,8 @@ pub const Encoder = struct {
     pub const Encoded = struct {
         blob: blob_format.CoverageBlob,
         extents: hb.GlyphExtents,
+        outline_segments: u32,
+        regularized_spans: u32,
     };
 
     pub fn encodeGlyph(self: *Encoder, font: hb.Font, glyph_id: u32) Error!Encoded {
@@ -123,7 +125,12 @@ pub const Encoder = struct {
         _ = c.hb_font_get_glyph_extents(font.handle, glyph_id, &extents);
 
         if (drawn == 0 or self.capture.stream.segments.items.len == 0) {
-            return .{ .blob = blob_format.CoverageBlob.empty(self.allocator), .extents = extents };
+            return .{
+                .blob = blob_format.CoverageBlob.empty(self.allocator),
+                .extents = extents,
+                .outline_segments = 0,
+                .regularized_spans = 0,
+            };
         }
 
         try regularize.appendRegularized(
@@ -132,12 +139,19 @@ pub const Encoder = struct {
             self.capture.stream.segments.items,
         );
         if (self.spans.items.len == 0) {
-            return .{ .blob = blob_format.CoverageBlob.empty(self.allocator), .extents = extents };
+            return .{
+                .blob = blob_format.CoverageBlob.empty(self.allocator),
+                .extents = extents,
+                .outline_segments = @intCast(self.capture.stream.segments.items.len),
+                .regularized_spans = 0,
+            };
         }
 
         return .{
             .blob = try blob_encode.curves(self.allocator, self.spans.items),
             .extents = extents,
+            .outline_segments = @intCast(self.capture.stream.segments.items.len),
+            .regularized_spans = @intCast(self.spans.items.len),
         };
     }
 };

@@ -17,6 +17,7 @@ Backend modules are opt-in. `src/backends/vulkan/` provides `heavy_slug_vulkan` 
 - `zig build run -Ddemo=true -Ddemo-backend=vulkan_spirv16` runs the Windows/Linux Vulkan demo.
 - `zig build run -Ddemo=true -Ddemo-backend=metal4` runs the macOS Metal demo.
 - `zig build -Doptimize=ReleaseFast [-Dthinlto=auto|on|off]` builds release mode; `auto` enables ThinLTO only where Zig 0.16 can link it.
+- `zig build test -Dshader-stats=true [-Dvulkan=true|-Dmetal=true]` enables opt-in GPU shader counters for diagnostics.
 
 ## Coding Style & Naming Conventions
 

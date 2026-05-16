@@ -8,6 +8,13 @@ pub const Allocation = struct {
     size: u32,
 };
 
+pub const Snapshot = struct {
+    used_bytes: u32 = 0,
+    free_bytes: u32 = 0,
+    largest_free_block: u32 = 0,
+    free_blocks: u32 = 0,
+};
+
 /// Internal free-list node: offset and size are always alignment-rounded.
 const FreeBlock = struct {
     offset: u32,
@@ -41,6 +48,21 @@ pub const PoolAllocator = struct {
     pub fn deinit(self: *PoolAllocator) void {
         self.free_blocks.deinit(self.allocator);
         self.* = undefined;
+    }
+
+    pub fn snapshot(self: *const PoolAllocator) Snapshot {
+        var free_bytes: u32 = self.capacity - self.cursor;
+        var largest_free_block: u32 = self.capacity - self.cursor;
+        for (self.free_blocks.items) |block| {
+            free_bytes += block.size;
+            largest_free_block = @max(largest_free_block, block.size);
+        }
+        return .{
+            .used_bytes = self.capacity - free_bytes,
+            .free_bytes = free_bytes,
+            .largest_free_block = largest_free_block,
+            .free_blocks = @intCast(self.free_blocks.items.len),
+        };
     }
 
     /// Allocate `size` bytes from the pool. Returns null if the pool is full.
@@ -208,6 +230,21 @@ test "PoolAllocator: free and reuse" {
 
     const c = pa.alloc(8).?;
     try std.testing.expectEqual(@as(u32, 0), c.offset); // reused freed block
+}
+
+test "PoolAllocator: snapshot reports used bytes and largest free block" {
+    var pa = PoolAllocator.init(std.testing.allocator, 128, 16);
+    defer pa.deinit();
+
+    const a = pa.alloc(10).?;
+    _ = pa.alloc(20).?;
+    pa.free(a);
+
+    const snap = pa.snapshot();
+    try std.testing.expectEqual(@as(u32, 32), snap.used_bytes);
+    try std.testing.expectEqual(@as(u32, 96), snap.free_bytes);
+    try std.testing.expectEqual(@as(u32, 80), snap.largest_free_block);
+    try std.testing.expectEqual(@as(u32, 1), snap.free_blocks);
 }
 
 test "PoolAllocator: free block splitting" {

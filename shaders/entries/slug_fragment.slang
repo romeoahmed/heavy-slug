@@ -21,6 +21,22 @@ struct FragmentInput
 #endif
 };
 
+static const uint kShaderStatFragmentInvocations = 0;
+static const uint kShaderStatCandidatePathFragments = 1;
+static const uint kShaderStatFullScanFragments = 2;
+static const uint kShaderStatCandidateCurveTests = 3;
+static const uint kShaderStatFullScanCurveTests = 4;
+static const uint kShaderStatEmptyFragments = 5;
+
+void addShaderStat(uint index, uint value)
+{
+#if HEAVY_SLUG_SHADER_STATS
+    InterlockedAdd(shaderStats[index], value);
+#else
+    return;
+#endif
+}
+
 float integrateCandidateCurves(
     BlobReader blob,
     uint curveBase,
@@ -71,8 +87,12 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
         bandHeight,
         bandBase,
         idBase);
+    addShaderStat(kShaderStatFragmentInvocations, 1);
     if (curveCount == 0)
+    {
+        addShaderStat(kShaderStatEmptyFragments, 1);
         return 0.0;
+    }
 
     float2 dx = ddx(renderCoord);
     float2 dy = ddy(renderCoord);
@@ -86,7 +106,10 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
     float candidateMinY;
     float candidateMaxY;
     if (!conservativeHBandRange(renderCoord, dx, invDet, bounds, candidateMinY, candidateMaxY))
+    {
+        addShaderStat(kShaderStatEmptyFragments, 1);
         return 0.0;
+    }
 
     int firstBand = int(floor(candidateMinY / bandHeight)) - bandMin;
     int lastBand = int(floor(candidateMaxY / bandHeight)) - bandMin;
@@ -94,6 +117,13 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
     float signedArea = 0.0;
     if (bandCount > 0 && firstBand == lastBand && firstBand >= 0 && uint(firstBand) < bandCount)
     {
+#if HEAVY_SLUG_SHADER_STATS
+        uint idStartForStats;
+        uint bandIdCountForStats;
+        blob.readBand(bandBase, uint(firstBand), idStartForStats, bandIdCountForStats);
+        addShaderStat(kShaderStatCandidatePathFragments, 1);
+        addShaderStat(kShaderStatCandidateCurveTests, bandIdCountForStats);
+#endif
         signedArea = integrateCandidateCurves(
             blob,
             curveBase,
@@ -108,6 +138,8 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
     }
     else
     {
+        addShaderStat(kShaderStatFullScanFragments, 1);
+        addShaderStat(kShaderStatFullScanCurveTests, curveCount);
         signedArea = integrateFullScan(blob, curveBase, curveCount, renderCoord, dx, dy, invDet);
     }
 

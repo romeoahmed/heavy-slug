@@ -58,16 +58,17 @@ pub const GlyphStore = struct {
         self.* = undefined;
     }
 
-    pub fn beginFrame(self: *GlyphStore, completed_token: FrameToken, backend: anytype) void {
-        self.retireCompleted(completed_token, backend);
+    pub fn beginFrame(self: *GlyphStore, completed_token: FrameToken, backend: anytype) u32 {
+        const retired = self.retireCompleted(completed_token, backend);
         self.glyph_cache.advanceFrame();
+        return retired;
     }
 
     pub fn setRetireAfterToken(self: *GlyphStore, token: FrameToken) void {
         self.retire_after_token = token;
     }
 
-    pub fn retireCompleted(self: *GlyphStore, completed_token: FrameToken, backend: anytype) void {
+    pub fn retireCompleted(self: *GlyphStore, completed_token: FrameToken, backend: anytype) u32 {
         const Retiree = struct {
             store: *GlyphStore,
             backend: @TypeOf(backend),
@@ -79,19 +80,24 @@ pub const GlyphStore = struct {
         };
 
         var retiree = Retiree{ .store = self, .backend = backend };
-        self.retirements.retireCompleted(completed_token, &retiree);
+        return self.retirements.retireCompleted(completed_token, &retiree);
     }
 
-    pub fn deferEvicted(self: *GlyphStore, evicted: cache_mod.EvictedEntry) !void {
-        if (evicted.slot.isEmpty() and evicted.pool_alloc.size == 0) return;
+    pub fn deferEvicted(self: *GlyphStore, evicted: cache_mod.EvictedEntry) !bool {
+        if (evicted.slot.isEmpty() and evicted.pool_alloc.size == 0) return false;
         try self.retirements.push(self.retire_after_token, .{
             .ref = evicted.slot,
             .pool_alloc = evicted.pool_alloc,
         });
+        return true;
     }
 
     pub fn poolFreeBlockCount(self: *const GlyphStore) u32 {
         return @intCast(self.pool_alloc.free_blocks.items.len);
+    }
+
+    pub fn poolSnapshot(self: *const GlyphStore) pool_mod.Snapshot {
+        return self.pool_alloc.snapshot();
     }
 };
 
@@ -108,11 +114,12 @@ test "GlyphStore defers evicted resources until completed token" {
     };
     var retiree = Retiree{};
 
-    try store.deferEvicted(.{
+    try std.testing.expect(try store.deferEvicted(.{
         .key = .{ .font_id = 1, .glyph_id = 1 },
         .slot = GlyphRef.from(9),
         .pool_alloc = .{ .offset = 0, .size = 0 },
-    });
-    store.retireCompleted(0, &retiree);
+    }));
+    const retired = store.retireCompleted(0, &retiree);
     try std.testing.expectEqual(@as(u32, 1), retiree.releases);
+    try std.testing.expectEqual(@as(u32, 1), retired);
 }

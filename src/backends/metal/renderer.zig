@@ -2,6 +2,7 @@ const std = @import("std");
 const heavy_slug = @import("heavy_slug");
 const gpu_structs = @import("gpu_structs");
 const metal_shaders = @import("metal_shaders");
+const backend_options = @import("heavy_slug_backend_options");
 
 const pool_mod = heavy_slug.core.cache.byte_pool;
 const render = heavy_slug.core.render.renderer_core;
@@ -61,6 +62,7 @@ extern fn hs_metal_context_draw(
     commands: *BufferHandle,
     push_constants: *BufferHandle,
     glyph_pool: *BufferHandle,
+    shader_stats: ?*BufferHandle,
     workgroup_count: u32,
     slot_index: u32,
     error_buffer: [*]u8,
@@ -71,6 +73,7 @@ const ResourceIndices = extern struct {
     glyph_pool: u32,
     commands: u32,
     push_constants: u32,
+    shader_stats: u32,
 };
 
 extern fn hs_metal_get_resource_indices() ResourceIndices;
@@ -84,7 +87,26 @@ pub const Error = error{
 pub const RendererOptions = render.RendererOptions;
 pub const FontHandle = render.FontHandle;
 pub const FrameToken = render.FrameToken;
-pub const Stats = render.Stats;
+pub const Stats = if (@import("builtin").mode == .Debug) struct {
+    common: render.Stats = .{},
+    frame_slot_wait_ns: u64 = 0,
+    shader: heavy_slug.ShaderStats = .{},
+
+    pub fn reset(self: *@This()) void {
+        self.* = .{};
+    }
+
+    pub fn log(self: *const @This()) void {
+        std.log.scoped(.renderer).debug(
+            "metal stats: wait_ns={d} shader_fragments={d} shader_fullscan={d}",
+            .{ self.frame_slot_wait_ns, self.shader.fragment_invocations, self.shader.full_scan_fragments },
+        );
+        self.common.log(.renderer);
+    }
+} else struct {
+    pub fn reset(_: *@This()) void {}
+    pub fn log(_: *const @This()) void {}
+};
 pub const max_frames_in_flight = frames_in_flight;
 
 pub const Target = struct {
@@ -94,6 +116,7 @@ pub const Target = struct {
 };
 
 const CommandBatch = heavy_slug.core.render.TextBatch(GlyphCommand);
+const ShaderStatsBuffer = if (backend_options.shader_stats) MappedBuffer else void;
 
 pub const Context = struct {
     handle: *ContextHandle,
@@ -148,11 +171,34 @@ const MappedBuffer = struct {
     }
 };
 
+fn resetShaderStatsBuffer(buffer: MappedBuffer) void {
+    @memset(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)], 0);
+}
+
+fn readShaderStatsBuffer(buffer: MappedBuffer) heavy_slug.ShaderStats {
+    const counters: *const [heavy_slug.gpu.shader_stats.counter_count]u32 = @ptrCast(@alignCast(buffer.mapped));
+    return heavy_slug.gpu.shader_stats.Snapshot.fromCounters(counters);
+}
+
+fn monotonicNs() u64 {
+    var ts: std.posix.timespec = undefined;
+    switch (std.posix.errno(std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts))) {
+        .SUCCESS => {
+            const sec: u64 = @intCast(ts.sec);
+            const nsec: u64 = @intCast(ts.nsec);
+            return sec * std.time.ns_per_s + nsec;
+        },
+        else => return 0,
+    }
+}
+
 const FrameSlot = struct {
     commands: MappedBuffer,
     push_constants: MappedBuffer,
+    shader_stats: ShaderStatsBuffer,
 
     fn deinit(self: FrameSlot) void {
+        if (backend_options.shader_stats) self.shader_stats.deinit();
         self.push_constants.deinit();
         self.commands.deinit();
     }
@@ -194,6 +240,8 @@ pub const Renderer = struct {
     slot_tokens: [frames_in_flight]render.FrameToken,
     last_submitted_frame: render.FrameToken,
     completed_frame: render.FrameToken,
+    stats: Stats,
+    shader_stats_snapshot: heavy_slug.ShaderStats,
     allocator: std.mem.Allocator,
 
     pub fn init(
@@ -220,9 +268,16 @@ pub const Renderer = struct {
             const push_buf = try MappedBuffer.init(context, @sizeOf(PushConstants));
             errdefer push_buf.deinit();
 
+            var shader_stats: ShaderStatsBuffer = undefined;
+            if (backend_options.shader_stats) {
+                shader_stats = try MappedBuffer.init(context, @sizeOf(heavy_slug.ShaderStats));
+                resetShaderStatsBuffer(shader_stats);
+            }
+
             slot.* = .{
                 .commands = cmd_buf,
                 .push_constants = push_buf,
+                .shader_stats = shader_stats,
             };
             initialized_slots += 1;
         }
@@ -237,6 +292,8 @@ pub const Renderer = struct {
             .slot_tokens = .{0} ** frames_in_flight,
             .last_submitted_frame = 0,
             .completed_frame = 0,
+            .stats = .{},
+            .shader_stats_snapshot = .{},
             .allocator = allocator,
         };
     }
@@ -261,7 +318,9 @@ pub const Renderer = struct {
         }
 
         self.active_frame = (self.active_frame + 1) % frames_in_flight;
+        self.stats.reset();
         var error_buf: [2048]u8 = undefined;
+        const wait_start = monotonicNs();
         if (hs_metal_context_wait_frame_slot(
             self.context.handle,
             self.active_frame,
@@ -271,12 +330,28 @@ pub const Renderer = struct {
             std.log.err("Metal frame slot wait failed: {s}", .{std.mem.sliceTo(&error_buf, 0)});
             return Error.MetalDrawFailed;
         }
+        if (@import("builtin").mode == .Debug) {
+            const wait_end = monotonicNs();
+            self.stats.frame_slot_wait_ns = if (wait_end >= wait_start) wait_end - wait_start else 0;
+        }
+        if (backend_options.shader_stats and self.slot_tokens[self.active_frame] > self.completed_frame) {
+            self.shader_stats_snapshot = readShaderStatsBuffer(self.frame_slots[self.active_frame].shader_stats);
+        }
         if (self.slot_tokens[self.active_frame] > self.completed_frame) {
             self.completed_frame = self.slot_tokens[self.active_frame];
         }
+        if (backend_options.shader_stats) resetShaderStatsBuffer(self.frame_slots[self.active_frame].shader_stats);
         self.frame_reserved = true;
         self.core.setRetireAfterToken(self.last_submitted_frame);
         self.core.beginFrame(self.completed_frame, self);
+    }
+
+    pub fn statsSnapshot(self: *const Renderer) Stats {
+        if (@import("builtin").mode != .Debug) return .{};
+        var out = self.stats;
+        out.common = self.core.stats;
+        out.shader = self.shader_stats_snapshot;
+        return out;
     }
 
     pub fn beginFrame(self: *Renderer) Error!Frame {
@@ -319,6 +394,10 @@ pub const Renderer = struct {
         const clear_color = target.clear_color;
         const proj_em = render.projectionToEm(proj);
         const frame_slot = &self.frame_slots[self.active_frame];
+        const shader_stats_handle: ?*BufferHandle = if (backend_options.shader_stats)
+            frame_slot.shader_stats.handle
+        else
+            null;
 
         const push = PushConstants{
             .proj = proj_em,
@@ -342,6 +421,7 @@ pub const Renderer = struct {
             frame_slot.commands.handle,
             frame_slot.push_constants.handle,
             self.pool_buffer.handle,
+            shader_stats_handle,
             workgroup_count,
             self.active_frame,
             &error_buf,
@@ -356,7 +436,7 @@ pub const Renderer = struct {
 
         if (@import("builtin").mode == .Debug) {
             self.core.stats.glyphs_submitted += glyph_count;
-            self.core.stats.pool_free_blocks = self.core.poolFreeBlockCount();
+            self.core.stats.pool = self.core.poolSnapshot();
         }
         self.last_submitted_frame +%= 1;
         self.slot_tokens[self.active_frame] = self.last_submitted_frame;
@@ -392,13 +472,24 @@ test "Metal bridge resource indices match generated Slang MSL" {
     const indices = hs_metal_get_resource_indices();
     try std.testing.expectEqual(@as(u32, 0), indices.glyph_pool);
     try std.testing.expectEqual(@as(u32, 1), indices.commands);
-    try std.testing.expectEqual(@as(u32, 2), indices.push_constants);
+    const push_index: u32 = if (backend_options.shader_stats) 3 else 2;
+    try std.testing.expectEqual(push_index, indices.push_constants);
+    try std.testing.expectEqual(@as(u32, 2), indices.shader_stats);
 
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.task, "GlyphCommand_0 device* commands_1 [[buffer(1)]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.task, "PushConstants_natural_0 constant* pc_1 [[buffer(2)]]") != null);
+    const push_pattern = if (backend_options.shader_stats)
+        "PushConstants_natural_0 constant* pc_1 [[buffer(3)]]"
+    else
+        "PushConstants_natural_0 constant* pc_1 [[buffer(2)]]";
+    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.task, push_pattern) != null);
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "GlyphCommand_0 device* commands_1 [[buffer(1)]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "PushConstants_natural_0 constant* pc_1 [[buffer(2)]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "glyphPool_0 [[buffer(0)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, push_pattern) != null);
+    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "glyphPool_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "[[buffer(0)]]") != null);
+    if (backend_options.shader_stats) {
+        try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "shaderStats_") != null);
+        try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "[[buffer(2)]]") != null);
+    }
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "glyphRef_0 [[user(TEXCOORD_1)]]") != null);
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "glyphRef_0 [[user(TEXCOORD_1)]]") != null);
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "user(TEXCOORD__1)") == null);

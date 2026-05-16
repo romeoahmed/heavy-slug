@@ -7,6 +7,8 @@ pub const EncodedGlyph = struct {
     data: []const u8,
     extents: hb.GlyphExtents,
     blob: blob_mod.CoverageBlob,
+    outline_segments: u32,
+    regularized_spans: u32,
 
     pub fn destroy(self: EncodedGlyph) void {
         var blob = self.blob;
@@ -33,6 +35,8 @@ pub const GlyphEncoder = struct {
             .data = bytes,
             .extents = encoded.extents,
             .blob = encoded.blob,
+            .outline_segments = encoded.outline_segments,
+            .regularized_spans = encoded.regularized_spans,
         };
     }
 };

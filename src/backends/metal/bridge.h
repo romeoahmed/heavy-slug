@@ -7,6 +7,10 @@
 extern "C" {
 #endif
 
+#ifndef HEAVY_SLUG_SHADER_STATS
+#define HEAVY_SLUG_SHADER_STATS 0
+#endif
+
 typedef struct hs_metal_context hs_metal_context;
 typedef struct hs_metal_pipeline hs_metal_pipeline;
 typedef struct hs_metal_buffer hs_metal_buffer;
@@ -26,6 +30,7 @@ typedef struct hs_metal_resource_indices {
     uint32_t glyph_pool;
     uint32_t commands;
     uint32_t push_constants;
+    uint32_t shader_stats;
 } hs_metal_resource_indices;
 
 /*
@@ -36,7 +41,8 @@ typedef struct hs_metal_resource_indices {
 enum {
     HS_METAL_BUFFER_GLYPH_POOL = 0,
     HS_METAL_BUFFER_COMMANDS = 1,
-    HS_METAL_BUFFER_PUSH_CONSTANTS = 2,
+    HS_METAL_BUFFER_PUSH_CONSTANTS = HEAVY_SLUG_SHADER_STATS ? 3 : 2,
+    HS_METAL_BUFFER_SHADER_STATS = 2,
 };
 
 hs_metal_resource_indices hs_metal_get_resource_indices(void);
@@ -84,6 +90,7 @@ int hs_metal_context_draw(
     hs_metal_buffer *commands,
     hs_metal_buffer *push_constants,
     hs_metal_buffer *glyph_pool,
+    hs_metal_buffer *shader_stats,
     uint32_t workgroup_count,
     uint32_t slot_index,
     char *error_buffer,

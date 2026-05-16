@@ -2,6 +2,7 @@ const std = @import("std");
 const vk = @import("vulkan");
 const gpu_context = @import("context.zig");
 const gpu_structs = @import("gpu_structs");
+const backend_options = @import("heavy_slug_backend_options");
 
 /// VK_WHOLE_SIZE: sentinel meaning "the rest of the buffer".
 /// Used in null descriptors (requires VK_EXT_robustness2 nullDescriptor).
@@ -118,6 +119,17 @@ test "SlotAllocator: free and re-alloc cycle" {
 const max_glyph_descriptors: u32 = 65_536;
 const max_pending_writes: u32 = 256;
 
+pub const DebugStats = if (@import("builtin").mode == .Debug) struct {
+    descriptor_writes: u32 = 0,
+    descriptor_flush_calls: u32 = 0,
+
+    pub fn reset(self: *@This()) void {
+        self.* = .{};
+    }
+} else struct {
+    pub fn reset(_: *@This()) void {}
+};
+
 const PendingWrites = struct {
     writes: [max_pending_writes]vk.WriteDescriptorSet = undefined,
     buf_infos: [max_pending_writes]vk.DescriptorBufferInfo = undefined,
@@ -132,6 +144,7 @@ pub const DescriptorTable = struct {
     sets: []vk.DescriptorSet,
     slots: SlotAllocator,
     pending: PendingWrites,
+    debug_stats: DebugStats,
 
     pub fn init(
         ctx: gpu_context.VulkanContext,
@@ -146,15 +159,17 @@ pub const DescriptorTable = struct {
         std.debug.assert(frame_set_count > 0);
         try validateDescriptorLimits(ctx.descriptor_indexing_properties, slot_capacity, frame_set_count);
         // -- Create descriptor set layout --
-        const binding_flags = [2]vk.DescriptorBindingFlags{
+        const binding_count: u32 = if (backend_options.shader_stats) 3 else 2;
+        const binding_flags = [3]vk.DescriptorBindingFlags{
             .{
                 .partially_bound_bit = true,
                 .update_after_bind_bit = true,
                 .update_unused_while_pending_bit = true,
             },
             .{},
+            .{},
         };
-        const bindings = [2]vk.DescriptorSetLayoutBinding{
+        const bindings = [3]vk.DescriptorSetLayoutBinding{
             .{
                 .binding = 0,
                 .descriptor_type = .storage_buffer,
@@ -169,24 +184,31 @@ pub const DescriptorTable = struct {
                 .stage_flags = .{ .task_bit_ext = true, .mesh_bit_ext = true },
                 .p_immutable_samplers = null,
             },
+            .{
+                .binding = 2,
+                .descriptor_type = .storage_buffer,
+                .descriptor_count = 1,
+                .stage_flags = .{ .fragment_bit = true },
+                .p_immutable_samplers = null,
+            },
         };
         const flags_info = vk.DescriptorSetLayoutBindingFlagsCreateInfo{
             .s_type = .descriptor_set_layout_binding_flags_create_info,
-            .binding_count = 2,
+            .binding_count = binding_count,
             .p_binding_flags = &binding_flags,
         };
         const layout_ci = vk.DescriptorSetLayoutCreateInfo{
             .s_type = .descriptor_set_layout_create_info,
             .p_next = @ptrCast(&flags_info),
             .flags = .{ .update_after_bind_pool_bit = true },
-            .binding_count = 2,
+            .binding_count = binding_count,
             .p_bindings = &bindings,
         };
         const layout = try dispatch.createDescriptorSetLayout(device, &layout_ci, null);
         errdefer dispatch.destroyDescriptorSetLayout(device, layout, null);
 
         // -- Create descriptor pool --
-        const descriptor_count_per_set = slot_capacity + 1;
+        const descriptor_count_per_set = slot_capacity + 1 + @as(u32, if (backend_options.shader_stats) 1 else 0);
         const pool_sizes = [1]vk.DescriptorPoolSize{
             .{
                 .type = .storage_buffer,
@@ -232,6 +254,7 @@ pub const DescriptorTable = struct {
             .sets = sets,
             .slots = slots,
             .pending = .{},
+            .debug_stats = .{},
         };
     }
 
@@ -250,10 +273,22 @@ pub const DescriptorTable = struct {
         return self.sets[frame_index];
     }
 
+    pub fn resetDebugStats(self: *DescriptorTable) void {
+        self.debug_stats.reset();
+    }
+
+    pub fn debugStats(self: *const DescriptorTable) DebugStats {
+        return self.debug_stats;
+    }
+
     /// Flush all pending descriptor writes in a single Vulkan API call.
     /// Must be called before any GPU work that reads the descriptors.
     pub fn flushWrites(self: *DescriptorTable) void {
         if (self.pending.len == 0) return;
+        if (@import("builtin").mode == .Debug) {
+            self.debug_stats.descriptor_writes += self.pending.len;
+            self.debug_stats.descriptor_flush_calls += 1;
+        }
         // Fix up p_buffer_info pointers — they must point into our inline array
         for (self.pending.writes[0..self.pending.len], 0..) |*w, i| {
             w.p_buffer_info = @ptrCast(&self.pending.buf_infos[i]);
@@ -330,6 +365,34 @@ pub const DescriptorTable = struct {
         self.enqueueWrite(buf_info, write);
     }
 
+    pub fn updateShaderStatsBuffer(
+        self: *DescriptorTable,
+        frame_index: u32,
+        buffer: vk.Buffer,
+        offset: vk.DeviceSize,
+        range: vk.DeviceSize,
+    ) void {
+        std.debug.assert(backend_options.shader_stats);
+        const set = self.setForFrame(frame_index);
+        const buf_info = vk.DescriptorBufferInfo{
+            .buffer = buffer,
+            .offset = offset,
+            .range = range,
+        };
+        const write = vk.WriteDescriptorSet{
+            .s_type = .write_descriptor_set,
+            .dst_set = set,
+            .dst_binding = 2,
+            .dst_array_element = 0,
+            .descriptor_count = 1,
+            .descriptor_type = .storage_buffer,
+            .p_buffer_info = undefined,
+            .p_image_info = undefined,
+            .p_texel_buffer_view = undefined,
+        };
+        self.enqueueWrite(buf_info, write);
+    }
+
     /// Allocate a descriptor slot index from the free-list.
     pub fn allocSlot(self: *DescriptorTable) ?u32 {
         return self.slots.alloc();
@@ -373,14 +436,16 @@ fn validateDescriptorLimits(
     frame_set_count: u32,
 ) !void {
     const update_after_bind_per_set = slot_capacity;
-    const descriptors_per_set = slot_capacity + 1;
+    const extra_frame_bindings: u32 = 1 + @as(u32, if (backend_options.shader_stats) 1 else 0);
+    const descriptors_per_set = slot_capacity + extra_frame_bindings;
+    const max_descriptors_per_set = max_glyph_descriptors + extra_frame_bindings;
     const update_after_bind_pool_total = update_after_bind_per_set * frame_set_count;
 
     if (update_after_bind_per_set > props.max_per_stage_descriptor_update_after_bind_storage_buffers or
         update_after_bind_per_set > props.max_descriptor_set_update_after_bind_storage_buffers or
         update_after_bind_per_set > props.max_per_stage_update_after_bind_resources or
         update_after_bind_pool_total > props.max_update_after_bind_descriptors_in_all_pools or
-        descriptors_per_set > max_glyph_descriptors + 1)
+        descriptors_per_set > max_descriptors_per_set)
     {
         return error.DescriptorLimitExceeded;
     }
@@ -396,6 +461,7 @@ test "DescriptorTable type and field layout compiles" {
     try std.testing.expect(@hasField(DescriptorTable, "sets"));
     try std.testing.expect(@hasField(DescriptorTable, "slots"));
     try std.testing.expect(@hasField(DescriptorTable, "pending"));
+    try std.testing.expect(@hasField(DescriptorTable, "debug_stats"));
 }
 
 test "DescriptorTable: pending write buffer type compiles" {
@@ -403,8 +469,18 @@ test "DescriptorTable: pending write buffer type compiles" {
     try std.testing.expect(@hasField(DescriptorTable, "pending"));
     // Verify flushWrites method exists
     _ = @TypeOf(DescriptorTable.flushWrites);
+    _ = @TypeOf(DescriptorTable.debugStats);
     // Verify enqueueWrite is accessible (it's private but compiles)
     _ = @TypeOf(DescriptorTable.enqueueWrite);
+}
+
+test "DescriptorTable debug stats reset in debug builds" {
+    var stats = DebugStats{};
+    stats.reset();
+    if (@import("builtin").mode == .Debug) {
+        try std.testing.expectEqual(@as(u32, 0), stats.descriptor_writes);
+        try std.testing.expectEqual(@as(u32, 0), stats.descriptor_flush_calls);
+    }
 }
 
 test "DescriptorTable: limit validation accepts typical configured capacity" {

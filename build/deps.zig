@@ -25,6 +25,7 @@ pub const Options = struct {
     build_vulkan: bool,
     build_metal: bool,
     use_lto: bool,
+    shader_stats: bool,
 };
 
 pub fn resolve(b: *std.Build) Options {
@@ -33,6 +34,7 @@ pub fn resolve(b: *std.Build) Options {
     const build_demo = b.option(bool, "demo", "Build demo executable") orelse false;
     const requested_backend = b.option(DemoBackend, "demo-backend", "Demo backend: auto, vulkan_spirv16, metal4") orelse .auto;
     const thin_lto_mode = b.option(ThinLtoMode, "thinlto", "ThinLTO: auto, on, off") orelse .auto;
+    const shader_stats = b.option(bool, "shader-stats", "Enable opt-in GPU shader statistics buffers") orelse false;
     const demo_backend = resolveDemoBackend(target.result.os.tag, requested_backend);
     const build_vulkan = (b.option(bool, "vulkan", "Build the Vulkan SPIR-V 1.6 backend module") orelse false) or
         (build_demo and demo_backend == .vulkan_spirv16);
@@ -51,6 +53,7 @@ pub fn resolve(b: *std.Build) Options {
         .build_vulkan = build_vulkan,
         .build_metal = build_metal,
         .use_lto = resolveThinLto(optimize, target.result, thin_lto_mode),
+        .shader_stats = shader_stats,
     };
 }
 

@@ -14,9 +14,9 @@ pub const MetalShaders = struct {
     module: *std.Build.Module,
 };
 
-pub fn buildSpirv(b: *std.Build) SpirvShaders {
-    const task_spv = compileSlangSpirv(b, "slug_task.spv", "shaders/entries/slug_task.slang", "taskMain", "amplification", "spvGroupNonUniform+spvGroupNonUniformBallot");
-    const mesh_spv = compileSlangSpirv(b, "slug_mesh.spv", "shaders/entries/slug_mesh.slang", "meshMain", "mesh", "");
+pub fn buildSpirv(b: *std.Build, shader_stats: bool) SpirvShaders {
+    const task_spv = compileSlangSpirv(b, "slug_task.spv", "shaders/entries/slug_task.slang", "taskMain", "amplification", "spvGroupNonUniform+spvGroupNonUniformBallot", shader_stats);
+    const mesh_spv = compileSlangSpirv(b, "slug_mesh.spv", "shaders/entries/slug_mesh.slang", "meshMain", "mesh", "", shader_stats);
     const frag_spv = compileSlangSpirv(
         b,
         "slug_fragment.spv",
@@ -24,6 +24,7 @@ pub fn buildSpirv(b: *std.Build) SpirvShaders {
         "fragmentMain",
         "fragment",
         "SPV_EXT_descriptor_indexing+spvShaderNonUniform+SPV_GOOGLE_user_type+spvDerivativeControl+spvImageQuery+spvImageGatherExtended+spvSparseResidency+spvMinLod+spvFragmentFullyCoveredEXT",
+        shader_stats,
     );
 
     const shader_wf = b.addWriteFiles();
@@ -44,10 +45,10 @@ pub fn buildSpirv(b: *std.Build) SpirvShaders {
     };
 }
 
-pub fn buildMetal(b: *std.Build) MetalShaders {
-    const task_msl = compileSlangMetal(b, "slug_task.metal", "shaders/entries/slug_task.slang", "taskMain", "amplification");
-    const mesh_msl = compileSlangMetal(b, "slug_mesh.metal", "shaders/entries/slug_mesh.slang", "meshMain", "mesh");
-    const frag_msl = compileSlangMetal(b, "slug_fragment.metal", "shaders/entries/slug_fragment.slang", "fragmentMain", "fragment");
+pub fn buildMetal(b: *std.Build, shader_stats: bool) MetalShaders {
+    const task_msl = compileSlangMetal(b, "slug_task.metal", "shaders/entries/slug_task.slang", "taskMain", "amplification", shader_stats);
+    const mesh_msl = compileSlangMetal(b, "slug_mesh.metal", "shaders/entries/slug_mesh.slang", "meshMain", "mesh", shader_stats);
+    const frag_msl = compileSlangMetal(b, "slug_fragment.metal", "shaders/entries/slug_fragment.slang", "fragmentMain", "fragment", shader_stats);
 
     const shader_wf = b.addWriteFiles();
     _ = shader_wf.addCopyFile(task_msl, "slug_task.metal");
@@ -96,7 +97,7 @@ pub fn addMetalInstallSteps(
 pub fn generateReflectionJson(b: *std.Build) std.Build.LazyPath {
     const cmd = b.addSystemCommand(&.{"slangc"});
     cmd.addFileArg(b.path("shaders/entries/slug_task.slang"));
-    addSharedSlangArgs(cmd, "taskMain", "amplification", false);
+    addSharedSlangArgs(cmd, "taskMain", "amplification", false, false);
     cmd.addArgs(&.{ "-target", "spirv" });
     cmd.addArgs(&.{ "-profile", "spirv_1_6+spvGroupNonUniform+spvGroupNonUniformBallot" });
     addSharedIncludeAndOptArgs(b, cmd, .vulkan);
@@ -129,10 +130,11 @@ fn compileSlangSpirv(
     entry: []const u8,
     stage: []const u8,
     extra_caps: []const u8,
+    shader_stats: bool,
 ) std.Build.LazyPath {
     const cmd = b.addSystemCommand(&.{"slangc"});
     cmd.addFileArg(b.path(source));
-    addSharedSlangArgs(cmd, entry, stage, false);
+    addSharedSlangArgs(cmd, entry, stage, false, shader_stats);
     cmd.addArgs(&.{ "-target", "spirv" });
     const profile = if (extra_caps.len > 0)
         std.mem.concat(b.allocator, u8, &.{ "spirv_1_6+", extra_caps }) catch @panic("OOM")
@@ -150,10 +152,11 @@ fn compileSlangMetal(
     source: []const u8,
     entry: []const u8,
     stage: []const u8,
+    shader_stats: bool,
 ) std.Build.LazyPath {
     const cmd = b.addSystemCommand(&.{"slangc"});
     cmd.addFileArg(b.path(source));
-    addSharedSlangArgs(cmd, entry, stage, true);
+    addSharedSlangArgs(cmd, entry, stage, true, shader_stats);
     cmd.addArgs(&.{ "-target", "metal" });
     cmd.addArgs(&.{ "-capability", "metallib_4_0" });
     addSharedIncludeAndOptArgs(b, cmd, .metal);
@@ -166,8 +169,10 @@ fn addSharedSlangArgs(
     entry: []const u8,
     stage: []const u8,
     comptime metal: bool,
+    shader_stats: bool,
 ) void {
     cmd.addArgs(&.{if (metal) "-DHEAVY_SLUG_METAL=1" else "-DHEAVY_SLUG_METAL=0"});
+    cmd.addArgs(&.{if (shader_stats) "-DHEAVY_SLUG_SHADER_STATS=1" else "-DHEAVY_SLUG_SHADER_STATS=0"});
     cmd.addArgs(&.{ "-entry", entry });
     cmd.addArgs(&.{ "-stage", stage });
 }
