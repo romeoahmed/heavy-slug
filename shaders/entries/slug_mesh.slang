@@ -7,7 +7,6 @@ import resources;
 struct TaskPayload
 {
     uint glyphIndices[kTaskGroupSize];
-    float motorScales[kTaskGroupSize];   // precomputed motor scale (dot product of motor rotor)
     float2 emPerPixels[kTaskGroupSize];  // precomputed em-per-pixel for dilation
 };
 
@@ -39,6 +38,17 @@ static const uint3 kTriIndices[2] = {
     uint3(0, 2, 3),
 };
 
+static const uint kShaderStatMeshWorkgroups = 10;
+
+void addShaderStat(uint index, uint value)
+{
+#if HEAVY_SLUG_SHADER_STATS
+    InterlockedAdd(shaderStats[index], value);
+#else
+    return;
+#endif
+}
+
 [shader("mesh")]
 [numthreads(4, 1, 1)]
 [outputtopology("triangle")]
@@ -50,6 +60,8 @@ void meshMain(
     OutputIndices<uint3, 2> tris)
 {
     SetMeshOutputCounts(4, 2);
+    if (gtid == 0)
+        addShaderStat(kShaderStatMeshWorkgroups, 1);
 
     uint glyphIndex = taskPayload.glyphIndices[gid];
     GlyphCommand cmd = commands[glyphIndex];
@@ -57,7 +69,6 @@ void meshMain(
 
     float2 emMin = float2(cmd.em_x_min, cmd.em_y_min);
     float2 emMax = float2(cmd.em_x_max, cmd.em_y_max);
-    float2 emSize = emMax - emMin;
 
     // Half-pixel dilation prevents clipping fragments at analytic edges.
     float2 emPerPixel = taskPayload.emPerPixels[gid];

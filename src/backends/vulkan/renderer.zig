@@ -35,11 +35,14 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
 
     pub fn log(self: *const @This()) void {
         std.log.scoped(.renderer).debug(
-            "vulkan stats: desc_writes={d} desc_flushes={d} frame_busy={d} shader_fragments={d} shader_fullscan={d}",
+            "vulkan stats: desc_writes={d} desc_flushes={d} frame_busy={d} task_visible={d}/{d} mesh_groups={d} shader_fragments={d} shader_fullscan={d}",
             .{
                 self.descriptor_writes,
                 self.descriptor_flush_calls,
                 self.frame_resources_in_use,
+                self.shader.task_glyphs_visible,
+                self.shader.task_glyphs_tested,
+                self.shader.mesh_workgroups,
                 self.shader.fragment_invocations,
                 self.shader.full_scan_fragments,
             },

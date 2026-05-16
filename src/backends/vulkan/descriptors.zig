@@ -165,7 +165,7 @@ pub const DescriptorTable = struct {
                 .binding = 2,
                 .descriptor_type = .storage_buffer,
                 .descriptor_count = 1,
-                .stage_flags = .{ .fragment_bit = true },
+                .stage_flags = .{ .task_bit_ext = true, .mesh_bit_ext = true, .fragment_bit = true },
                 .p_immutable_samplers = null,
             },
         };

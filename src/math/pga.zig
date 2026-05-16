@@ -29,17 +29,9 @@ pub const Motor = extern struct {
     /// Derived from the functional composition constraint:
     ///   compose(a, b).apply(p) == a.apply(b.apply(p))
     ///
-    /// The world translation of the composed motor is T_M = R_a·T_b + T_a,
-    /// where R_a is the full rotation matrix of a.  Because this encoding
-    /// stores translation in the half-angle–rotated frame, the correct scalar
-    /// formula requires the full rotation terms c1 = 1−2αA² and sw1 = 2·sA·αA:
-    ///
-    ///   s'   = sA·sB − αA·αB
-    ///   e12' = sA·αB + αA·sB
-    ///   xsum = c1·(sB·txB+αB·tyB) + sw1·(αB·txB−sB·tyB) + sA·txA+αA·tyA
-    ///   ysum = sw1·(sB·txB+αB·tyB) + c1·(−αB·txB+sB·tyB) − αA·txA+sA·tyA
-    ///   e01' = s'·xsum − e12'·ysum
-    ///   e02' = e12'·xsum + s'·ysum
+    /// Translation is stored as q = R(θ/2)·T/2, so composition reduces to:
+    ///   q' = R(θB/2)·qA + R(3θA/2)·qB
+    /// where R(3θA/2) uses the triple-angle identities below.
     pub fn compose(a: Motor, b: Motor) Motor {
         const sa = a.m[0];
         const aa = a.m[1];
@@ -51,15 +43,14 @@ pub const Motor = extern struct {
         const ub = b.m[3];
         const sc = sa * sb - aa * ab;
         const ac = sa * ab + aa * sb;
-        const c1 = 1.0 - 2.0 * aa * aa;
-        const sw1 = 2.0 * sa * aa;
-        const xsum = c1 * (sb * tb + ab * ub) + sw1 * (ab * tb - sb * ub) + sa * ta + aa * ua;
-        const ysum = sw1 * (sb * tb + ab * ub) + c1 * (-ab * tb + sb * ub) - aa * ta + sa * ua;
+        const aa2 = aa * aa;
+        const c3 = sa * (1.0 - 4.0 * aa2);
+        const s3 = aa * (3.0 - 4.0 * aa2);
         return .{ .m = .{
             sc,
             ac,
-            sc * xsum - ac * ysum,
-            ac * xsum + sc * ysum,
+            sb * ta - ab * ua + c3 * tb - s3 * ub,
+            ab * ta + sb * ua + s3 * tb + c3 * ub,
         } };
     }
 
@@ -75,8 +66,9 @@ pub const Motor = extern struct {
     pub fn composeTranslation(self: Motor, tx: f32, ty: f32) Motor {
         const htx = tx * 0.5;
         const hty = ty * 0.5;
-        const c3 = self.m[0] * (1.0 - 4.0 * self.m[1] * self.m[1]);
-        const s3 = self.m[1] * (3.0 - 4.0 * self.m[1] * self.m[1]);
+        const a2 = self.m[1] * self.m[1];
+        const c3 = self.m[0] * (1.0 - 4.0 * a2);
+        const s3 = self.m[1] * (3.0 - 4.0 * a2);
         return .{ .m = .{
             self.m[0],
             self.m[1],
@@ -144,10 +136,15 @@ pub const Motor = extern struct {
     }
 
     /// Renormalize a motor so that s² + e12² = 1.
-    /// Guards against drift after many compositions.
+    /// Scales every component because motors are homogeneous coordinates.
     pub fn unitize(self: Motor) Motor {
         const inv = 1.0 / @sqrt(self.m[0] * self.m[0] + self.m[1] * self.m[1]);
-        return .{ .m = .{ self.m[0] * inv, self.m[1] * inv, self.m[2] * inv, self.m[3] * inv } };
+        return .{ .m = .{
+            self.m[0] * inv,
+            self.m[1] * inv,
+            self.m[2] * inv,
+            self.m[3] * inv,
+        } };
     }
 };
 
@@ -457,4 +454,22 @@ test "Motor.unitize restores rotor norm after repeated composition" {
     const fresh_point = fresh.apply(point);
     try testing.expectApproxEqAbs(fresh_point[0], fixed_point[0], 0.01);
     try testing.expectApproxEqAbs(fresh_point[1], fixed_point[1], 0.01);
+}
+
+test "Motor.unitize rescales homogeneous motor coordinates" {
+    const base = Motor.compose(
+        Motor.fromTranslation(8.0, -3.0),
+        Motor.fromRotation(std.math.pi / 5.0),
+    );
+    const scaled = Motor{ .m = .{
+        base.m[0] * 4.0,
+        base.m[1] * 4.0,
+        base.m[2] * 4.0,
+        base.m[3] * 4.0,
+    } };
+    const normalized = scaled.unitize();
+
+    for (base.m, normalized.m) |expected, actual| {
+        try testing.expectApproxEqAbs(expected, actual, 1.0e-6);
+    }
 }

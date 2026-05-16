@@ -98,8 +98,15 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
 
     pub fn log(self: *const @This()) void {
         std.log.scoped(.renderer).debug(
-            "metal stats: wait_ns={d} shader_fragments={d} shader_fullscan={d}",
-            .{ self.frame_slot_wait_ns, self.shader.fragment_invocations, self.shader.full_scan_fragments },
+            "metal stats: wait_ns={d} task_visible={d}/{d} mesh_groups={d} shader_fragments={d} shader_fullscan={d}",
+            .{
+                self.frame_slot_wait_ns,
+                self.shader.task_glyphs_visible,
+                self.shader.task_glyphs_tested,
+                self.shader.mesh_workgroups,
+                self.shader.fragment_invocations,
+                self.shader.full_scan_fragments,
+            },
         );
         self.common.log(.renderer);
     }
@@ -487,6 +494,10 @@ test "Metal bridge resource indices match generated Slang MSL" {
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "glyphPool_") != null);
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "[[buffer(0)]]") != null);
     if (backend_options.shader_stats) {
+        try std.testing.expect(std.mem.indexOf(u8, metal_shaders.task, "shaderStats_") != null);
+        try std.testing.expect(std.mem.indexOf(u8, metal_shaders.task, "[[buffer(2)]]") != null);
+        try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "shaderStats_") != null);
+        try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "[[buffer(2)]]") != null);
         try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "shaderStats_") != null);
         try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "[[buffer(2)]]") != null);
     }

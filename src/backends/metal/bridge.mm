@@ -291,6 +291,8 @@ int hs_metal_context_draw(
         [encoder setMeshBuffer:push_constants->buffer offset:0 atIndex:HS_METAL_BUFFER_PUSH_CONSTANTS];
         [encoder setFragmentBuffer:glyph_pool->buffer offset:0 atIndex:HS_METAL_BUFFER_GLYPH_POOL];
         if (shader_stats) {
+            [encoder setObjectBuffer:shader_stats->buffer offset:0 atIndex:HS_METAL_BUFFER_SHADER_STATS];
+            [encoder setMeshBuffer:shader_stats->buffer offset:0 atIndex:HS_METAL_BUFFER_SHADER_STATS];
             [encoder setFragmentBuffer:shader_stats->buffer offset:0 atIndex:HS_METAL_BUFFER_SHADER_STATS];
         }
         [encoder drawMeshThreadgroups:MTLSizeMake(workgroup_count, 1, 1)

@@ -7,14 +7,27 @@ import resources;
 struct TaskPayload
 {
     uint glyphIndices[kTaskGroupSize];
-    float motorScales[kTaskGroupSize];   // precomputed motor scale (dot product of motor rotor)
     float2 emPerPixels[kTaskGroupSize];  // precomputed em-per-pixel for dilation
 };
+
+static const uint kShaderStatTaskWorkgroups = 6;
+static const uint kShaderStatTaskGlyphsTested = 7;
+static const uint kShaderStatTaskGlyphsVisible = 8;
+static const uint kShaderStatTaskGlyphsCulled = 9;
 
 groupshared TaskPayload s_payload;
 #if HEAVY_SLUG_METAL
 groupshared uint s_survivorCount;
 #endif
+
+void addShaderStat(uint index, uint value)
+{
+#if HEAVY_SLUG_SHADER_STATS
+    InterlockedAdd(shaderStats[index], value);
+#else
+    return;
+#endif
+}
 
 // Divide by w so the cull works for both orthographic and perspective projections.
 bool isVisible(float4 c0, float4 c1, float4 c2, float4 c3)
@@ -37,7 +50,11 @@ bool isVisible(float4 c0, float4 c1, float4 c2, float4 c3)
 [numthreads(kTaskGroupSize, 1, 1)]
 void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
 {
-    uint localIndex = gid * kTaskGroupSize + gtid;
+    uint groupBase = gid * kTaskGroupSize;
+    uint groupSize = groupBase < pc.glyph_count
+        ? min(kTaskGroupSize, pc.glyph_count - groupBase)
+        : 0;
+    uint localIndex = groupBase + gtid;
     uint glyphIndex = pc.glyph_base + localIndex;
     bool alive = false;
 
@@ -78,7 +95,6 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
             length(float2(pc.proj[0][0] * halfDim.x, pc.proj[1][0] * halfDim.y)),
             length(float2(pc.proj[0][1] * halfDim.x, pc.proj[1][1] * halfDim.y))
         );
-        s_payload.motorScales[localIdx] = ms;
         s_payload.emPerPixels[localIdx] = 1.0 / (ppe * ms);
     }
 
@@ -100,7 +116,6 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
             length(float2(pc.proj[0][0] * halfDim.x, pc.proj[1][0] * halfDim.y)),
             length(float2(pc.proj[0][1] * halfDim.x, pc.proj[1][1] * halfDim.y))
         );
-        s_payload.motorScales[localIdx] = ms;
         s_payload.emPerPixels[localIdx] = 1.0 / (ppe * ms);
     }
 
@@ -109,6 +124,10 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
 
     if (gtid == 0)
     {
+        addShaderStat(kShaderStatTaskWorkgroups, 1);
+        addShaderStat(kShaderStatTaskGlyphsTested, groupSize);
+        addShaderStat(kShaderStatTaskGlyphsVisible, survivorCount);
+        addShaderStat(kShaderStatTaskGlyphsCulled, groupSize - survivorCount);
         DispatchMesh(survivorCount, 1, 1, s_payload);
     }
 }
