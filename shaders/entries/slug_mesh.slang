@@ -38,16 +38,14 @@ static const uint3 kTriIndices[2] = {
     uint3(0, 2, 3),
 };
 
+#if HEAVY_SLUG_SHADER_STATS
 static const uint kShaderStatMeshWorkgroups = 10;
 
 void addShaderStat(uint index, uint value)
 {
-#if HEAVY_SLUG_SHADER_STATS
     InterlockedAdd(shaderStats[index], value);
-#else
-    return;
-#endif
 }
+#endif
 
 [shader("mesh")]
 [numthreads(4, 1, 1)]
@@ -60,8 +58,10 @@ void meshMain(
     OutputIndices<uint3, 2> tris)
 {
     SetMeshOutputCounts(4, 2);
+#if HEAVY_SLUG_SHADER_STATS
     if (gtid == 0)
         addShaderStat(kShaderStatMeshWorkgroups, 1);
+#endif
 
     uint glyphIndex = taskPayload.glyphIndices[gid];
     GlyphCommand cmd = commands[glyphIndex];

@@ -10,10 +10,12 @@ struct TaskPayload
     float2 emPerPixels[kTaskGroupSize];  // precomputed em-per-pixel for dilation
 };
 
+#if HEAVY_SLUG_SHADER_STATS
 static const uint kShaderStatTaskWorkgroups = 6;
 static const uint kShaderStatTaskGlyphsTested = 7;
 static const uint kShaderStatTaskGlyphsVisible = 8;
 static const uint kShaderStatTaskGlyphsCulled = 9;
+#endif
 
 groupshared TaskPayload s_payload;
 groupshared float2 s_invPixelsPerEm;
@@ -21,14 +23,12 @@ groupshared float2 s_invPixelsPerEm;
 groupshared uint s_survivorCount;
 #endif
 
+#if HEAVY_SLUG_SHADER_STATS
 void addShaderStat(uint index, uint value)
 {
-#if HEAVY_SLUG_SHADER_STATS
     InterlockedAdd(shaderStats[index], value);
-#else
-    return;
-#endif
 }
+#endif
 
 // Divide by w so the cull works for both orthographic and perspective projections.
 bool isVisible(float4 c0, float4 c1, float4 c2, float4 c3)
@@ -126,10 +126,12 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
 
     if (gtid == 0)
     {
+#if HEAVY_SLUG_SHADER_STATS
         addShaderStat(kShaderStatTaskWorkgroups, 1);
         addShaderStat(kShaderStatTaskGlyphsTested, groupSize);
         addShaderStat(kShaderStatTaskGlyphsVisible, survivorCount);
         addShaderStat(kShaderStatTaskGlyphsCulled, groupSize - survivorCount);
+#endif
         DispatchMesh(survivorCount, 1, 1, s_payload);
     }
 }

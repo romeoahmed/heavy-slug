@@ -56,7 +56,7 @@ pub fn main() !void {
             continue;
         };
         text_renderer.markFrameComplete(submitted_text_tokens[frame.frame_index]);
-        if (now - stats_log_time >= 1.0) {
+        if (heavy_slug_vulkan.shader_stats_enabled and now - stats_log_time >= 1.0) {
             text_renderer.statsSnapshot().log();
             stats_log_time = now;
         }

@@ -74,7 +74,7 @@ pub fn main() !void {
             .projection = scene.projection(w, h),
             .clear_color = scene.clearColor(),
         });
-        if (now - stats_log_time >= 1.0) {
+        if (heavy_slug_metal.shader_stats_enabled and now - stats_log_time >= 1.0) {
             text_renderer.statsSnapshot().log();
             stats_log_time = now;
         }

@@ -20,6 +20,7 @@ pub const FontHandle = renderer.FontHandle;
 pub const GlyphRef = Renderer.GlyphRef;
 pub const FrameToken = renderer.FrameToken;
 pub const Stats = renderer.Stats;
+pub const shader_stats_enabled = renderer.shader_stats_enabled;
 
 pub const required_device_extensions = Context.required_device_extensions;
 

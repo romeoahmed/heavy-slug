@@ -87,6 +87,7 @@ pub const Error = error{
 pub const RendererOptions = render.RendererOptions;
 pub const FontHandle = render.FontHandle;
 pub const FrameToken = render.FrameToken;
+pub const shader_stats_enabled = backend_options.shader_stats;
 pub const Stats = if (@import("builtin").mode == .Debug) struct {
     common: render.Stats = .{},
     frame_slot_wait_ns: u64 = 0,
@@ -97,24 +98,31 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
     }
 
     pub fn log(self: *const @This()) void {
-        const shader_analysis = self.shader.analysis();
-        std.log.scoped(.renderer).debug(
-            "metal stats: wait_ns={d} task_visible={d}/{d} mesh_groups={d} fragments={d} frag_per_glyph_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
-            .{
-                self.frame_slot_wait_ns,
-                self.shader.task_glyphs_visible,
-                self.shader.task_glyphs_tested,
-                self.shader.mesh_workgroups,
-                self.shader.fragment_invocations,
-                shader_analysis.fragments_per_visible_glyph_milli,
-                shader_analysis.full_scan_fragment_per_mille,
-                self.shader.totalCurveIntegrations(),
-                self.shader.totalCurveTests(),
-                shader_analysis.bbox_reject_per_mille,
-                shader_analysis.bbox_empty_fragment_per_mille,
-                shader_analysis.coverage_zero_fragment_per_mille,
-            },
-        );
+        if (backend_options.shader_stats) {
+            const shader_analysis = self.shader.analysis();
+            std.log.scoped(.renderer).debug(
+                "metal stats: wait_ns={d} task_visible={d}/{d} mesh_groups={d} fragments={d} frag_per_glyph_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
+                .{
+                    self.frame_slot_wait_ns,
+                    self.shader.task_glyphs_visible,
+                    self.shader.task_glyphs_tested,
+                    self.shader.mesh_workgroups,
+                    self.shader.fragment_invocations,
+                    shader_analysis.fragments_per_visible_glyph_milli,
+                    shader_analysis.full_scan_fragment_per_mille,
+                    self.shader.totalCurveIntegrations(),
+                    self.shader.totalCurveTests(),
+                    shader_analysis.bbox_reject_per_mille,
+                    shader_analysis.bbox_empty_fragment_per_mille,
+                    shader_analysis.coverage_zero_fragment_per_mille,
+                },
+            );
+        } else {
+            std.log.scoped(.renderer).debug(
+                "metal stats: wait_ns={d}",
+                .{self.frame_slot_wait_ns},
+            );
+        }
         self.common.log(.renderer);
     }
 } else struct {
@@ -364,7 +372,7 @@ pub const Renderer = struct {
         if (@import("builtin").mode != .Debug) return .{};
         var out = self.stats;
         out.common = self.core.stats;
-        out.shader = self.shader_stats_snapshot;
+        if (backend_options.shader_stats) out.shader = self.shader_stats_snapshot;
         return out;
     }
 
@@ -477,6 +485,7 @@ test "Metal renderer public API compiles" {
     _ = Context;
     _ = Renderer;
     try std.testing.expectEqual(@as(usize, 3), max_frames_in_flight);
+    try std.testing.expectEqual(backend_options.shader_stats, shader_stats_enabled);
     _ = @TypeOf(Context.init);
     _ = @TypeOf(Renderer.init);
     heavy_slug.core.render.BackendContract(Renderer);
@@ -507,6 +516,10 @@ test "Metal bridge resource indices match generated Slang MSL" {
         try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "[[buffer(2)]]") != null);
         try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "shaderStats_") != null);
         try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "[[buffer(2)]]") != null);
+    } else {
+        try std.testing.expect(std.mem.indexOf(u8, metal_shaders.task, "shaderStats_") == null);
+        try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "shaderStats_") == null);
+        try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "shaderStats_") == null);
     }
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "glyphRef_0 [[user(TEXCOORD_1)]]") != null);
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "glyphRef_0 [[user(TEXCOORD_1)]]") != null);

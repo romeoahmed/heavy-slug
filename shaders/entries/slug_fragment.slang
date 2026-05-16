@@ -21,6 +21,7 @@ struct FragmentInput
 #endif
 };
 
+#if HEAVY_SLUG_SHADER_STATS
 static const uint kShaderStatFragmentInvocations = 0;
 static const uint kShaderStatCandidatePathFragments = 1;
 static const uint kShaderStatFullScanFragments = 2;
@@ -36,14 +37,43 @@ static const uint kShaderStatCoverageZeroFragments = 16;
 
 void addShaderStat(uint index, uint value)
 {
-#if HEAVY_SLUG_SHADER_STATS
     InterlockedAdd(shaderStats[index], value);
-#else
-    return;
-#endif
 }
+#endif
 
 float integrateCandidateCurves(
+    BlobReader blob,
+    uint curveBase,
+    uint curveCount,
+    uint bandBase,
+    uint idBase,
+    uint bandIndex,
+    float2 renderCoord,
+    float2 dx,
+    float2 dy,
+    float invDet)
+{
+    uint idStart;
+    uint bandIdCount;
+    blob.readBand(bandBase, bandIndex, idStart, bandIdCount);
+
+    float signedArea = 0.0;
+    for (uint i = 0; i < bandIdCount; i++)
+    {
+        uint idIndex = idStart + i;
+        uint curveIndex = blob.readCurveId(idBase, idIndex);
+        if (curveIndex < curveCount)
+        {
+            float4 bbox = blob.readCurveBounds(curveBase, curveIndex);
+            if (curveBboxMayContribute(bbox, renderCoord, dx, dy, invDet))
+                signedArea += integrateCurvePayload(blob, curveBase, curveIndex, renderCoord, dx, dy, invDet);
+        }
+    }
+    return signedArea;
+}
+
+#if HEAVY_SLUG_SHADER_STATS
+float integrateCandidateCurvesWithStats(
     BlobReader blob,
     uint curveBase,
     uint curveCount,
@@ -71,13 +101,14 @@ float integrateCandidateCurves(
         if (curveIndex < curveCount)
         {
             bool bboxRejected;
-            signedArea += integrateCurveFromBlob(blob, curveBase, curveIndex, renderCoord, dx, dy, invDet, bboxRejected);
+            signedArea += integrateCurveFromBlobWithStats(blob, curveBase, curveIndex, renderCoord, dx, dy, invDet, bboxRejected);
             bboxRejects += bboxRejected ? 1u : 0u;
             integrations += bboxRejected ? 0u : 1u;
         }
     }
     return signedArea;
 }
+#endif
 
 float slugRender(BlobReader blob, float2 renderCoord, uint flags)
 {
@@ -100,10 +131,14 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
         bandHeight,
         bandBase,
         idBase);
+#if HEAVY_SLUG_SHADER_STATS
     addShaderStat(kShaderStatFragmentInvocations, 1);
+#endif
     if (curveCount == 0)
     {
+#if HEAVY_SLUG_SHADER_STATS
         addShaderStat(kShaderStatEmptyFragments, 1);
+#endif
         return 0.0;
     }
 
@@ -120,7 +155,9 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
     float candidateMaxY;
     if (!conservativeHBandRange(renderCoord, dx, invDet, bounds, candidateMinY, candidateMaxY))
     {
+#if HEAVY_SLUG_SHADER_STATS
         addShaderStat(kShaderStatEmptyFragments, 1);
+#endif
         return 0.0;
     }
 
@@ -128,7 +165,9 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
     int lastBand = int(floor(candidateMaxY / bandHeight)) - bandMin;
 
     float signedArea = 0.0;
+#if HEAVY_SLUG_SHADER_STATS
     uint integrations = 0;
+#endif
     if (bandCount > 0 && firstBand == lastBand && firstBand >= 0 && uint(firstBand) < bandCount)
     {
 #if HEAVY_SLUG_SHADER_STATS
@@ -137,9 +176,8 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
         blob.readBand(bandBase, uint(firstBand), idStartForStats, bandIdCountForStats);
         addShaderStat(kShaderStatCandidatePathFragments, 1);
         addShaderStat(kShaderStatCandidateCurveTests, bandIdCountForStats);
-#endif
         uint bboxRejects;
-        signedArea = integrateCandidateCurves(
+        signedArea = integrateCandidateCurvesWithStats(
             blob,
             curveBase,
             curveCount,
@@ -154,23 +192,44 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
             integrations);
         addShaderStat(kShaderStatCandidateCurveBboxRejects, bboxRejects);
         addShaderStat(kShaderStatCandidateCurveIntegrations, integrations);
+#else
+        signedArea = integrateCandidateCurves(
+            blob,
+            curveBase,
+            curveCount,
+            bandBase,
+            idBase,
+            uint(firstBand),
+            renderCoord,
+            dx,
+            dy,
+            invDet);
+#endif
     }
     else
     {
+#if HEAVY_SLUG_SHADER_STATS
         addShaderStat(kShaderStatFullScanFragments, 1);
         addShaderStat(kShaderStatFullScanCurveTests, curveCount);
         uint bboxRejects;
-        signedArea = integrateFullScan(blob, curveBase, curveCount, renderCoord, dx, dy, invDet, bboxRejects, integrations);
+        signedArea = integrateFullScanWithStats(blob, curveBase, curveCount, renderCoord, dx, dy, invDet, bboxRejects, integrations);
         addShaderStat(kShaderStatFullScanCurveBboxRejects, bboxRejects);
         addShaderStat(kShaderStatFullScanCurveIntegrations, integrations);
+#else
+        signedArea = integrateFullScan(blob, curveBase, curveCount, renderCoord, dx, dy, invDet);
+#endif
     }
 
+#if HEAVY_SLUG_SHADER_STATS
     if (integrations == 0)
         addShaderStat(kShaderStatBboxEmptyFragments, 1);
+#endif
 
     float coverage = resolveCoverage(signedArea, fillSign, detSign, flags);
+#if HEAVY_SLUG_SHADER_STATS
     if (coverage <= kCoverageEpsilon)
         addShaderStat(kShaderStatCoverageZeroFragments, 1);
+#endif
 
     return coverage;
 }

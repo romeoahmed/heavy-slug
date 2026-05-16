@@ -19,6 +19,7 @@ pub const RendererOptions = render.RendererOptions;
 pub const FontHandle = render.FontHandle;
 pub const FrameToken = render.FrameToken;
 pub const max_frames_in_flight = frames_in_flight;
+pub const shader_stats_enabled = backend_options.shader_stats;
 
 const frames_in_flight = 3;
 
@@ -34,26 +35,37 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
     }
 
     pub fn log(self: *const @This()) void {
-        const shader_analysis = self.shader.analysis();
-        std.log.scoped(.renderer).debug(
-            "vulkan stats: desc_writes={d} desc_flushes={d} frame_busy={d} task_visible={d}/{d} mesh_groups={d} fragments={d} frag_per_glyph_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
-            .{
-                self.descriptor_writes,
-                self.descriptor_flush_calls,
-                self.frame_resources_in_use,
-                self.shader.task_glyphs_visible,
-                self.shader.task_glyphs_tested,
-                self.shader.mesh_workgroups,
-                self.shader.fragment_invocations,
-                shader_analysis.fragments_per_visible_glyph_milli,
-                shader_analysis.full_scan_fragment_per_mille,
-                self.shader.totalCurveIntegrations(),
-                self.shader.totalCurveTests(),
-                shader_analysis.bbox_reject_per_mille,
-                shader_analysis.bbox_empty_fragment_per_mille,
-                shader_analysis.coverage_zero_fragment_per_mille,
-            },
-        );
+        if (backend_options.shader_stats) {
+            const shader_analysis = self.shader.analysis();
+            std.log.scoped(.renderer).debug(
+                "vulkan stats: desc_writes={d} desc_flushes={d} frame_busy={d} task_visible={d}/{d} mesh_groups={d} fragments={d} frag_per_glyph_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
+                .{
+                    self.descriptor_writes,
+                    self.descriptor_flush_calls,
+                    self.frame_resources_in_use,
+                    self.shader.task_glyphs_visible,
+                    self.shader.task_glyphs_tested,
+                    self.shader.mesh_workgroups,
+                    self.shader.fragment_invocations,
+                    shader_analysis.fragments_per_visible_glyph_milli,
+                    shader_analysis.full_scan_fragment_per_mille,
+                    self.shader.totalCurveIntegrations(),
+                    self.shader.totalCurveTests(),
+                    shader_analysis.bbox_reject_per_mille,
+                    shader_analysis.bbox_empty_fragment_per_mille,
+                    shader_analysis.coverage_zero_fragment_per_mille,
+                },
+            );
+        } else {
+            std.log.scoped(.renderer).debug(
+                "vulkan stats: desc_writes={d} desc_flushes={d} frame_busy={d}",
+                .{
+                    self.descriptor_writes,
+                    self.descriptor_flush_calls,
+                    self.frame_resources_in_use,
+                },
+            );
+        }
         self.common.log(.renderer);
     }
 } else struct {
@@ -361,7 +373,7 @@ pub const Renderer = struct {
         out.common = self.core.stats;
         out.descriptor_writes = desc_stats.descriptor_writes;
         out.descriptor_flush_calls = desc_stats.descriptor_flush_calls;
-        out.shader = self.shader_stats_snapshot;
+        if (backend_options.shader_stats) out.shader = self.shader_stats_snapshot;
         return out;
     }
 
@@ -570,4 +582,8 @@ test "Stats type compiles and has expected API" {
         try std.testing.expectEqual(@as(u32, 0), stats.descriptor_writes);
         try std.testing.expectEqual(@as(u32, 0), stats.descriptor_flush_calls);
     }
+}
+
+test "shader stats option is exposed" {
+    try std.testing.expectEqual(backend_options.shader_stats, shader_stats_enabled);
 }

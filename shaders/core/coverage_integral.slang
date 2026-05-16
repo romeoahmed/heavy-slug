@@ -391,24 +391,15 @@ float resolveCoverage(float signedArea, float fillSign, float detSign, uint flag
     return coverage;
 }
 
-float integrateCurveFromBlob(
+float integrateCurvePayload(
     BlobReader blob,
     uint curveBase,
     uint curveIndex,
     float2 renderCoord,
     float2 dx,
     float2 dy,
-    float invDet,
-    out bool bboxRejected)
+    float invDet)
 {
-    float4 bbox = blob.readCurveBounds(curveBase, curveIndex);
-    if (!curveBboxMayContribute(bbox, renderCoord, dx, dy, invDet))
-    {
-        bboxRejected = true;
-        return 0.0;
-    }
-
-    bboxRejected = false;
     float2 p0g, p1g, p2g, p3g;
     blob.readCurvePoints(curveBase, curveIndex, p0g, p1g, p2g, p3g);
     Cubic curve;
@@ -427,6 +418,47 @@ float integrateFullScan(
     float2 renderCoord,
     float2 dx,
     float2 dy,
+    float invDet)
+{
+    float signedArea = 0.0;
+    for (uint ci = 0; ci < curveCount; ci++)
+    {
+        float4 bbox = blob.readCurveBounds(curveBase, ci);
+        if (curveBboxMayContribute(bbox, renderCoord, dx, dy, invDet))
+            signedArea += integrateCurvePayload(blob, curveBase, ci, renderCoord, dx, dy, invDet);
+    }
+    return signedArea;
+}
+
+#if HEAVY_SLUG_SHADER_STATS
+float integrateCurveFromBlobWithStats(
+    BlobReader blob,
+    uint curveBase,
+    uint curveIndex,
+    float2 renderCoord,
+    float2 dx,
+    float2 dy,
+    float invDet,
+    out bool bboxRejected)
+{
+    float4 bbox = blob.readCurveBounds(curveBase, curveIndex);
+    if (!curveBboxMayContribute(bbox, renderCoord, dx, dy, invDet))
+    {
+        bboxRejected = true;
+        return 0.0;
+    }
+
+    bboxRejected = false;
+    return integrateCurvePayload(blob, curveBase, curveIndex, renderCoord, dx, dy, invDet);
+}
+
+float integrateFullScanWithStats(
+    BlobReader blob,
+    uint curveBase,
+    uint curveCount,
+    float2 renderCoord,
+    float2 dx,
+    float2 dy,
     float invDet,
     out uint bboxRejects,
     out uint integrations)
@@ -437,9 +469,10 @@ float integrateFullScan(
     for (uint ci = 0; ci < curveCount; ci++)
     {
         bool bboxRejected;
-        signedArea += integrateCurveFromBlob(blob, curveBase, ci, renderCoord, dx, dy, invDet, bboxRejected);
+        signedArea += integrateCurveFromBlobWithStats(blob, curveBase, ci, renderCoord, dx, dy, invDet, bboxRejected);
         bboxRejects += bboxRejected ? 1u : 0u;
         integrations += bboxRejected ? 0u : 1u;
     }
     return signedArea;
 }
+#endif
