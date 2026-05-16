@@ -18,6 +18,7 @@ pub fn buildVulkan(
     target: std.Build.ResolvedTarget,
     core_mod: *std.Build.Module,
     spirv: shaders.SpirvShaders,
+    gpu_structs_mod: *std.Build.Module,
     shader_stats: bool,
 ) ?VulkanBackend {
     const vk_headers = b.lazyDependency("vulkan_headers", .{});
@@ -31,10 +32,6 @@ pub fn buildVulkan(
     const vulkan_zig = b.addModule("vulkan-zig", .{
         .root_source_file = vk_generate_cmd.addOutputFileArg("vk.zig"),
     });
-
-    const reflection_json = shaders.generateReflectionJson(b);
-    const gpu_structs_zig = shaders.generateGpuStructs(b, reflection_json);
-    const gpu_structs_mod = b.addModule("gpu_structs", .{ .root_source_file = gpu_structs_zig });
 
     const mod = b.addModule("heavy_slug_vulkan", .{
         .root_source_file = b.path("src/backends/vulkan/root.zig"),
@@ -60,12 +57,9 @@ pub fn buildMetal(
     target: std.Build.ResolvedTarget,
     core_mod: *std.Build.Module,
     metal_shaders: shaders.MetalShaders,
+    gpu_structs_mod: *std.Build.Module,
     shader_stats: bool,
 ) MetalBackend {
-    const reflection_json = shaders.generateReflectionJson(b);
-    const gpu_structs_zig = shaders.generateGpuStructs(b, reflection_json);
-    const gpu_structs_mod = b.addModule("gpu_structs", .{ .root_source_file = gpu_structs_zig });
-
     const mod = b.addModule("heavy_slug_metal", .{
         .root_source_file = b.path("src/backends/metal/root.zig"),
         .target = target,

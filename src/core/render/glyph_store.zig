@@ -94,10 +94,6 @@ pub const GlyphStore = struct {
         return true;
     }
 
-    pub fn poolFreeBlockCount(self: *const GlyphStore) u32 {
-        return @intCast(self.pool_alloc.free_blocks.items.len);
-    }
-
     pub fn poolSnapshot(self: *const GlyphStore) pool_mod.Snapshot {
         return self.pool_alloc.snapshot();
     }

@@ -22,6 +22,10 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = opts.target,
     });
+    const gpu_structs_mod = if (opts.build_vulkan or opts.build_metal)
+        shaders.buildGpuStructsModule(b)
+    else
+        null;
 
     const c_deps = c_libs.resolveCoreDeps(b);
     const ft_lib = c_libs.buildFreetype(b, opts.target, opts.optimize, c_deps.freetype);
@@ -37,7 +41,7 @@ pub fn build(b: *std.Build) void {
     addToolTests(b, test_step);
 
     const vulkan_backend = if (opts.build_vulkan)
-        backends.buildVulkan(b, opts.target, core_mod, spirv, opts.shader_stats) orelse return
+        backends.buildVulkan(b, opts.target, core_mod, spirv, gpu_structs_mod.?, opts.shader_stats) orelse return
     else
         null;
     if (vulkan_backend) |backend| {
@@ -45,7 +49,7 @@ pub fn build(b: *std.Build) void {
     }
 
     const metal_backend = if (opts.build_metal)
-        backends.buildMetal(b, opts.target, core_mod, metal_shaders, opts.shader_stats)
+        backends.buildMetal(b, opts.target, core_mod, metal_shaders, gpu_structs_mod.?, opts.shader_stats)
     else
         null;
     if (metal_backend) |backend| {

@@ -132,11 +132,7 @@ pub const Scene = struct {
         return if (self.dark_mode) .{ 0, 0, 0, 1 } else .{ 1, 1, 1, 1 };
     }
 
-    pub fn textColor(self: Scene) [4]f32 {
-        return if (self.dark_mode) .{ 1, 1, 1, 1 } else .{ 0, 0, 0, 1 };
-    }
-
-    pub fn textColorValue(self: Scene) heavy_slug.Color {
+    pub fn textColor(self: Scene) heavy_slug.Color {
         return if (self.dark_mode) .white else .black;
     }
 
@@ -147,7 +143,7 @@ pub const Scene = struct {
     }
 
     pub fn draw(self: Scene, renderer: anytype, font: anytype) !void {
-        const fg = self.textColorValue();
+        const fg = self.textColor();
         for (lines, 0..) |line, i| {
             if (line.len == 0) continue;
             const y = content_height - margin - @as(f32, @floatFromInt(i)) * line_height;

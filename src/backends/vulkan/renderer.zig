@@ -8,6 +8,8 @@ const backend_options = @import("heavy_slug_backend_options");
 const render = heavy_slug.core.render.renderer_core;
 const core_types = heavy_slug.core.types;
 const pool_mod = heavy_slug.core.cache.byte_pool;
+const mesh_limits = heavy_slug.gpu.mesh_limits;
+const shader_stats_mod = heavy_slug.gpu.shader_stats;
 
 pub const Error = error{
     NoSuitableMemoryType,
@@ -196,11 +198,6 @@ fn destroyMappedBuffer(self: MappedBuffer, device: vk.Device, dispatch: gpu_cont
     dispatch.freeMemory(device, self.memory, null);
 }
 
-fn taskWorkgroupCount(glyph_count: u32) u32 {
-    const group_size = heavy_slug.gpu.mesh_limits.task_group_size;
-    return (glyph_count / group_size) + @intFromBool(glyph_count % group_size != 0);
-}
-
 fn validateTaskDrawWorkgroups(
     props: vk.PhysicalDeviceMeshShaderPropertiesEXT,
     workgroup_count: u32,
@@ -240,7 +237,6 @@ pub const Renderer = struct {
     // Per-frame debug counters, compiled to no-ops outside Debug.
     stats: Stats,
 
-    memory_properties: vk.PhysicalDeviceMemoryProperties,
     allocator: std.mem.Allocator,
     last_submitted_frame: render.FrameToken,
     completed_frame: render.FrameToken,
@@ -256,7 +252,7 @@ pub const Renderer = struct {
         try gpu_context.validateDeviceProperties(ctx.api_version, ctx.mesh_shader_properties);
         try validateTaskDrawWorkgroups(
             ctx.mesh_shader_properties,
-            taskWorkgroupCount(options.max_glyphs_per_frame),
+            mesh_limits.taskWorkgroupCount(options.max_glyphs_per_frame),
         );
 
         const device = ctx.device;
@@ -335,7 +331,6 @@ pub const Renderer = struct {
             .shader_stats_buffers = shader_stats_buffers,
             .active_frame = frames_in_flight - 1,
             .stats = .{},
-            .memory_properties = ctx.memory_properties,
             .allocator = allocator,
             .last_submitted_frame = 0,
             .completed_frame = 0,
@@ -441,7 +436,7 @@ pub const Renderer = struct {
     /// `viewport`: viewport dimensions in pixels [width, height].
     fn submitFrame(self: *Renderer, target: Target, glyph_count: u32) Error!render.FrameToken {
         if (glyph_count == 0) return self.last_submitted_frame;
-        const workgroup_count = taskWorkgroupCount(glyph_count);
+        const workgroup_count = mesh_limits.taskWorkgroupCount(glyph_count);
         try validateTaskDrawWorkgroups(self.mesh_shader_properties, workgroup_count);
 
         const cmd_buf = target.command_buffer;
@@ -546,12 +541,12 @@ pub const Renderer = struct {
 };
 
 fn resetShaderStatsBuffer(buffer: MappedBuffer) void {
-    @memset(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)], 0);
+    shader_stats_mod.clearBytes(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
 }
 
 fn readShaderStatsBuffer(buffer: MappedBuffer) heavy_slug.ShaderStats {
-    const counters: *const [heavy_slug.gpu.shader_stats.counter_count]u32 = @ptrCast(@alignCast(buffer.mapped));
-    return heavy_slug.gpu.shader_stats.Snapshot.fromCounters(counters);
+    const bytes: []align(@alignOf(u32)) const u8 = @alignCast(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
+    return shader_stats_mod.Snapshot.fromBytes(bytes);
 }
 
 test "RendererOptions has correct defaults" {
@@ -596,11 +591,6 @@ test "task workgroup validation follows Vulkan mesh shader draw limits" {
 
     props.max_task_work_group_total_count = 3;
     try std.testing.expectError(Error.MeshTaskWorkgroupLimitExceeded, validateTaskDrawWorkgroups(props, 4));
-
-    try std.testing.expectEqual(@as(u32, 0), taskWorkgroupCount(0));
-    try std.testing.expectEqual(@as(u32, 1), taskWorkgroupCount(1));
-    try std.testing.expectEqual(@as(u32, 1), taskWorkgroupCount(heavy_slug.gpu.mesh_limits.task_group_size));
-    try std.testing.expectEqual(@as(u32, 2), taskWorkgroupCount(heavy_slug.gpu.mesh_limits.task_group_size + 1));
 }
 
 test "Renderer satisfies core backend contract" {

@@ -10,7 +10,6 @@ pub fn BackendContract(comptime Backend: type) void {
         requireDecl(Impl, "Command");
         requireFn(Impl, "uploadBlob");
         requireFn(Impl, "retireBlob");
-        requireFn(Impl, "completedFrameToken");
     }
 }
 
@@ -50,10 +49,6 @@ const GoodBackend = struct {
     }
 
     pub fn retireBlob(_: *@This(), _: GlyphRef) void {}
-
-    pub fn completedFrameToken(_: *const @This()) FrameToken {
-        return 0;
-    }
 };
 
 test "BackendContract accepts a complete backend shape" {

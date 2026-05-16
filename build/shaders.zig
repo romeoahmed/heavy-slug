@@ -96,7 +96,7 @@ pub fn addMetalInstallSteps(
     shader_step.dependOn(&install_frag.step);
 }
 
-pub fn generateReflectionJson(b: *std.Build) std.Build.LazyPath {
+fn generateReflectionJson(b: *std.Build) std.Build.LazyPath {
     const cmd = b.addSystemCommand(&.{"slangc"});
     cmd.addFileArg(b.path("shaders/entries/slug_task.slang"));
     addSharedSlangArgs(cmd, "taskMain", "amplification", false, false);
@@ -109,7 +109,7 @@ pub fn generateReflectionJson(b: *std.Build) std.Build.LazyPath {
     return cmd.addOutputFileArg("reflection.json");
 }
 
-pub fn generateGpuStructs(
+fn generateGpuStructs(
     b: *std.Build,
     reflection_json: std.Build.LazyPath,
 ) std.Build.LazyPath {
@@ -123,6 +123,12 @@ pub fn generateGpuStructs(
     const run = b.addRunArtifact(tool);
     run.addFileArg(reflection_json);
     return run.captureStdOut(.{ .basename = "gpu_structs.zig" });
+}
+
+pub fn buildGpuStructsModule(b: *std.Build) *std.Build.Module {
+    const reflection_json = generateReflectionJson(b);
+    const gpu_structs_zig = generateGpuStructs(b, reflection_json);
+    return b.addModule("gpu_structs", .{ .root_source_file = gpu_structs_zig });
 }
 
 fn compileSlangSpirv(

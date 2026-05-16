@@ -7,15 +7,14 @@ const backend_options = @import("heavy_slug_backend_options");
 const pool_mod = heavy_slug.core.cache.byte_pool;
 const render = heavy_slug.core.render.renderer_core;
 const core_types = heavy_slug.core.types;
+const mesh_limits = heavy_slug.gpu.mesh_limits;
+const shader_stats_mod = heavy_slug.gpu.shader_stats;
 
 pub const GlyphCommand = gpu_structs.GlyphCommand;
 pub const PushConstants = gpu_structs.PushConstants;
 
 const ContextHandle = opaque {};
-const PipelineHandle = opaque {};
 const BufferHandle = opaque {};
-const FrameHandle = opaque {};
-const TargetHandle = opaque {};
 const frames_in_flight = 3;
 
 pub const HostObjects = extern struct {
@@ -174,7 +173,6 @@ pub const Context = struct {
 const MappedBuffer = struct {
     handle: *BufferHandle,
     mapped: [*]u8,
-    size: usize,
 
     fn init(ctx: Context, size: usize) !MappedBuffer {
         const handle = hs_metal_buffer_create(ctx.handle, size) orelse
@@ -187,7 +185,6 @@ const MappedBuffer = struct {
         return .{
             .handle = handle,
             .mapped = mapped,
-            .size = size,
         };
     }
 
@@ -197,17 +194,12 @@ const MappedBuffer = struct {
 };
 
 fn resetShaderStatsBuffer(buffer: MappedBuffer) void {
-    @memset(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)], 0);
+    shader_stats_mod.clearBytes(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
 }
 
 fn readShaderStatsBuffer(buffer: MappedBuffer) heavy_slug.ShaderStats {
-    const counters: *const [heavy_slug.gpu.shader_stats.counter_count]u32 = @ptrCast(@alignCast(buffer.mapped));
-    return heavy_slug.gpu.shader_stats.Snapshot.fromCounters(counters);
-}
-
-fn taskWorkgroupCount(glyph_count: u32) u32 {
-    const group_size = heavy_slug.gpu.mesh_limits.task_group_size;
-    return (glyph_count / group_size) + @intFromBool(glyph_count % group_size != 0);
+    const bytes: []align(@alignOf(u32)) const u8 = @alignCast(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
+    return shader_stats_mod.Snapshot.fromBytes(bytes);
 }
 
 fn monotonicNs() u64 {
@@ -272,7 +264,6 @@ pub const Renderer = struct {
     completed_frame: render.FrameToken,
     stats: Stats,
     shader_stats_snapshot: heavy_slug.ShaderStats,
-    allocator: std.mem.Allocator,
 
     pub fn init(
         context: Context,
@@ -324,7 +315,6 @@ pub const Renderer = struct {
             .completed_frame = 0,
             .stats = .{},
             .shader_stats_snapshot = .{},
-            .allocator = allocator,
         };
     }
 
@@ -438,7 +428,7 @@ pub const Renderer = struct {
         const push_bytes = frame_slot.push_constants.mapped[0..@sizeOf(PushConstants)];
         @memcpy(push_bytes, std.mem.asBytes(&push));
 
-        const workgroup_count = taskWorkgroupCount(glyph_count);
+        const workgroup_count = mesh_limits.taskWorkgroupCount(glyph_count);
         var error_buf: [2048]u8 = undefined;
         if (hs_metal_context_draw(
             self.context.handle,
@@ -535,12 +525,4 @@ test "Metal bridge resource indices match generated Slang MSL" {
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "[[user(TEXCOORD_1)]]") != null);
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "[[user(TEXCOORD_1)]]") != null);
     try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "user(TEXCOORD__1)") == null);
-}
-
-test "Metal task workgroup count uses mesh ABI group size" {
-    const group_size = heavy_slug.gpu.mesh_limits.task_group_size;
-    try std.testing.expectEqual(@as(u32, 0), taskWorkgroupCount(0));
-    try std.testing.expectEqual(@as(u32, 1), taskWorkgroupCount(1));
-    try std.testing.expectEqual(@as(u32, 1), taskWorkgroupCount(group_size));
-    try std.testing.expectEqual(@as(u32, 2), taskWorkgroupCount(group_size + 1));
 }

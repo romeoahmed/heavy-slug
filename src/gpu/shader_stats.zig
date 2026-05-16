@@ -78,6 +78,12 @@ pub const Snapshot = extern struct {
         };
     }
 
+    pub fn fromBytes(bytes: []align(@alignOf(u32)) const u8) Snapshot {
+        std.debug.assert(bytes.len >= @sizeOf(Snapshot));
+        const counters: *const [counter_count]u32 = @ptrCast(bytes.ptr);
+        return fromCounters(counters);
+    }
+
     pub fn totalCurveTests(self: Snapshot) u32 {
         return self.candidate_curve_tests + self.full_scan_curve_tests;
     }
@@ -104,6 +110,11 @@ pub const Snapshot = extern struct {
         };
     }
 };
+
+pub fn clearBytes(bytes: []u8) void {
+    std.debug.assert(bytes.len >= @sizeOf(Snapshot));
+    @memset(bytes[0..@sizeOf(Snapshot)], 0);
+}
 
 /// Integer ratios scaled by 1000 for stable debug logging.
 pub const Analysis = struct {
@@ -158,6 +169,20 @@ test "shader stats snapshot maps task and mesh counters" {
     try std.testing.expectEqual(@as(u32, 30), snapshot.coverage_zero_fragments);
     try std.testing.expectEqual(@as(u32, 44), snapshot.mesh_tiles_emitted);
     try std.testing.expectEqual(@as(u32, 16), snapshot.mesh_tiles_culled);
+}
+
+test "shader stats bytes helpers clear and decode counters" {
+    var bytes: [@sizeOf(Snapshot)]u8 align(@alignOf(u32)) = undefined;
+    @memset(&bytes, 0xaa);
+    clearBytes(&bytes);
+
+    const counters: *[counter_count]u32 = @ptrCast(&bytes);
+    counters[@intFromEnum(CounterIndex.fragment_invocations)] = 7;
+    counters[@intFromEnum(CounterIndex.mesh_tiles_emitted)] = 3;
+
+    const snapshot = Snapshot.fromBytes(&bytes);
+    try std.testing.expectEqual(@as(u32, 7), snapshot.fragment_invocations);
+    try std.testing.expectEqual(@as(u32, 3), snapshot.mesh_tiles_emitted);
 }
 
 test "shader stats analysis derives bottleneck ratios" {

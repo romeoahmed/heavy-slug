@@ -17,10 +17,21 @@ pub const mesh_shared_bytes: u32 =
     @sizeOf(u32);
 pub const mesh_payload_and_shared_bytes: u32 = task_payload_bytes + mesh_shared_bytes;
 
+pub fn taskWorkgroupCount(glyph_count: u32) u32 {
+    return (glyph_count / task_group_size) + @intFromBool(glyph_count % task_group_size != 0);
+}
+
 test "mesh/task limits match the Slang payload budget" {
     try std.testing.expectEqual(@as(u32, 512), task_max_meshlets);
     try std.testing.expectEqual(@as(u32, 4096), task_payload_bytes);
     try std.testing.expect(mesh_payload_and_shared_bytes > task_payload_bytes);
     try std.testing.expectEqual(@as(u32, 4), mesh_output_vertices);
     try std.testing.expectEqual(@as(u32, 2), mesh_output_primitives);
+}
+
+test "taskWorkgroupCount uses task group size" {
+    try std.testing.expectEqual(@as(u32, 0), taskWorkgroupCount(0));
+    try std.testing.expectEqual(@as(u32, 1), taskWorkgroupCount(1));
+    try std.testing.expectEqual(@as(u32, 1), taskWorkgroupCount(task_group_size));
+    try std.testing.expectEqual(@as(u32, 2), taskWorkgroupCount(task_group_size + 1));
 }
