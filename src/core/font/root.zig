@@ -8,9 +8,12 @@ pub const FreeTypeLibrary = freetype.Library;
 pub const FreeTypeFace = freetype.Face;
 pub const HarfBuzzBuffer = harfbuzz.Buffer;
 pub const HarfBuzzFont = harfbuzz.Font;
-pub const FontContext = glyph.FontContext;
+pub const GlyphEncoder = glyph.GlyphEncoder;
 pub const EncodedGlyph = glyph.EncodedGlyph;
 pub const FontSystem = font_system.FontSystem;
+pub const LoadedFont = font_system.LoadedFont;
+pub const ShapePlan = shape.ShapePlan;
+pub const ShapedRun = shape.ShapedRun;
 
 pub const ft = freetype;
 pub const hb = harfbuzz;

@@ -2,13 +2,12 @@ const std = @import("std");
 const cache_mod = @import("../cache/glyph_cache.zig");
 const pool_mod = @import("../cache/byte_pool.zig");
 const font_mod = @import("../font/root.zig");
-const glyph_mod = @import("../font/glyph.zig");
 const glyph_store_mod = @import("glyph_store.zig");
 const backend_contract = @import("backend_contract.zig");
+const text_batch_mod = @import("text_batch.zig");
 const core_types = @import("../types.zig");
 const units = @import("../units.zig");
 const hb = font_mod.hb;
-const ft = font_mod.ft;
 const pga = @import("../../math/pga.zig");
 
 pub const empty_glyph_ref = std.math.maxInt(u32);
@@ -65,7 +64,7 @@ pub const FontHandle = core_types.FontHandle;
 pub const FrameToken = glyph_store_mod.FrameToken;
 
 const FontEntry = struct {
-    ctx: glyph_mod.FontContext,
+    loaded: font_mod.LoadedFont,
     variation_key: u64,
 };
 
@@ -97,12 +96,12 @@ pub fn projectionToEm(proj: [4][4]f32) [4][4]f32 {
 
 pub const RendererCore = struct {
     store: glyph_store_mod.GlyphStore,
-    ft_library: ft.Library,
+    font_system: font_mod.FontSystem,
     fonts: std.AutoHashMap(u32, *FontEntry),
     next_font_id: u32,
     glyph_count: u32,
     max_glyphs_per_frame: u32,
-    shape_buffer: hb.Buffer,
+    shape_plan: font_mod.ShapePlan,
     stats: Stats,
     allocator: std.mem.Allocator,
 
@@ -110,20 +109,20 @@ pub const RendererCore = struct {
         var store = try glyph_store_mod.GlyphStore.init(allocator, options);
         errdefer store.deinit();
 
-        const ft_library = try ft.Library.init();
-        errdefer ft_library.deinit();
+        var font_system = try font_mod.FontSystem.init(allocator);
+        errdefer font_system.deinit();
 
-        const shape_buffer = try hb.Buffer.create();
-        errdefer shape_buffer.destroy();
+        var shape_plan = try font_mod.ShapePlan.init();
+        errdefer shape_plan.deinit();
 
         return .{
             .store = store,
-            .ft_library = ft_library,
+            .font_system = font_system,
             .fonts = std.AutoHashMap(u32, *FontEntry).init(allocator),
             .next_font_id = 0,
             .glyph_count = 0,
             .max_glyphs_per_frame = options.max_glyphs_per_frame,
-            .shape_buffer = shape_buffer,
+            .shape_plan = shape_plan,
             .stats = .{},
             .allocator = allocator,
         };
@@ -132,12 +131,12 @@ pub const RendererCore = struct {
     pub fn deinit(self: *RendererCore) void {
         var font_it = self.fonts.valueIterator();
         while (font_it.next()) |entry_ptr| {
-            entry_ptr.*.ctx.deinit();
+            entry_ptr.*.loaded.deinit();
             self.allocator.destroy(entry_ptr.*);
         }
         self.fonts.deinit();
-        self.shape_buffer.destroy();
-        self.ft_library.deinit();
+        self.shape_plan.deinit();
+        self.font_system.deinit();
         self.store.deinit();
         self.* = undefined;
     }
@@ -147,23 +146,14 @@ pub const RendererCore = struct {
         source: core_types.FontSource,
         options: core_types.FontOptions,
     ) !FontHandle {
-        const path = switch (source) {
-            .path => |p| p,
-        };
         const entry = try self.allocator.create(FontEntry);
         errdefer self.allocator.destroy(entry);
 
         entry.* = .{
-            .ctx = try glyph_mod.FontContext.initWithFaceIndex(
-                self.allocator,
-                self.ft_library,
-                path,
-                options.face_index,
-                options.size_px,
-            ),
+            .loaded = try self.font_system.load(source, options),
             .variation_key = options.variation_key,
         };
-        errdefer entry.ctx.deinit();
+        errdefer entry.loaded.deinit();
 
         const id = self.next_font_id;
         try self.fonts.put(id, entry);
@@ -177,7 +167,7 @@ pub const RendererCore = struct {
         for (evicted) |entry| try self.store.deferEvicted(entry);
 
         if (self.fonts.fetchRemove(handle.id)) |removed| {
-            removed.value.ctx.deinit();
+            removed.value.loaded.deinit();
             self.allocator.destroy(removed.value);
         }
     }
@@ -210,25 +200,25 @@ pub const RendererCore = struct {
         self: *RendererCore,
         backend: anytype,
         comptime Command: type,
-        commands: [*]Command,
+        batch: *text_batch_mod.TextBatch(Command),
         run: TextRun,
     ) !void {
         comptime backend_contract.BackendContract(@TypeOf(backend));
         const font = run.font;
         const font_entry = self.fonts.get(font.id) orelse return Error.ShapingFailed;
 
-        self.shape_buffer.reset();
-        self.shape_buffer.addUtf8(run.text);
-        self.shape_buffer.guessSegmentProperties();
-        hb.shape(font_entry.ctx.hb_font, self.shape_buffer);
-
-        const infos = self.shape_buffer.getGlyphInfos();
-        const positions = self.shape_buffer.getGlyphPositions();
+        const shaped = font_entry.loaded.shape(self.shape_plan, run.text, .{}) catch return Error.ShapingFailed;
+        const infos = shaped.infos;
+        const positions = shaped.positions;
         const em_motor = motorToEm(run.transform.toMotor());
         const color = run.color.rgba;
         const flags = run.fill_rule.commandFlags();
         const start_count = self.glyph_count;
-        errdefer self.glyph_count = start_count;
+        const start_batch_len = batch.len;
+        errdefer {
+            self.glyph_count = start_count;
+            batch.len = start_batch_len;
+        }
 
         var pen_x: f32 = 0;
         var pen_y: f32 = 0;
@@ -252,8 +242,7 @@ pub const RendererCore = struct {
             };
 
             if (cached_glyph.ref != empty_glyph_ref) {
-                if (self.glyph_count >= self.max_glyphs_per_frame) return Error.GlyphCapacityExceeded;
-                commands[self.glyph_count] = .{
+                try batch.append(.{
                     .motor = glyph_motor.m,
                     .color = color,
                     .em_x_min = cached_glyph.em_box.x_min,
@@ -262,8 +251,8 @@ pub const RendererCore = struct {
                     .em_y_max = cached_glyph.em_box.y_max,
                     .descriptor_index = cached_glyph.ref,
                     .flags = flags,
-                };
-                self.glyph_count += 1;
+                });
+                self.glyph_count = batch.count();
             }
 
             pen_x += @as(f32, @floatFromInt(pos.x_advance));
@@ -277,7 +266,7 @@ pub const RendererCore = struct {
         font_entry: *FontEntry,
         cache_key: cache_mod.CacheKey,
     ) !CachedGlyph {
-        const encoded = font_entry.ctx.encodeGlyph(cache_key.glyph_id) catch
+        const encoded = font_entry.loaded.encodeGlyph(cache_key.glyph_id) catch
             return Error.ShapingFailed;
         defer encoded.destroy();
 
@@ -299,8 +288,8 @@ pub const RendererCore = struct {
             return Error.PoolExhausted;
         errdefer self.store.pool_alloc.free(pool_alloc);
 
-        const glyph_ref = try backend.uploadGlyphBlob(pool_alloc, encoded.data);
-        errdefer backend.releaseGlyphRef(glyph_ref);
+        const glyph_ref = try backend.uploadBlob(pool_alloc, encoded.data);
+        errdefer backend.retireBlob(glyph_ref);
 
         try self.store.glyph_cache.insertCold(cache_key, glyph_ref, pool_alloc, em_box);
         return .{ .ref = glyph_ref, .em_box = em_box };
@@ -328,14 +317,14 @@ const FakeBackend = struct {
     next_ref: u32 = 0,
     releases: u32 = 0,
 
-    pub fn uploadGlyphBlob(self: *FakeBackend, allocation: pool_mod.Allocation, data: []const u8) !u32 {
+    pub fn uploadBlob(self: *FakeBackend, allocation: pool_mod.Allocation, data: []const u8) !u32 {
         @memcpy(self.pool[allocation.offset..][0..data.len], data);
         const ref = self.next_ref;
         self.next_ref += 1;
         return ref;
     }
 
-    pub fn releaseGlyphRef(self: *FakeBackend, _: u32) void {
+    pub fn retireBlob(self: *FakeBackend, _: u32) void {
         self.releases += 1;
     }
 
@@ -379,10 +368,11 @@ test "render: RendererCore appends shaped glyph commands and caches blobs" {
     var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
     var commands: [16]TestCommand = undefined;
+    var batch = text_batch_mod.TextBatch(TestCommand).init(&commands);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(backend.completedFrameToken(), &backend);
-    try core.appendRun(&backend, TestCommand, &commands, .{
+    try core.appendRun(&backend, TestCommand, &batch, .{
         .font = font,
         .text = "Hi",
         .transform = core_types.Transform.translation(10, 20),
@@ -395,7 +385,7 @@ test "render: RendererCore appends shaped glyph commands and caches blobs" {
     try std.testing.expect(commands[0].motor[2] != 0);
 
     const refs_after_first = backend.next_ref;
-    try core.appendRun(&backend, TestCommand, &commands, .{
+    try core.appendRun(&backend, TestCommand, &batch, .{
         .font = font,
         .text = "Hi",
         .transform = core_types.Transform.translation(10, 20),
@@ -411,10 +401,11 @@ test "render: RendererCore skips empty glyph commands while preserving cache ent
     var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
     var commands: [4]TestCommand = undefined;
+    var batch = text_batch_mod.TextBatch(TestCommand).init(&commands);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(backend.completedFrameToken(), &backend);
-    try core.appendRun(&backend, TestCommand, &commands, .{
+    try core.appendRun(&backend, TestCommand, &batch, .{
         .font = font,
         .text = " ",
         .color = .white,
@@ -432,12 +423,13 @@ test "render: RendererCore enforces command capacity after skipping empty glyphs
     var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
     var commands: [1]TestCommand = undefined;
+    var batch = text_batch_mod.TextBatch(TestCommand).init(&commands);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(backend.completedFrameToken(), &backend);
     try std.testing.expectError(
         Error.GlyphCapacityExceeded,
-        core.appendRun(&backend, TestCommand, &commands, .{
+        core.appendRun(&backend, TestCommand, &batch, .{
             .font = font,
             .text = "HH",
             .color = .white,
@@ -453,10 +445,11 @@ test "render: RendererCore writes fill-rule flags into glyph commands" {
     var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
     var commands: [4]TestCommand = undefined;
+    var batch = text_batch_mod.TextBatch(TestCommand).init(&commands);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(backend.completedFrameToken(), &backend);
-    try core.appendRun(&backend, TestCommand, &commands, .{
+    try core.appendRun(&backend, TestCommand, &batch, .{
         .font = font,
         .text = "A",
         .color = .white,
@@ -478,11 +471,12 @@ test "render: RendererCore defers evicted glyph retirement until frame token com
     var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
     var commands: [4]TestCommand = undefined;
+    var batch = text_batch_mod.TextBatch(TestCommand).init(&commands);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.setRetireAfterToken(7);
     core.beginFrame(0, &backend);
-    try core.appendRun(&backend, TestCommand, &commands, .{
+    try core.appendRun(&backend, TestCommand, &batch, .{
         .font = font,
         .text = "A",
         .color = .white,
@@ -490,7 +484,7 @@ test "render: RendererCore defers evicted glyph retirement until frame token com
 
     core.setRetireAfterToken(7);
     core.beginFrame(0, &backend);
-    try core.appendRun(&backend, TestCommand, &commands, .{
+    try core.appendRun(&backend, TestCommand, &batch, .{
         .font = font,
         .text = "B",
         .color = .white,

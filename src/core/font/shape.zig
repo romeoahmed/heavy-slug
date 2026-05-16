@@ -7,35 +7,38 @@ pub const SegmentProperties = struct {
 };
 
 pub const ShapedRun = struct {
+    infos: []const hb.Buffer.GlyphInfo,
+    positions: []const hb.Buffer.GlyphPosition,
+};
+
+pub const ShapePlan = struct {
     buffer: hb.Buffer,
 
-    pub fn destroy(self: ShapedRun) void {
+    pub fn init() !ShapePlan {
+        return .{ .buffer = try hb.Buffer.create() };
+    }
+
+    pub fn deinit(self: *ShapePlan) void {
         self.buffer.destroy();
+        self.* = undefined;
     }
 
-    pub fn infos(self: ShapedRun) []const hb.Buffer.GlyphInfo {
-        return self.buffer.getGlyphInfos();
-    }
+    pub fn shape(self: ShapePlan, font: hb.Font, text: []const u8, props: SegmentProperties) !ShapedRun {
+        self.buffer.reset();
+        self.buffer.addUtf8(text);
+        if (props.direction) |direction| self.buffer.setDirection(direction);
+        if (props.script) |script| self.buffer.setScript(script);
+        if (props.direction == null and props.script == null) self.buffer.guessSegmentProperties();
+        hb.shape(font, self.buffer);
 
-    pub fn positions(self: ShapedRun) []const hb.Buffer.GlyphPosition {
-        return self.buffer.getGlyphPositions();
+        return .{
+            .infos = self.buffer.getGlyphInfos(),
+            .positions = self.buffer.getGlyphPositions(),
+        };
     }
 };
 
-pub fn shapeText(font: hb.Font, text: []const u8, props: SegmentProperties) !ShapedRun {
-    const buffer = try hb.Buffer.create();
-    errdefer buffer.destroy();
-
-    buffer.addUtf8(text);
-    if (props.direction) |direction| buffer.setDirection(direction);
-    if (props.script) |script| buffer.setScript(script);
-    if (props.direction == null and props.script == null) buffer.guessSegmentProperties();
-    hb.shape(font, buffer);
-
-    return .{ .buffer = buffer };
-}
-
-test "shape: creates an empty run for empty text" {
+test "ShapePlan: creates an empty run for empty text" {
     const ft = @import("freetype.zig");
     const font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
     const lib = try ft.Library.init();
@@ -47,7 +50,28 @@ test "shape: creates an empty run for empty text" {
     const font = try hb.Font.createFromFtFace(face.rawHandle());
     defer font.destroy();
 
-    const run = try shapeText(font, "", .{});
-    defer run.destroy();
-    try std.testing.expectEqual(@as(usize, 0), run.infos().len);
+    var plan = try ShapePlan.init();
+    defer plan.deinit();
+    const run = try plan.shape(font, "", .{});
+    try std.testing.expectEqual(@as(usize, 0), run.infos.len);
+}
+
+test "ShapePlan: reuses one HarfBuzz buffer for repeated shaping" {
+    const ft = @import("freetype.zig");
+    const font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
+    const lib = try ft.Library.init();
+    defer lib.deinit();
+    const face = ft.Face.init(lib, font_path, 0) catch return;
+    defer face.deinit();
+    try face.setPixelSizes(0, 24);
+
+    const font = try hb.Font.createFromFtFace(face.rawHandle());
+    defer font.destroy();
+
+    var plan = try ShapePlan.init();
+    defer plan.deinit();
+    const a = try plan.shape(font, "A", .{ .direction = .ltr, .script = .latin });
+    try std.testing.expectEqual(@as(usize, 1), a.infos.len);
+    const b = try plan.shape(font, "AB", .{ .direction = .ltr, .script = .latin });
+    try std.testing.expectEqual(@as(usize, 2), b.infos.len);
 }

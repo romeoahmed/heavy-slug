@@ -10,6 +10,10 @@ pub const BlobView = struct {
     texels: []const format.Texel,
     header: format.Header,
 
+    pub fn initCoverageBlob(blob: format.CoverageBlob) Error!BlobView {
+        return init(blob.bytes());
+    }
+
     pub fn init(bytes: []const u8) Error!BlobView {
         if (bytes.len % @sizeOf(format.Texel) != 0) return error.BlobMisaligned;
         if (bytes.len < format.header_len * @sizeOf(format.Texel)) return error.BlobTooSmall;

@@ -1,34 +1,33 @@
-const std = @import("std");
-
 pub fn TextBatch(comptime Command: type) type {
     return struct {
         const Self = @This();
 
-        allocator: std.mem.Allocator,
-        commands: std.ArrayList(Command) = .empty,
+        commands: []Command,
+        len: u32 = 0,
         submitted: bool = false,
 
-        pub fn init(allocator: std.mem.Allocator) Self {
-            return .{ .allocator = allocator };
-        }
-
-        pub fn deinit(self: *Self) void {
-            self.commands.deinit(self.allocator);
-            self.* = undefined;
+        pub fn init(commands: []Command) Self {
+            return .{ .commands = commands };
         }
 
         pub fn reset(self: *Self) void {
-            self.commands.clearRetainingCapacity();
+            self.len = 0;
             self.submitted = false;
         }
 
         pub fn append(self: *Self, command: Command) !void {
             if (self.submitted) return error.FrameAlreadySubmitted;
-            try self.commands.append(self.allocator, command);
+            if (self.len >= self.commands.len) return error.GlyphCapacityExceeded;
+            self.commands[self.len] = command;
+            self.len += 1;
         }
 
         pub fn slice(self: *const Self) []const Command {
-            return self.commands.items;
+            return self.commands[0..self.len];
+        }
+
+        pub fn count(self: *const Self) u32 {
+            return self.len;
         }
 
         pub fn markSubmitted(self: *Self) void {
@@ -37,10 +36,24 @@ pub fn TextBatch(comptime Command: type) type {
     };
 }
 
+const std = @import("std");
+
+test "TextBatch writes into borrowed command storage" {
+    const Command = extern struct { value: u32 };
+    var storage: [2]Command = undefined;
+    var batch = TextBatch(Command).init(&storage);
+
+    try batch.append(.{ .value = 1 });
+    try batch.append(.{ .value = 2 });
+    try std.testing.expectError(error.GlyphCapacityExceeded, batch.append(.{ .value = 3 }));
+    try std.testing.expectEqual(@as(u32, 2), batch.count());
+    try std.testing.expectEqual(@as(u32, 1), batch.slice()[0].value);
+}
+
 test "TextBatch rejects appends after submit" {
     const Command = extern struct { value: u32 };
-    var batch = TextBatch(Command).init(std.testing.allocator);
-    defer batch.deinit();
+    var storage: [2]Command = undefined;
+    var batch = TextBatch(Command).init(&storage);
 
     try batch.append(.{ .value = 1 });
     batch.markSubmitted();

@@ -14,6 +14,32 @@ pub const Texel = extern struct {
     a: i16,
 };
 
+pub const CoverageBlob = struct {
+    allocator: std.mem.Allocator,
+    texels: []Texel,
+
+    pub fn empty(allocator: std.mem.Allocator) CoverageBlob {
+        return .{ .allocator = allocator, .texels = &.{} };
+    }
+
+    pub fn init(allocator: std.mem.Allocator, texels: []Texel) CoverageBlob {
+        return .{ .allocator = allocator, .texels = texels };
+    }
+
+    pub fn deinit(self: *CoverageBlob) void {
+        if (self.texels.len != 0) self.allocator.free(self.texels);
+        self.* = undefined;
+    }
+
+    pub fn bytes(self: CoverageBlob) []align(@alignOf(Texel)) const u8 {
+        return std.mem.sliceAsBytes(self.texels);
+    }
+
+    pub fn len(self: CoverageBlob) usize {
+        return self.bytes().len;
+    }
+};
+
 pub const Header = struct {
     bounds: Texel,
     meta: Texel,
@@ -56,4 +82,16 @@ pub fn texelsFromBytes(bytes: []align(@alignOf(Texel)) const u8) []const Texel {
 test "Coverage blob texel layout is stable" {
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(Texel));
     try std.testing.expectEqual(@as(usize, 2), @alignOf(Texel));
+}
+
+test "CoverageBlob owns texel storage and exposes upload bytes" {
+    const texels = try std.testing.allocator.alloc(Texel, 2);
+    texels[0] = .{ .r = 0, .g = 0, .b = 1, .a = 1 };
+    texels[1] = .{ .r = 1, .g = 1, .b = 0, .a = 0 };
+
+    var blob = CoverageBlob.init(std.testing.allocator, texels);
+    defer blob.deinit();
+
+    try std.testing.expectEqual(@as(usize, 2), blob.texels.len);
+    try std.testing.expectEqual(@as(usize, 16), blob.len());
 }

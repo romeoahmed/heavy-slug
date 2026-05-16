@@ -192,10 +192,10 @@ test "reference: h-band candidates are a superset of full-scan y-overlap" {
         },
     };
 
-    const blob = try encode.curves(std.testing.allocator, &curves);
-    defer blob.destroy();
+    var blob = try encode.curves(std.testing.allocator, &curves);
+    defer blob.deinit();
 
-    const view = try decode.BlobView.init(blob.getData());
+    const view = try decode.BlobView.initCoverageBlob(blob);
     for (0..hband.count(view)) |band_index| {
         const candidates = try hband.candidateIds(std.testing.allocator, view, @intCast(band_index));
         defer std.testing.allocator.free(candidates);
@@ -218,9 +218,9 @@ test "reference: analytic point coverage handles filled contours" {
         .{ .p0 = .{ .x = 0, .y = 3 }, .p1 = .{ .x = 0, .y = 2 }, .p2 = .{ .x = 0, .y = 1 }, .p3 = .{ .x = 0, .y = 0 } },
     };
 
-    const blob = try encode.curves(std.testing.allocator, &square);
-    defer blob.destroy();
-    const view = try decode.BlobView.init(blob.getData());
+    var blob = try encode.curves(std.testing.allocator, &square);
+    defer blob.deinit();
+    const view = try decode.BlobView.initCoverageBlob(blob);
 
     try std.testing.expect(coverageAtPoint(view, .{ .x = 6, .y = 6 }, false));
     try std.testing.expect(!coverageAtPoint(view, .{ .x = 20, .y = 6 }, false));

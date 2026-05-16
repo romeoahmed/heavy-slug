@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Breaking refactor in progress:** core public types, unit conversions, backend contracts, font/cache/render internals, and demo layout moved under the new `src/core/`, `src/gpu/`, `src/backends/`, and `src/demo/{common,vulkan,metal}/` structure described in `docs/architecture-refactor-spec.md`.
+- **Breaking architecture refactor completed:** core public types, unit conversions, backend contracts, font/cache/render internals, and demo layout moved under the new `src/core/`, `src/gpu/`, `src/backends/`, and `src/demo/{common,vulkan,metal}/` structure described in `docs/architecture-refactor-spec.md`.
 - **Backend renderer API now exposes `Frame` and `Target` types** so demos submit text through an explicit begin/draw/submit frame boundary.
 - **Backend frame submission now returns `FrameToken`** and glyph/resource retirement is deferred until the backend reports completed tokens.
 - **Text submission now uses `TextRun`** on backend frames, and font loading uses `FontSource` plus `FontOptions`.
@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Shader resource bindings split by backend** under `shaders/backend_vulkan/` and `shaders/backend_metal/`.
 - **`GlyphStore` extracted** so cache metadata, byte-pool allocations, and deferred retirements have a single private owner.
 - **Vulkan command storage is now frame-ring buffered** and protected by completed `FrameToken` tracking before slot reuse.
-- **Breaking:** `FontContext.init` now takes an explicit allocator for the Zig-native outline encoder.
+- **Breaking:** `FontContext` was removed; font loading, shaping, and glyph encoding now live behind `FontSystem`, `LoadedFont`, `ShapePlan`, and `GlyphEncoder`.
 - **Glyph encoding now owns its blob format** by using HarfBuzz draw callbacks directly instead of `hb_gpu_draw_encode`, then raising all outline primitives into cubic spans.
 - **Cubic rendering regularized** by splitting cubic outlines at axis extrema and inflection points, preserving monotone control polygons after quantization, and using safeguarded Newton iteration with strict crossing tests in the fragment shader.
 - **Glyph cache keys are variation-aware** with a reserved variation hash field for future variable-font instances.

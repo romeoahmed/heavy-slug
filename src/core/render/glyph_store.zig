@@ -72,7 +72,7 @@ pub const GlyphStore = struct {
             backend: @TypeOf(backend),
 
             pub fn retire(retiree: *@This(), retired: RetiredGlyph) void {
-                if (retired.ref != std.math.maxInt(u32)) retiree.backend.releaseGlyphRef(retired.ref);
+                if (retired.ref != std.math.maxInt(u32)) retiree.backend.retireBlob(retired.ref);
                 if (retired.pool_alloc.size > 0) retiree.store.pool_alloc.free(retired.pool_alloc);
             }
         };
@@ -101,7 +101,7 @@ test "GlyphStore defers evicted resources until completed token" {
     const Retiree = struct {
         releases: u32 = 0,
 
-        pub fn releaseGlyphRef(self: *@This(), _: u32) void {
+        pub fn retireBlob(self: *@This(), _: u32) void {
             self.releases += 1;
         }
     };

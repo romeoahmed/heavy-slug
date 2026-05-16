@@ -31,17 +31,18 @@ test {
 }
 
 test "integration: shape text and encode all unique glyphs" {
-    const ft_lib = try font.ft.Library.init();
-    defer ft_lib.deinit();
+    var system = try font.FontSystem.init(std.testing.allocator);
+    defer system.deinit();
 
-    var ctx = try font.FontContext.init(std.testing.allocator, ft_lib, test_font_path, 32);
-    defer ctx.deinit();
+    var loaded = try system.load(.{ .path = test_font_path }, .{ .size_px = 32 });
+    defer loaded.deinit();
 
-    const buf = try ctx.shapeText("Heavy Slug", null, null);
-    defer buf.destroy();
+    var shape_plan = try font.ShapePlan.init();
+    defer shape_plan.deinit();
 
-    const infos = buf.getGlyphInfos();
-    const positions = buf.getGlyphPositions();
+    const shaped = try loaded.shape(shape_plan, "Heavy Slug", .{});
+    const infos = shaped.infos;
+    const positions = shaped.positions;
     try std.testing.expect(infos.len > 0);
     try std.testing.expectEqual(infos.len, positions.len);
 
@@ -53,7 +54,7 @@ test "integration: shape text and encode all unique glyphs" {
         if (seen.contains(info.codepoint)) continue;
         try seen.put(info.codepoint, {});
 
-        const encoded = try ctx.encodeGlyph(info.codepoint);
+        const encoded = try loaded.encodeGlyph(info.codepoint);
         defer encoded.destroy();
 
         // Visible glyphs produce non-empty blobs with non-zero extents
@@ -68,24 +69,23 @@ test "integration: shape text and encode all unique glyphs" {
     try std.testing.expect(total_advance > 0);
 }
 
-test "integration: multiple texts through same FontContext" {
-    const ft_lib = try font.ft.Library.init();
-    defer ft_lib.deinit();
+test "integration: multiple texts through same FontSystem and ShapePlan" {
+    var system = try font.FontSystem.init(std.testing.allocator);
+    defer system.deinit();
 
-    var ctx = try font.FontContext.init(std.testing.allocator, ft_lib, test_font_path, 24);
-    defer ctx.deinit();
+    var loaded = try system.load(.{ .path = test_font_path }, .{ .size_px = 24 });
+    defer loaded.deinit();
+    var shape_plan = try font.ShapePlan.init();
+    defer shape_plan.deinit();
 
     const texts = [_][]const u8{ "Hello", "World", "Zig" };
 
     for (texts) |text| {
-        const buf = try ctx.shapeText(text, null, null);
-        defer buf.destroy();
-
-        try std.testing.expect(buf.getLength() > 0);
+        const shaped = try loaded.shape(shape_plan, text, .{});
+        try std.testing.expect(shaped.infos.len > 0);
 
         // Encode first glyph from each pass to verify encoder reuse.
-        const infos = buf.getGlyphInfos();
-        const encoded = try ctx.encodeGlyph(infos[0].codepoint);
+        const encoded = try loaded.encodeGlyph(shaped.infos[0].codepoint);
         defer encoded.destroy();
         try std.testing.expect(encoded.data.len > 0);
     }
@@ -191,16 +191,16 @@ test "integration: removeFont reclaims all pool and cache resources" {
 }
 
 test "integration: motor positions shaped glyphs monotonically" {
-    const ft_lib = try font.ft.Library.init();
-    defer ft_lib.deinit();
+    var system = try font.FontSystem.init(std.testing.allocator);
+    defer system.deinit();
 
-    var ctx = try font.FontContext.init(std.testing.allocator, ft_lib, test_font_path, 24);
-    defer ctx.deinit();
+    var loaded = try system.load(.{ .path = test_font_path }, .{ .size_px = 24 });
+    defer loaded.deinit();
+    var shape_plan = try font.ShapePlan.init();
+    defer shape_plan.deinit();
 
-    const buf = try ctx.shapeText("Hello World", null, null);
-    defer buf.destroy();
-
-    const positions = buf.getGlyphPositions();
+    const shaped = try loaded.shape(shape_plan, "Hello World", .{});
+    const positions = shaped.positions;
 
     // Position glyphs using motors (mirrors renderer's drawText logic)
     const base = pga.Motor.fromTranslation(100.0, 200.0);

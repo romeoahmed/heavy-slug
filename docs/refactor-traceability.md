@@ -18,6 +18,21 @@ Status after the architecture rewrite audit.
 | 09 Demo/Docs | Complete | `src/demo/common/*` shared scene; Vulkan/Metal demos use the same `Frame.drawText(TextRun)` path; README/AGENTS/CHANGELOG updated. |
 | 10 Cleanup | Complete | Legacy roots removed, no source-level `@cImport`, no generated artifacts tracked, public root exports are explicit. |
 
+## Pipeline Boundary Convergence
+
+The follow-up plan in `docs/pipeline-boundary-refactor-plan.md` is implemented.
+
+| Boundary | Status | Implementation Evidence |
+| --- | --- | --- |
+| FontSystem | Complete | `src/core/font/font_system.zig` owns FreeType library lifetime and returns `LoadedFont` values. |
+| ShapePlan | Complete | `src/core/font/shape.zig` owns reusable HarfBuzz buffer state; `RendererCore` no longer manipulates `hb.Buffer` directly. |
+| OutlineStream | Complete | `src/core/outline/encode.zig` captures HarfBuzz draw callbacks into `OutlineStream`. |
+| RegularizedCubicSpans | Complete | `src/core/outline/regularize.zig` raises and splits native segments into `RegularizedCubicSpan` values. |
+| CoverageBlob | Complete | `src/core/blob/format.zig` owns `CoverageBlob`; `src/core/blob/encode.zig` encodes regularized spans without `hb.Blob`. |
+| GlyphStore | Complete | `src/core/render/glyph_store.zig` owns cache, byte pool, and deferred retirements. |
+| TextBatch | Complete | `src/core/render/text_batch.zig` is a borrowed fixed-capacity writer used by Vulkan and Metal frames. |
+| BackendFrame | Complete | Vulkan and Metal frames expose `drawText` and `submit`; backend contract uses `uploadBlob` and `retireBlob`. |
+
 ## Verification Gate
 
 Run before release:

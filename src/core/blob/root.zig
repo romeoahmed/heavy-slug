@@ -6,6 +6,7 @@ pub const reference = @import("reference.zig");
 
 pub const Texel = format.Texel;
 pub const Header = format.Header;
+pub const CoverageBlob = format.CoverageBlob;
 pub const BlobView = decode.BlobView;
 
 test {

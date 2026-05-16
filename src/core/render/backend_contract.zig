@@ -6,8 +6,8 @@ pub fn BackendContract(comptime Backend: type) void {
         requireDecl(Impl, "GlyphRef");
         requireDecl(Impl, "FrameToken");
         requireDecl(Impl, "Command");
-        requireFn(Impl, "uploadGlyphBlob");
-        requireFn(Impl, "releaseGlyphRef");
+        requireFn(Impl, "uploadBlob");
+        requireFn(Impl, "retireBlob");
         requireFn(Impl, "completedFrameToken");
     }
 }
@@ -38,11 +38,11 @@ const GoodBackend = struct {
     pub const FrameToken = u64;
     pub const Command = extern struct { value: u32 };
 
-    pub fn uploadGlyphBlob(_: *@This(), _: anytype, _: []const u8) !GlyphRef {
+    pub fn uploadBlob(_: *@This(), _: anytype, _: []const u8) !GlyphRef {
         return 0;
     }
 
-    pub fn releaseGlyphRef(_: *@This(), _: GlyphRef) void {}
+    pub fn retireBlob(_: *@This(), _: GlyphRef) void {}
 
     pub fn completedFrameToken(_: *const @This()) FrameToken {
         return 0;

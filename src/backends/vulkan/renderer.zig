@@ -48,8 +48,11 @@ pub const Target = struct {
     viewport: [2]f32,
 };
 
+const CommandBatch = heavy_slug.core.render.TextBatch(descriptors.GlyphCommand);
+
 pub const Frame = struct {
     renderer: *Renderer,
+    batch: CommandBatch,
     submitted: bool = false,
 
     pub fn drawText(
@@ -57,12 +60,13 @@ pub const Frame = struct {
         run: heavy_slug.TextRun,
     ) !void {
         if (self.submitted) return error.FrameAlreadySubmitted;
-        try self.renderer.appendRun(run);
+        try self.renderer.core.appendRun(self.renderer, descriptors.GlyphCommand, &self.batch, run);
     }
 
     pub fn submit(self: *Frame, target: Target) !render.FrameToken {
         if (self.submitted) return error.FrameAlreadySubmitted;
-        const token = self.renderer.submitFrame(target);
+        const token = self.renderer.submitFrame(target, self.batch.count());
+        self.batch.markSubmitted();
         self.submitted = true;
         return token;
     }
@@ -291,7 +295,12 @@ pub const Renderer = struct {
 
     pub fn beginFrame(self: *Renderer) Error!Frame {
         try self.reserveFrameSlot();
-        return .{ .renderer = self };
+        const commands: [*]descriptors.GlyphCommand = @ptrCast(@alignCast(self.command_buffers[self.active_frame].mapped));
+        const command_slice = commands[0..self.core.max_glyphs_per_frame];
+        return .{
+            .renderer = self,
+            .batch = CommandBatch.init(command_slice),
+        };
     }
 
     pub fn markFrameComplete(self: *Renderer, token: render.FrameToken) void {
@@ -305,12 +314,7 @@ pub const Renderer = struct {
         return self.completed_frame;
     }
 
-    fn appendRun(self: *Renderer, run: heavy_slug.TextRun) !void {
-        const commands: [*]descriptors.GlyphCommand = @ptrCast(@alignCast(self.command_buffers[self.active_frame].mapped));
-        try self.core.appendRun(self, descriptors.GlyphCommand, commands, run);
-    }
-
-    pub fn uploadGlyphBlob(self: *Renderer, pool_alloc: pool_mod.Allocation, data: []const u8) !u32 {
+    pub fn uploadBlob(self: *Renderer, pool_alloc: pool_mod.Allocation, data: []const u8) !u32 {
         const dst = self.pool_buffer.mapped[pool_alloc.offset..][0..data.len];
         @memcpy(dst, data);
         const slot = self.descriptor_table.allocSlot() orelse
@@ -324,7 +328,7 @@ pub const Renderer = struct {
         return slot;
     }
 
-    pub fn releaseGlyphRef(self: *Renderer, slot: u32) void {
+    pub fn retireBlob(self: *Renderer, slot: u32) void {
         self.descriptor_table.nullSlot(slot);
         self.descriptor_table.freeSlot(slot);
     }
@@ -336,8 +340,7 @@ pub const Renderer = struct {
     ///
     /// `proj`: column-major 4×4 projection matrix (e.g. orthographic).
     /// `viewport`: viewport dimensions in pixels [width, height].
-    fn submitFrame(self: *Renderer, target: Target) render.FrameToken {
-        const glyph_count = self.core.commandCount();
+    fn submitFrame(self: *Renderer, target: Target, glyph_count: u32) render.FrameToken {
         if (glyph_count == 0) return self.last_submitted_frame;
         const cmd_buf = target.command_buffer;
         const proj = target.projection;
