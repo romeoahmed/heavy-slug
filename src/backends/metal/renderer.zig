@@ -67,6 +67,14 @@ extern fn hs_metal_context_draw(
     error_buffer_len: usize,
 ) c_int;
 
+const ResourceIndices = extern struct {
+    glyph_pool: u32,
+    commands: u32,
+    push_constants: u32,
+};
+
+extern fn hs_metal_get_resource_indices() ResourceIndices;
+
 pub const Error = error{
     MetalInitFailed,
     MetalBufferCreateFailed,
@@ -378,4 +386,20 @@ test "Metal renderer public API compiles" {
     _ = @TypeOf(Context.init);
     _ = @TypeOf(Renderer.init);
     heavy_slug.core.render.BackendContract(Renderer);
+}
+
+test "Metal bridge resource indices match generated Slang MSL" {
+    const indices = hs_metal_get_resource_indices();
+    try std.testing.expectEqual(@as(u32, 0), indices.glyph_pool);
+    try std.testing.expectEqual(@as(u32, 1), indices.commands);
+    try std.testing.expectEqual(@as(u32, 2), indices.push_constants);
+
+    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.task, "GlyphCommand_0 device* commands_1 [[buffer(1)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.task, "PushConstants_natural_0 constant* pc_1 [[buffer(2)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "GlyphCommand_0 device* commands_1 [[buffer(1)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "PushConstants_natural_0 constant* pc_1 [[buffer(2)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "glyphPool_0 [[buffer(0)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.mesh, "glyphRef_0 [[user(TEXCOORD_1)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "glyphRef_0 [[user(TEXCOORD_1)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, metal_shaders.fragment, "user(TEXCOORD__1)") == null);
 }

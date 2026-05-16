@@ -22,6 +22,25 @@ typedef struct hs_metal_host_objects {
     void *layer;
 } hs_metal_host_objects;
 
+typedef struct hs_metal_resource_indices {
+    uint32_t glyph_pool;
+    uint32_t commands;
+    uint32_t push_constants;
+} hs_metal_resource_indices;
+
+/*
+ * Slang emits Metal argument indices from shaders/backend_metal/resources.slang:
+ * glyphPool -> buffer(0), commands -> buffer(1), PushConstants -> buffer(2).
+ * Keep these bridge indices in lockstep with the generated MSL.
+ */
+enum {
+    HS_METAL_BUFFER_GLYPH_POOL = 0,
+    HS_METAL_BUFFER_COMMANDS = 1,
+    HS_METAL_BUFFER_PUSH_CONSTANTS = 2,
+};
+
+hs_metal_resource_indices hs_metal_get_resource_indices(void);
+
 /*
  * Ownership model:
  * - create/destroy pairs transfer ownership of hs_metal_context and hs_metal_buffer.

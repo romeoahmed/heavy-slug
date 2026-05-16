@@ -50,8 +50,10 @@ static id<MTLLibrary> make_library(
         return nil;
     }
 
+    MTLCompileOptions *options = [MTLCompileOptions new];
+    options.languageVersion = MTLLanguageVersion4_0;
     NSError *error = nil;
-    id<MTLLibrary> library = [device newLibraryWithSource:source_string options:nil error:&error];
+    id<MTLLibrary> library = [device newLibraryWithSource:source_string options:options error:&error];
     if (!library) {
         write_error(error_buffer, error_buffer_len, error.localizedDescription);
         return nil;
@@ -76,8 +78,8 @@ hs_metal_context *hs_metal_context_create(
             return nullptr;
         }
 
-        if (![device supportsFamily:MTLGPUFamilyMetal3]) {
-            write_error(error_buffer, error_buffer_len, @"Metal mesh shaders require a Metal 3 family GPU or newer");
+        if (![device supportsFamily:MTLGPUFamilyMetal4]) {
+            write_error(error_buffer, error_buffer_len, @"heavy-slug metal4 requires a Metal 4 family GPU");
             return nullptr;
         }
 
@@ -219,6 +221,14 @@ void *hs_metal_buffer_contents(hs_metal_buffer *buffer) {
     return [buffer->buffer contents];
 }
 
+hs_metal_resource_indices hs_metal_get_resource_indices(void) {
+    return hs_metal_resource_indices{
+        HS_METAL_BUFFER_GLYPH_POOL,
+        HS_METAL_BUFFER_COMMANDS,
+        HS_METAL_BUFFER_PUSH_CONSTANTS,
+    };
+}
+
 int hs_metal_context_draw(
     hs_metal_context *context,
     uint32_t width,
@@ -271,11 +281,11 @@ int hs_metal_context_draw(
         id<MTLRenderCommandEncoder> encoder = [cb renderCommandEncoderWithDescriptor:pass_desc];
         [encoder setViewport:(MTLViewport){0, 0, (double)width, (double)height, 0, 1}];
         [encoder setRenderPipelineState:context->pipeline_state];
-        [encoder setObjectBuffer:commands->buffer offset:0 atIndex:0];
-        [encoder setObjectBuffer:push_constants->buffer offset:0 atIndex:1];
-        [encoder setMeshBuffer:commands->buffer offset:0 atIndex:0];
-        [encoder setMeshBuffer:push_constants->buffer offset:0 atIndex:1];
-        [encoder setFragmentBuffer:glyph_pool->buffer offset:0 atIndex:0];
+        [encoder setObjectBuffer:commands->buffer offset:0 atIndex:HS_METAL_BUFFER_COMMANDS];
+        [encoder setObjectBuffer:push_constants->buffer offset:0 atIndex:HS_METAL_BUFFER_PUSH_CONSTANTS];
+        [encoder setMeshBuffer:commands->buffer offset:0 atIndex:HS_METAL_BUFFER_COMMANDS];
+        [encoder setMeshBuffer:push_constants->buffer offset:0 atIndex:HS_METAL_BUFFER_PUSH_CONSTANTS];
+        [encoder setFragmentBuffer:glyph_pool->buffer offset:0 atIndex:HS_METAL_BUFFER_GLYPH_POOL];
         [encoder drawMeshThreadgroups:MTLSizeMake(workgroup_count, 1, 1)
             threadsPerObjectThreadgroup:MTLSizeMake(32, 1, 1)
               threadsPerMeshThreadgroup:MTLSizeMake(4, 1, 1)];

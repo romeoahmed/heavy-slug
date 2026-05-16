@@ -122,7 +122,7 @@ float4 fragmentMain(FragmentInput input) : SV_Target
     blob.buf = glyphPool;
     blob.base = input.glyphRef;
 #else
-    blob.buf = glyphBlobs[input.glyphRef];
+    blob.buf = glyphBlobs[NonUniformResourceIndex(input.glyphRef)];
     blob.base = 0;
 #endif
 

@@ -129,7 +129,7 @@ pub const DescriptorTable = struct {
     dispatch: gpu_context.DeviceDispatch,
     layout: vk.DescriptorSetLayout,
     pool: vk.DescriptorPool,
-    set: vk.DescriptorSet,
+    sets: []vk.DescriptorSet,
     slots: SlotAllocator,
     pending: PendingWrites,
 
@@ -137,22 +137,29 @@ pub const DescriptorTable = struct {
         ctx: gpu_context.VulkanContext,
         allocator: std.mem.Allocator,
         slot_capacity: u32,
+        frame_set_count: u32,
     ) !DescriptorTable {
         const device = ctx.device;
         const dispatch = ctx.dispatch;
         std.debug.assert(slot_capacity > 0);
         std.debug.assert(slot_capacity <= max_glyph_descriptors);
+        std.debug.assert(frame_set_count > 0);
+        try validateDescriptorLimits(ctx.descriptor_indexing_properties, slot_capacity, frame_set_count);
         // -- Create descriptor set layout --
         const binding_flags = [2]vk.DescriptorBindingFlags{
-            .{ .partially_bound_bit = true, .update_after_bind_bit = true },
-            .{ .update_after_bind_bit = true },
+            .{
+                .partially_bound_bit = true,
+                .update_after_bind_bit = true,
+                .update_unused_while_pending_bit = true,
+            },
+            .{},
         };
         const bindings = [2]vk.DescriptorSetLayoutBinding{
             .{
                 .binding = 0,
                 .descriptor_type = .storage_buffer,
-                .descriptor_count = max_glyph_descriptors,
-                .stage_flags = .{ .mesh_bit_ext = true, .fragment_bit = true },
+                .descriptor_count = slot_capacity,
+                .stage_flags = .{ .fragment_bit = true },
                 .p_immutable_samplers = null,
             },
             .{
@@ -179,30 +186,39 @@ pub const DescriptorTable = struct {
         errdefer dispatch.destroyDescriptorSetLayout(device, layout, null);
 
         // -- Create descriptor pool --
-        const pool_sizes = [2]vk.DescriptorPoolSize{
-            .{ .type = .storage_buffer, .descriptor_count = max_glyph_descriptors },
-            .{ .type = .storage_buffer, .descriptor_count = 1 },
+        const descriptor_count_per_set = slot_capacity + 1;
+        const pool_sizes = [1]vk.DescriptorPoolSize{
+            .{
+                .type = .storage_buffer,
+                .descriptor_count = descriptor_count_per_set * frame_set_count,
+            },
         };
         const pool_ci = vk.DescriptorPoolCreateInfo{
             .s_type = .descriptor_pool_create_info,
             .flags = .{ .update_after_bind_bit = true },
-            .max_sets = 1,
-            .pool_size_count = 2,
+            .max_sets = frame_set_count,
+            .pool_size_count = pool_sizes.len,
             .p_pool_sizes = &pool_sizes,
         };
         const pool = try dispatch.createDescriptorPool(device, &pool_ci, null);
         errdefer dispatch.destroyDescriptorPool(device, pool, null);
 
-        // -- Allocate descriptor set --
-        var set: vk.DescriptorSet = undefined;
+        // -- Allocate one descriptor set per frame slot. Binding 1 is frame-local,
+        // so it is never updated while an older submission can still consume it.
+        const layouts = try allocator.alloc(vk.DescriptorSetLayout, frame_set_count);
+        defer allocator.free(layouts);
+        @memset(layouts, layout);
+
+        const sets = try allocator.alloc(vk.DescriptorSet, frame_set_count);
+        errdefer allocator.free(sets);
         const alloc_info = vk.DescriptorSetAllocateInfo{
             .s_type = .descriptor_set_allocate_info,
             .descriptor_pool = pool,
-            .descriptor_set_count = 1,
-            .p_set_layouts = @ptrCast(&layout),
+            .descriptor_set_count = frame_set_count,
+            .p_set_layouts = layouts.ptr,
         };
-        try dispatch.allocateDescriptorSets(device, &alloc_info, @ptrCast(&set));
-        // No errdefer needed for `set`: descriptor sets allocated from a pool without
+        try dispatch.allocateDescriptorSets(device, &alloc_info, sets.ptr);
+        // No errdefer needed for `sets`: descriptor sets allocated from a pool without
         // FREE_DESCRIPTOR_SET_BIT are freed implicitly when the pool is destroyed.
 
         // -- Slot allocator --
@@ -213,7 +229,7 @@ pub const DescriptorTable = struct {
             .dispatch = dispatch,
             .layout = layout,
             .pool = pool,
-            .set = set,
+            .sets = sets,
             .slots = slots,
             .pending = .{},
         };
@@ -225,7 +241,13 @@ pub const DescriptorTable = struct {
         // so destroying the pool implicitly frees it. Layout has no dependency on the pool.
         self.dispatch.destroyDescriptorPool(self.device, self.pool, null);
         self.dispatch.destroyDescriptorSetLayout(self.device, self.layout, null);
+        allocator.free(self.sets);
         self.* = undefined;
+    }
+
+    pub fn setForFrame(self: *const DescriptorTable, frame_index: u32) vk.DescriptorSet {
+        std.debug.assert(frame_index < self.sets.len);
+        return self.sets[frame_index];
     }
 
     /// Flush all pending descriptor writes in a single Vulkan API call.
@@ -264,27 +286,31 @@ pub const DescriptorTable = struct {
             .offset = offset,
             .range = range,
         };
-        const write = vk.WriteDescriptorSet{
-            .s_type = .write_descriptor_set,
-            .dst_set = self.set,
-            .dst_binding = 0,
-            .dst_array_element = index,
-            .descriptor_count = 1,
-            .descriptor_type = .storage_buffer,
-            .p_buffer_info = undefined, // fixed up in flushWrites
-            .p_image_info = undefined,
-            .p_texel_buffer_view = undefined,
-        };
-        self.enqueueWrite(buf_info, write);
+        for (self.sets) |set| {
+            const write = vk.WriteDescriptorSet{
+                .s_type = .write_descriptor_set,
+                .dst_set = set,
+                .dst_binding = 0,
+                .dst_array_element = index,
+                .descriptor_count = 1,
+                .descriptor_type = .storage_buffer,
+                .p_buffer_info = undefined, // fixed up in flushWrites
+                .p_image_info = undefined,
+                .p_texel_buffer_view = undefined,
+            };
+            self.enqueueWrite(buf_info, write);
+        }
     }
 
     /// Update binding 1 to point at the GlyphCommand[] buffer for this frame.
     pub fn updateCommandBuffer(
         self: *DescriptorTable,
+        frame_index: u32,
         buffer: vk.Buffer,
         offset: vk.DeviceSize,
         range: vk.DeviceSize,
     ) void {
+        const set = self.setForFrame(frame_index);
         const buf_info = vk.DescriptorBufferInfo{
             .buffer = buffer,
             .offset = offset,
@@ -292,7 +318,7 @@ pub const DescriptorTable = struct {
         };
         const write = vk.WriteDescriptorSet{
             .s_type = .write_descriptor_set,
-            .dst_set = self.set,
+            .dst_set = set,
             .dst_binding = 1,
             .dst_array_element = 0,
             .descriptor_count = 1,
@@ -324,20 +350,41 @@ pub const DescriptorTable = struct {
             .offset = 0,
             .range = whole_size,
         };
-        const write = vk.WriteDescriptorSet{
-            .s_type = .write_descriptor_set,
-            .dst_set = self.set,
-            .dst_binding = 0,
-            .dst_array_element = index,
-            .descriptor_count = 1,
-            .descriptor_type = .storage_buffer,
-            .p_buffer_info = undefined, // fixed up in flushWrites
-            .p_image_info = undefined,
-            .p_texel_buffer_view = undefined,
-        };
-        self.enqueueWrite(buf_info, write);
+        for (self.sets) |set| {
+            const write = vk.WriteDescriptorSet{
+                .s_type = .write_descriptor_set,
+                .dst_set = set,
+                .dst_binding = 0,
+                .dst_array_element = index,
+                .descriptor_count = 1,
+                .descriptor_type = .storage_buffer,
+                .p_buffer_info = undefined, // fixed up in flushWrites
+                .p_image_info = undefined,
+                .p_texel_buffer_view = undefined,
+            };
+            self.enqueueWrite(buf_info, write);
+        }
     }
 };
+
+fn validateDescriptorLimits(
+    props: vk.PhysicalDeviceDescriptorIndexingProperties,
+    slot_capacity: u32,
+    frame_set_count: u32,
+) !void {
+    const update_after_bind_per_set = slot_capacity;
+    const descriptors_per_set = slot_capacity + 1;
+    const update_after_bind_pool_total = update_after_bind_per_set * frame_set_count;
+
+    if (update_after_bind_per_set > props.max_per_stage_descriptor_update_after_bind_storage_buffers or
+        update_after_bind_per_set > props.max_descriptor_set_update_after_bind_storage_buffers or
+        update_after_bind_per_set > props.max_per_stage_update_after_bind_resources or
+        update_after_bind_pool_total > props.max_update_after_bind_descriptors_in_all_pools or
+        descriptors_per_set > max_glyph_descriptors + 1)
+    {
+        return error.DescriptorLimitExceeded;
+    }
+}
 
 test "DescriptorTable type and field layout compiles" {
     _ = DescriptorTable;
@@ -346,7 +393,7 @@ test "DescriptorTable type and field layout compiles" {
     try std.testing.expect(@hasField(DescriptorTable, "dispatch"));
     try std.testing.expect(@hasField(DescriptorTable, "layout"));
     try std.testing.expect(@hasField(DescriptorTable, "pool"));
-    try std.testing.expect(@hasField(DescriptorTable, "set"));
+    try std.testing.expect(@hasField(DescriptorTable, "sets"));
     try std.testing.expect(@hasField(DescriptorTable, "slots"));
     try std.testing.expect(@hasField(DescriptorTable, "pending"));
 }
@@ -358,4 +405,22 @@ test "DescriptorTable: pending write buffer type compiles" {
     _ = @TypeOf(DescriptorTable.flushWrites);
     // Verify enqueueWrite is accessible (it's private but compiles)
     _ = @TypeOf(DescriptorTable.enqueueWrite);
+}
+
+test "DescriptorTable: limit validation accepts typical configured capacity" {
+    var props = std.mem.zeroes(vk.PhysicalDeviceDescriptorIndexingProperties);
+    props.max_per_stage_descriptor_update_after_bind_storage_buffers = 65_536;
+    props.max_per_stage_update_after_bind_resources = 65_536;
+    props.max_descriptor_set_update_after_bind_storage_buffers = 65_536;
+    props.max_update_after_bind_descriptors_in_all_pools = 65_536 * 3;
+    try validateDescriptorLimits(props, 65_536, 3);
+}
+
+test "DescriptorTable: limit validation rejects oversized configured capacity" {
+    var props = std.mem.zeroes(vk.PhysicalDeviceDescriptorIndexingProperties);
+    props.max_per_stage_descriptor_update_after_bind_storage_buffers = 1024;
+    props.max_per_stage_update_after_bind_resources = 1024;
+    props.max_descriptor_set_update_after_bind_storage_buffers = 1024;
+    props.max_update_after_bind_descriptors_in_all_pools = 1024;
+    try std.testing.expectError(error.DescriptorLimitExceeded, validateDescriptorLimits(props, 2048, 3));
 }

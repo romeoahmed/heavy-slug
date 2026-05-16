@@ -206,6 +206,7 @@ pub const Renderer = struct {
             ctx,
             allocator,
             options.max_glyph_descriptors,
+            frames_in_flight,
         );
         errdefer desc_table.deinit(allocator);
 
@@ -368,15 +369,19 @@ pub const Renderer = struct {
         // Bind pipeline
         self.dispatch.cmdBindPipeline(cmd_buf, .graphics, self.pip.pipeline);
 
-        // Bind descriptor set
         const command_buffer = self.command_buffers[self.active_frame];
-        self.descriptor_table.updateCommandBuffer(command_buffer.buffer, 0, command_buffer.size);
+        self.descriptor_table.updateCommandBuffer(self.active_frame, command_buffer.buffer, 0, command_buffer.size);
+        // Commit all descriptor writes before binding the frame-local set.
+        if (@import("builtin").mode == .Debug) self.stats.descriptors_flushed += self.descriptor_table.pending.len;
+        self.descriptor_table.flushWrites();
+
+        // Bind descriptor set
         self.dispatch.cmdBindDescriptorSets(
             cmd_buf,
             .graphics,
             self.pip.pipeline_layout,
             0,
-            &.{self.descriptor_table.set},
+            &.{self.descriptor_table.setForFrame(self.active_frame)},
             null,
         );
 
@@ -403,9 +408,6 @@ pub const Renderer = struct {
 
         // Dispatch mesh shader workgroups (32 threads per workgroup in task shader)
         const workgroup_count = (glyph_count + 31) / 32;
-        // Commit all pending descriptor updates before GPU dispatch
-        if (@import("builtin").mode == .Debug) self.stats.descriptors_flushed += self.descriptor_table.pending.len;
-        self.descriptor_table.flushWrites();
         self.dispatch.cmdDrawMeshTasksEXT(cmd_buf, workgroup_count, 1, 1);
         if (@import("builtin").mode == .Debug) {
             self.core.stats.glyphs_submitted += glyph_count;
