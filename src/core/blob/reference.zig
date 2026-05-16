@@ -1,3 +1,5 @@
+//! CPU reference queries for validating coverage blob candidates and winding.
+
 const std = @import("std");
 const format = @import("format.zig");
 const decode = @import("decode.zig");

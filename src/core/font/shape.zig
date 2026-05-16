@@ -1,3 +1,5 @@
+//! Reusable HarfBuzz shaping plan.
+
 const std = @import("std");
 const hb = @import("harfbuzz.zig");
 

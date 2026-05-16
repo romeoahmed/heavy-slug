@@ -1,3 +1,5 @@
+//! Core text rendering orchestration shared by all GPU backends.
+
 const std = @import("std");
 const cache_mod = @import("../cache/glyph_cache.zig");
 const pool_mod = @import("../cache/byte_pool.zig");

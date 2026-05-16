@@ -1,3 +1,5 @@
+//! Marker for the generated GPU ABI source.
+
 pub const Source = enum {
     slang_reflection,
 };

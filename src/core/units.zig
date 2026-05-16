@@ -1,3 +1,5 @@
+//! Unit conversions between pixels, HarfBuzz 26.6 coordinates, and blob units.
+
 const std = @import("std");
 const pga = @import("../math/pga.zig");
 

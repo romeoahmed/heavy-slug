@@ -2,7 +2,7 @@ const std = @import("std");
 const math = std.math;
 const testing = std.testing;
 
-/// PGA Cl(2,0,1) Motor — encodes 2D rigid-body transforms.
+/// PGA Cl(2,0,1) motor for 2D rigid transforms.
 /// Storage layout: [s, e12, e01, e02] matching GPU float4.
 pub const Motor = extern struct {
     m: [4]f32,
@@ -63,7 +63,7 @@ pub const Motor = extern struct {
         } };
     }
 
-    /// Compose motor with a pure translation — specialized hot path.
+    /// Compose this motor with a pure translation.
     /// Equivalent to `compose(self, fromTranslation(tx, ty))` but avoids
     /// redundant terms (sb=1, ab=0).
     ///
@@ -241,7 +241,7 @@ test "Motor.compose two translations add" {
 }
 
 test "Motor.compose rotate then translate" {
-    // compose(tr, rot) applies rot first, then tr
+    // compose(tr, rot) applies rot first, then tr.
     const rot = Motor.fromRotation(std.math.pi / 2.0);
     const tr = Motor.fromTranslation(2.0, 0.0);
     const m = Motor.compose(tr, rot);
@@ -291,7 +291,7 @@ test "Motor.toMat rotation matches apply" {
     const mat = m.toMat(proj);
     const px: f32 = 3.0;
     const py: f32 = 1.0;
-    // Transform via matrix (column-major: result[col][row])
+    // Transform via matrix (column-major: result[col][row]).
     const mat_x = mat[0][0] * px + mat[1][0] * py + mat[3][0];
     const mat_y = mat[0][1] * px + mat[1][1] * py + mat[3][1];
     const applied = m.apply(.{ px, py });
@@ -300,14 +300,14 @@ test "Motor.toMat rotation matches apply" {
 }
 
 test "Motor.toMat respects non-identity proj" {
-    // Uniform scale proj (2x in x, 3x in y)
+    // Uniform scale projection: 2x in x, 3x in y.
     const proj = [4][4]f32{
         .{ 2, 0, 0, 0 },
         .{ 0, 3, 0, 0 },
         .{ 0, 0, 1, 0 },
         .{ 0, 0, 0, 1 },
     };
-    // Pure translation by (4, 6)
+    // Pure translation by (4, 6).
     const m = Motor.fromTranslation(4.0, 6.0);
     const result = m.toMat(proj);
     // proj × motor_mat: translation column is proj × [4, 6, 0, 1]ᵀ = [8, 18, 0, 1]
@@ -323,13 +323,13 @@ test "Motor.toMat combined motor matches apply" {
         .{ 0, 0, 1, 0 },
         .{ 0, 0, 0, 1 },
     };
-    // Combine: rotate 45° then translate (1, 2)
+    // Combine: rotate 45° then translate (1, 2).
     const rot = Motor.fromRotation(std.math.pi / 4.0);
     const tr = Motor.fromTranslation(1.0, 2.0);
     const m = Motor.compose(tr, rot); // rot first, then tr
 
     const mat = m.toMat(proj);
-    // Test point (2, 0)
+    // Test point (2, 0).
     const px: f32 = 2.0;
     const py: f32 = 0.0;
     const mat_x = mat[0][0] * px + mat[1][0] * py + mat[3][0];
@@ -398,7 +398,6 @@ test "Motor.fromRotationAbout: toMat matches apply" {
     };
     const m = Motor.fromRotationAbout(std.math.pi / 3.0, 4.0, -2.0);
     const mat = m.toMat(proj);
-    // Test several points
     const points = [_][2]f32{ .{ 4, -2 }, .{ 0, 0 }, .{ 10, 5 }, .{ -3, 7 } };
     for (points) |pt| {
         const mat_x = mat[0][0] * pt[0] + mat[1][0] * pt[1] + mat[3][0];
@@ -411,8 +410,7 @@ test "Motor.fromRotationAbout: toMat matches apply" {
 
 test "Motor.compose: rotation+translation matches sequential apply" {
     // compose(a, b).apply(p) must equal a.apply(b.apply(p)).
-    // a must have nonzero rotation (aa != 0) to exercise the c1/sw1 cross-terms
-    // that distinguish the correct formula from the old buggy one.
+    // Nonzero rotation exercises the c1/sw1 cross-terms in the composition formula.
     const rot_a = Motor.fromRotationAbout(std.math.pi / 3.0, 1.0, 2.0);
     const rot_b = Motor.fromRotation(std.math.pi / 6.0);
     const tr_b = Motor.fromTranslation(3.0, -1.0);

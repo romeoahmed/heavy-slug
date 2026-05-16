@@ -4,8 +4,7 @@ const gpu_context = @import("context.zig");
 const gpu_structs = @import("gpu_structs");
 const backend_options = @import("heavy_slug_backend_options");
 
-/// VK_WHOLE_SIZE: sentinel meaning "the rest of the buffer".
-/// Used in null descriptors (requires VK_EXT_robustness2 nullDescriptor).
+/// `VK_WHOLE_SIZE` sentinel used when writing null descriptors.
 const whole_size: vk.DeviceSize = std.math.maxInt(vk.DeviceSize);
 
 /// Per-glyph draw command uploaded to GPU each frame.
@@ -27,18 +26,16 @@ test "PushConstants is 80 bytes with correct field offsets" {
     try std.testing.expectEqual(@as(usize, 72), @offsetOf(PushConstants, "glyph_count"));
 }
 
-/// Stack-based free-list for descriptor slot indices.
-/// Manages indices 0..capacity-1. O(1) alloc/free.
+/// O(1) free-list for descriptor slot indices.
 const SlotAllocator = struct {
-    /// Stack of free slot indices. stack[0..count] are available.
+    /// `stack[0..count]` contains available slots.
     stack: []u32,
     count: u32,
     capacity: u32,
 
-    /// Initialize with all slots free (indices 0..capacity-1 on the stack).
+    /// Initialize with every slot available.
     pub fn init(allocator: std.mem.Allocator, capacity: u32) !SlotAllocator {
         const stack = try allocator.alloc(u32, capacity);
-        // Fill stack with indices 0..capacity-1 (index capacity-1 at top; allocated first)
         for (stack, 0..) |*slot, i| {
             slot.* = @intCast(i);
         }
@@ -81,14 +78,12 @@ test "SlotAllocator: alloc returns indices, free returns them" {
     var sa = try SlotAllocator.init(std.testing.allocator, 4);
     defer sa.deinit(std.testing.allocator);
 
-    // Allocate all 4 slots
     const a = sa.alloc().?;
     const b = sa.alloc().?;
     const c = sa.alloc().?;
     const d = sa.alloc().?;
     try std.testing.expectEqual(@as(u32, 0), sa.count);
 
-    // All indices should be distinct and < capacity
     var seen = [_]bool{false} ** 4;
     for ([_]u32{ a, b, c, d }) |idx| {
         try std.testing.expect(idx < 4);
@@ -96,10 +91,8 @@ test "SlotAllocator: alloc returns indices, free returns them" {
         seen[idx] = true;
     }
 
-    // Alloc when empty returns null
     try std.testing.expectEqual(@as(?u32, null), sa.alloc());
 
-    // Free one, re-alloc succeeds
     sa.free(b);
     try std.testing.expectEqual(@as(u32, 1), sa.count);
     const e = sa.alloc().?;
@@ -158,7 +151,6 @@ pub const DescriptorTable = struct {
         std.debug.assert(slot_capacity <= max_glyph_descriptors);
         std.debug.assert(frame_set_count > 0);
         try validateDescriptorLimits(ctx.descriptor_indexing_properties, slot_capacity, frame_set_count);
-        // -- Create descriptor set layout --
         const binding_count: u32 = if (backend_options.shader_stats) 3 else 2;
         const binding_flags = [3]vk.DescriptorBindingFlags{
             .{
@@ -207,7 +199,6 @@ pub const DescriptorTable = struct {
         const layout = try dispatch.createDescriptorSetLayout(device, &layout_ci, null);
         errdefer dispatch.destroyDescriptorSetLayout(device, layout, null);
 
-        // -- Create descriptor pool --
         const descriptor_count_per_set = slot_capacity + 1 + @as(u32, if (backend_options.shader_stats) 1 else 0);
         const pool_sizes = [1]vk.DescriptorPoolSize{
             .{
@@ -225,8 +216,7 @@ pub const DescriptorTable = struct {
         const pool = try dispatch.createDescriptorPool(device, &pool_ci, null);
         errdefer dispatch.destroyDescriptorPool(device, pool, null);
 
-        // -- Allocate one descriptor set per frame slot. Binding 1 is frame-local,
-        // so it is never updated while an older submission can still consume it.
+        // Binding 1 is frame-local, so older submissions never observe updates.
         const layouts = try allocator.alloc(vk.DescriptorSetLayout, frame_set_count);
         defer allocator.free(layouts);
         @memset(layouts, layout);
@@ -240,10 +230,8 @@ pub const DescriptorTable = struct {
             .p_set_layouts = layouts.ptr,
         };
         try dispatch.allocateDescriptorSets(device, &alloc_info, sets.ptr);
-        // No errdefer needed for `sets`: descriptor sets allocated from a pool without
-        // FREE_DESCRIPTOR_SET_BIT are freed implicitly when the pool is destroyed.
+        // Descriptor sets are freed with the pool.
 
-        // -- Slot allocator --
         const slots = try SlotAllocator.init(allocator, slot_capacity);
 
         return .{
@@ -260,8 +248,7 @@ pub const DescriptorTable = struct {
 
     pub fn deinit(self: *DescriptorTable, allocator: std.mem.Allocator) void {
         self.slots.deinit(allocator);
-        // Pool is destroyed before layout: the set was allocated without FREE_DESCRIPTOR_SET_BIT
-        // so destroying the pool implicitly frees it. Layout has no dependency on the pool.
+        // Descriptor sets are pool-owned and layout-independent.
         self.dispatch.destroyDescriptorPool(self.device, self.pool, null);
         self.dispatch.destroyDescriptorSetLayout(self.device, self.layout, null);
         allocator.free(self.sets);
@@ -289,7 +276,7 @@ pub const DescriptorTable = struct {
             self.debug_stats.descriptor_writes += self.pending.len;
             self.debug_stats.descriptor_flush_calls += 1;
         }
-        // Fix up p_buffer_info pointers — they must point into our inline array
+        // `p_buffer_info` pointers must point into the stable inline array.
         for (self.pending.writes[0..self.pending.len], 0..) |*w, i| {
             w.p_buffer_info = @ptrCast(&self.pending.buf_infos[i]);
         }
@@ -307,7 +294,7 @@ pub const DescriptorTable = struct {
         self.pending.len += 1;
     }
 
-    /// Point descriptor slot `index` at a sub-range of `buffer`.
+    /// Point glyph descriptor slot `index` at a sub-range of `buffer`.
     pub fn updateSlot(
         self: *DescriptorTable,
         index: u32,
@@ -403,9 +390,7 @@ pub const DescriptorTable = struct {
         self.slots.free(slot);
     }
 
-    /// Write a null descriptor to binding 0 at `index`, making the slot safe
-    /// to leave unbound. Call before freeSlot() on glyph cache eviction.
-    /// Requires nullDescriptor feature from VK_EXT_robustness2.
+    /// Clear binding 0 at `index` before returning a glyph slot to the free-list.
     pub fn nullSlot(self: *DescriptorTable, index: u32) void {
         std.debug.assert(index < self.slots.capacity);
         const buf_info = vk.DescriptorBufferInfo{
@@ -421,7 +406,7 @@ pub const DescriptorTable = struct {
                 .dst_array_element = index,
                 .descriptor_count = 1,
                 .descriptor_type = .storage_buffer,
-                .p_buffer_info = undefined, // fixed up in flushWrites
+                .p_buffer_info = undefined, // fixed up in flushWrites()
                 .p_image_info = undefined,
                 .p_texel_buffer_view = undefined,
             };
@@ -453,7 +438,6 @@ fn validateDescriptorLimits(
 
 test "DescriptorTable type and field layout compiles" {
     _ = DescriptorTable;
-    // Verify the struct has expected fields
     try std.testing.expect(@hasField(DescriptorTable, "device"));
     try std.testing.expect(@hasField(DescriptorTable, "dispatch"));
     try std.testing.expect(@hasField(DescriptorTable, "layout"));
@@ -465,12 +449,9 @@ test "DescriptorTable type and field layout compiles" {
 }
 
 test "DescriptorTable: pending write buffer type compiles" {
-    // Compile-time verification that DescriptorTable has batched write fields.
     try std.testing.expect(@hasField(DescriptorTable, "pending"));
-    // Verify flushWrites method exists
     _ = @TypeOf(DescriptorTable.flushWrites);
     _ = @TypeOf(DescriptorTable.debugStats);
-    // Verify enqueueWrite is accessible (it's private but compiles)
     _ = @TypeOf(DescriptorTable.enqueueWrite);
 }
 

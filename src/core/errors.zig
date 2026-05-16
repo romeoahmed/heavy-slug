@@ -1,3 +1,5 @@
+//! Shared public error set.
+
 pub const Error = error{
     InvalidFont,
     ShapingFailed,

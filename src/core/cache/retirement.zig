@@ -1,5 +1,8 @@
+//! Generic deferred retirement queue keyed by completed frame tokens.
+
 const std = @import("std");
 
+/// Stores resources until the host reports that their token has completed.
 pub fn DeferredRetirementQueue(comptime FrameToken: type, comptime Resource: type) type {
     return struct {
         const Self = @This();

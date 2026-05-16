@@ -19,11 +19,11 @@ const TargetHandle = opaque {};
 const frames_in_flight = 3;
 
 pub const HostObjects = extern struct {
-    /// Host-owned id<MTLDevice>. Must outlive Context.
+    /// Borrowed id<MTLDevice>; must outlive Context.
     device: *anyopaque,
-    /// Host-owned id<MTLCommandQueue>. Must belong to device and outlive Context.
+    /// Borrowed id<MTLCommandQueue>; must belong to device.
     command_queue: *anyopaque,
-    /// Host-owned CAMetalLayer with device and pixelFormat already configured.
+    /// Borrowed CAMetalLayer with device and pixelFormat already configured.
     layer: *anyopaque,
 };
 

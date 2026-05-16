@@ -1,3 +1,5 @@
+// Analytic cubic coverage integration helpers.
+
 import coverage_blob;
 
 struct Cubic

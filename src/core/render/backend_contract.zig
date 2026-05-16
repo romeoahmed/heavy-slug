@@ -1,3 +1,5 @@
+//! Compile-time shape checks for renderer backends used by `RendererCore`.
+
 const std = @import("std");
 
 pub fn BackendContract(comptime Backend: type) void {

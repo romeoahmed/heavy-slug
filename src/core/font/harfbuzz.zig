@@ -97,8 +97,7 @@ pub const Buffer = struct {
         return @as([*]const GlyphPosition, @ptrCast(ptr))[0..len];
     }
 
-    /// Reset buffer to initial state. Clears all content and properties.
-    /// Used to reuse a single buffer across multiple shaping calls.
+    /// Reset buffer content and segment properties for reuse.
     pub fn reset(self: Buffer) void {
         c.hb_buffer_reset(self.handle);
     }
@@ -150,18 +149,15 @@ test "set direction and script" {
 }
 
 test "Font: create from FT_Face and shape text" {
-    // Load FreeType face
     const ft_lib = try ft.Library.init();
     defer ft_lib.deinit();
     const ft_face = ft.Face.init(ft_lib, test_font_path, 0) catch return;
     defer ft_face.deinit();
     try ft_face.setPixelSizes(0, 32);
 
-    // Create HarfBuzz font
     const font = try Font.createFromFtFace(ft_face.rawHandle());
     defer font.destroy();
 
-    // Shape "AB"
     const buf = try Buffer.create();
     defer buf.destroy();
     buf.setDirection(.ltr);
@@ -169,7 +165,6 @@ test "Font: create from FT_Face and shape text" {
     buf.addUtf8("AB");
     shape(font, buf);
 
-    // Verify shaping produced 2 glyphs with valid info
     const infos = buf.getGlyphInfos();
     try std.testing.expectEqual(@as(usize, 2), infos.len);
     try std.testing.expect(infos[0].codepoint != 0);

@@ -1,3 +1,5 @@
+// Cocoa/Metal demo host functions exposed to Zig.
+
 #include "host.h"
 
 #import <Cocoa/Cocoa.h>

@@ -42,8 +42,6 @@ pub const CacheEntry = struct {
     lru_idx: u32 = LRU_NONE, // index into GlyphCache.lru_nodes; LRU_NONE for hot entries
 };
 
-// --- LRU doubly-linked list (index-based) ---
-
 const LRU_SENTINEL_HEAD: u32 = 0; // MRU end
 const LRU_SENTINEL_TAIL: u32 = 1; // LRU end
 const LRU_NONE: u32 = std.math.maxInt(u32);
@@ -73,21 +71,20 @@ const LruNode = struct {
     next: u32,
 };
 
-/// Returned when an entry is evicted from the cache.
-/// The caller is responsible for freeing the descriptor slot and pool allocation.
+/// Backend resource and pool allocation returned when an entry leaves the cache.
 pub const EvictedEntry = struct {
     key: CacheKey,
     slot: GlyphRef,
     pool_alloc: pool_mod.Allocation,
 };
 
-/// Two-tier glyph cache mapping (font_id, glyph_id) to descriptor slot + pool allocation.
+/// Two-tier glyph cache mapping a glyph key to a backend `GlyphRef` and pool allocation.
 ///
 /// - **Hot tier**: frequently used glyphs, evicted only on font unload.
 /// - **Cold tier**: LRU eviction when full, promotion to hot after `promote_frames`
 ///   consecutive frames of use.
 ///
-/// This is a pure metadata tracker — it does not own Vulkan resources.
+/// This is metadata only; backends own the GPU objects referenced by `GlyphRef`.
 pub const GlyphCache = struct {
     map: std.AutoHashMap(CacheKey, CacheEntry),
     hot_count: u32,
@@ -106,8 +103,6 @@ pub const GlyphCache = struct {
     fn frameAge(current: u32, frame: u32) u32 {
         return current -% frame;
     }
-
-    // --- LRU list helpers (O(1) each) ---
 
     fn lruAlloc(self: *GlyphCache) u32 {
         const idx = self.lru_free_head;
@@ -189,8 +184,7 @@ pub const GlyphCache = struct {
         return self.hot_count + self.cold_count;
     }
 
-    /// Insert a glyph into the hot tier. Caller must ensure hot tier has capacity.
-    /// Caller must ensure key is not already present (lookup first).
+    /// Insert a glyph into the hot tier. The key must be absent and capacity available.
     pub fn insertHot(
         self: *GlyphCache,
         key: CacheKey,
@@ -211,8 +205,7 @@ pub const GlyphCache = struct {
         self.hot_count += 1;
     }
 
-    /// Insert a glyph into the cold tier. Caller must ensure cold tier has capacity
-    /// (evict first if full). Caller must ensure key is not already present (lookup first).
+    /// Insert a glyph into the cold tier. The key must be absent and capacity available.
     pub fn insertCold(
         self: *GlyphCache,
         key: CacheKey,
@@ -293,8 +286,7 @@ pub const GlyphCache = struct {
     }
 
     /// Evict the least-recently-used cold entry. O(1) via DLL tail pop.
-    /// Returns the evicted entry's key, slot, and pool allocation so the
-    /// caller can free Vulkan resources. Returns null if no cold entries.
+    /// Returns the evicted entry's key, `GlyphRef`, and pool allocation.
     pub fn evictLru(self: *GlyphCache) ?EvictedEntry {
         if (self.cold_count == 0) return null;
 
@@ -335,11 +327,9 @@ pub const GlyphCache = struct {
     }
 
     /// Remove all cache entries for the given font_id.
-    /// Returns a caller-owned slice of evicted entries so the caller can
-    /// free descriptor slots and pool allocations. Caller must free the
-    /// returned slice with the same allocator.
+    /// Returns caller-owned evicted entries; free the slice with the same allocator.
     pub fn removeFont(self: *GlyphCache, allocator: std.mem.Allocator, font_id: u32) ![]EvictedEntry {
-        // Collect keys to remove (can't remove during iteration)
+        // Collect keys first; the hash map cannot be mutated during iteration.
         var to_remove: std.ArrayList(CacheKey) = .empty;
         defer to_remove.deinit(allocator);
 
@@ -354,7 +344,7 @@ pub const GlyphCache = struct {
 
         const evicted = try allocator.alloc(EvictedEntry, to_remove.items.len);
         for (to_remove.items, 0..) |key, i| {
-            // Safe: key was observed during iteration above and the map is not mutated between passes.
+            // Safe: no map mutation occurs between collecting keys and removing them.
             const removed = self.map.fetchRemove(key).?;
             if (removed.value.tier == .hot) {
                 self.hot_count -= 1;
@@ -452,7 +442,6 @@ test "GlyphCache: evict LRU cold entry" {
     cache.current_frame = 1; // advance manually for insertion ordering
     try cache.insertCold(key2, testGlyphRef(11), .{ .offset = 64, .size = 64 }, dummy_box);
 
-    // key1 was inserted at frame 0 (older), key2 at frame 1
     const evicted = cache.evictLru().?;
     try std.testing.expectEqual(key1, evicted.key);
     try std.testing.expectEqual(testGlyphRef(10), evicted.slot);
@@ -464,7 +453,6 @@ test "GlyphCache: evict returns null when no cold entries" {
     defer cache.deinit();
 
     const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
-    // Only hot entries
     try cache.insertHot(.{ .font_id = 1, .glyph_id = 1 }, testGlyphRef(0), .{ .offset = 0, .size = 64 }, dummy_box);
 
     try std.testing.expectEqual(@as(?EvictedEntry, null), cache.evictLru());
@@ -483,11 +471,9 @@ test "GlyphCache: evict prefers least recently used" {
     try cache.insertCold(key_b, testGlyphRef(1), .{ .offset = 64, .size = 64 }, dummy_box);
     try cache.insertCold(key_c, testGlyphRef(2), .{ .offset = 128, .size = 64 }, dummy_box);
 
-    // Touch key_a at frame 5 — it becomes most recently used
     cache.current_frame = 5;
     _ = cache.lookup(key_a);
 
-    // key_b and key_c are untouched; B was inserted before C so B is LRU
     const evicted = cache.evictLru().?;
     try std.testing.expectEqual(key_b, evicted.key);
 }
@@ -500,21 +486,17 @@ test "GlyphCache: consecutive frame tracking" {
     const key = CacheKey{ .font_id = 1, .glyph_id = 65 };
     try cache.insertCold(key, testGlyphRef(0), .{ .offset = 0, .size = 64 }, dummy_box);
 
-    // Frame 0: insert set consecutive = 1
     var entry = cache.lookup(key).?;
     try std.testing.expectEqual(@as(u8, 1), entry.consecutive_frames);
 
-    // Frame 1: consecutive should increment to 2
     cache.advanceFrame();
     entry = cache.lookup(key).?;
     try std.testing.expectEqual(@as(u8, 2), entry.consecutive_frames);
 
-    // Frame 2: consecutive should increment to 3
     cache.advanceFrame();
     entry = cache.lookup(key).?;
     try std.testing.expectEqual(@as(u8, 3), entry.consecutive_frames);
 
-    // Skip frame 3 (no lookup), advance to frame 4
     cache.advanceFrame();
     cache.advanceFrame();
     entry = cache.lookup(key).?;
@@ -528,8 +510,6 @@ test "GlyphCache: cold promoted to hot after consecutive frames" {
     const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
     const key = CacheKey{ .font_id = 1, .glyph_id = 65 };
     try cache.insertCold(key, testGlyphRef(0), .{ .offset = 0, .size = 64 }, dummy_box);
-    // Frame 0: insert → consecutive = 1
-
     cache.advanceFrame(); // frame 1
     _ = cache.lookup(key); // consecutive = 2
 
@@ -549,10 +529,8 @@ test "GlyphCache: promotion skipped when hot tier full" {
     defer cache.deinit();
 
     const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
-    // Fill hot tier
     try cache.insertHot(.{ .font_id = 1, .glyph_id = 1 }, testGlyphRef(0), .{ .offset = 0, .size = 64 }, dummy_box);
 
-    // Add cold entry and use for 2 consecutive frames
     const cold_key = CacheKey{ .font_id = 1, .glyph_id = 2 };
     try cache.insertCold(cold_key, testGlyphRef(1), .{ .offset = 64, .size = 64 }, dummy_box);
 
@@ -573,18 +551,15 @@ test "GlyphCache: removeFont evicts all entries for a font" {
     defer gc.deinit();
 
     const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
-    // Insert entries for two fonts
     try gc.insertHot(.{ .font_id = 1, .glyph_id = 65 }, testGlyphRef(0), .{ .offset = 0, .size = 64 }, dummy_box);
     try gc.insertCold(.{ .font_id = 1, .glyph_id = 66 }, testGlyphRef(1), .{ .offset = 64, .size = 64 }, dummy_box);
     try gc.insertHot(.{ .font_id = 2, .glyph_id = 65 }, testGlyphRef(2), .{ .offset = 128, .size = 64 }, dummy_box);
     try std.testing.expectEqual(@as(u32, 3), gc.count());
 
-    // Remove font 1
     const evicted = try gc.removeFont(std.testing.allocator, 1);
     defer std.testing.allocator.free(evicted);
 
     try std.testing.expectEqual(@as(usize, 2), evicted.len);
-    // Verify the evicted entries contain the correct slots
     const has_slot_0 = for (evicted) |e| {
         if (e.slot.value == 0) break true;
     } else false;
@@ -597,9 +572,7 @@ test "GlyphCache: removeFont evicts all entries for a font" {
     try std.testing.expectEqual(@as(u32, 1), gc.hot_count); // font 2's hot entry
     try std.testing.expectEqual(@as(u32, 0), gc.cold_count); // font 1's cold entry removed
 
-    // Font 2 entry still accessible
     try std.testing.expect(gc.lookup(.{ .font_id = 2, .glyph_id = 65 }) != null);
-    // Font 1 entries gone
     try std.testing.expect(gc.lookup(.{ .font_id = 1, .glyph_id = 65 }) == null);
     try std.testing.expect(gc.lookup(.{ .font_id = 1, .glyph_id = 66 }) == null);
 }
@@ -622,7 +595,6 @@ test "GlyphCache: duplicate lookup in same frame does not double-count" {
     const key = CacheKey{ .font_id = 1, .glyph_id = 65 };
     try cache.insertCold(key, testGlyphRef(0), .{ .offset = 0, .size = 64 }, dummy_box);
 
-    // Multiple lookups in the same frame
     _ = cache.lookup(key);
     _ = cache.lookup(key);
     _ = cache.lookup(key);
@@ -648,20 +620,16 @@ test "GlyphCache: frame counter overflow does not break LRU" {
     // At 60fps, current_frame (u32) overflows in ~2.3 years.
     // Wrapping subtraction must be used so older frames still sort correctly.
     const allocator = std.testing.allocator;
-    // Minimal cache: 4 hot slots, 4 cold slots, promote after 3 frames
     var cache = try GlyphCache.init(allocator, 4, 4, 3);
     defer cache.deinit();
 
-    // We'll use dummy EmBox and pool allocation values
     const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 64, .y_max = 64 };
     const key_old = CacheKey{ .font_id = 1, .glyph_id = 1 };
     const key_new = CacheKey{ .font_id = 1, .glyph_id = 2 };
 
-    // Simulate near-overflow: set frame to maxInt - 2
     cache.current_frame = std.math.maxInt(u32) - 2;
     try cache.insertCold(key_old, testGlyphRef(0), .{ .offset = 0, .size = 64 }, dummy_box);
 
-    // Advance past overflow
     cache.advanceFrame(); // maxInt - 1
     cache.advanceFrame(); // maxInt
     cache.advanceFrame(); // wraps to 0
@@ -678,13 +646,11 @@ test "GlyphCache: eviction order matches access recency" {
     defer cache.deinit();
 
     const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
-    // Insert A, B, C, D
     try cache.insertCold(.{ .font_id = 1, .glyph_id = 1 }, testGlyphRef(0), .{ .offset = 0, .size = 64 }, dummy_box);
     try cache.insertCold(.{ .font_id = 1, .glyph_id = 2 }, testGlyphRef(1), .{ .offset = 64, .size = 64 }, dummy_box);
     try cache.insertCold(.{ .font_id = 1, .glyph_id = 3 }, testGlyphRef(2), .{ .offset = 128, .size = 64 }, dummy_box);
     try cache.insertCold(.{ .font_id = 1, .glyph_id = 4 }, testGlyphRef(3), .{ .offset = 192, .size = 64 }, dummy_box);
 
-    // Evict all — should come out in insertion order (FIFO when no accesses)
     try std.testing.expectEqual(@as(u32, 1), cache.evictLru().?.key.glyph_id);
     try std.testing.expectEqual(@as(u32, 2), cache.evictLru().?.key.glyph_id);
     try std.testing.expectEqual(@as(u32, 3), cache.evictLru().?.key.glyph_id);
@@ -705,12 +671,9 @@ test "GlyphCache: access moves entry to MRU end" {
     try cache.insertCold(key_b, testGlyphRef(1), .{ .offset = 64, .size = 64 }, dummy_box);
     try cache.insertCold(key_c, testGlyphRef(2), .{ .offset = 128, .size = 64 }, dummy_box);
 
-    // Advance to next frame so lookup isn't same-frame as insert
     cache.advanceFrame();
-    // Touch A — moves to MRU
     _ = cache.lookup(key_a);
 
-    // Evict: B (LRU), then C, then A (MRU)
     try std.testing.expectEqual(key_b, cache.evictLru().?.key);
     try std.testing.expectEqual(key_c, cache.evictLru().?.key);
     try std.testing.expectEqual(key_a, cache.evictLru().?.key);
@@ -727,12 +690,10 @@ test "GlyphCache: promoted entry not returned by evictLru" {
     try cache.insertCold(key_a, testGlyphRef(0), .{ .offset = 0, .size = 64 }, dummy_box);
     try cache.insertCold(key_b, testGlyphRef(1), .{ .offset = 64, .size = 64 }, dummy_box);
 
-    // Use key_a for 2 consecutive frames to trigger promotion
     cache.advanceFrame();
     _ = cache.lookup(key_a);
     cache.advanceFrame(); // promotes key_a to hot
 
-    // key_a is now hot; evicting should return key_b only
     const evicted = cache.evictLru().?;
     try std.testing.expectEqual(key_b, evicted.key);
     try std.testing.expectEqual(@as(?EvictedEntry, null), cache.evictLru());
@@ -746,23 +707,19 @@ test "GlyphCache: promotion queue populated during lookup" {
     const key = CacheKey{ .font_id = 1, .glyph_id = 65 };
     try cache_inst.insertCold(key, testGlyphRef(0), .{ .offset = 0, .size = 64 }, dummy_box);
 
-    // Frame 0: insert → consecutive = 1
-    // Frame 1: lookup → consecutive = 2 (>= promote_frames=2)
     cache_inst.advanceFrame();
     _ = cache_inst.lookup(key);
 
-    // Queue should have the key ready for promotion
     try std.testing.expectEqual(@as(usize, 1), cache_inst.promote_queue.len);
     try std.testing.expectEqual(key, cache_inst.promote_queue.constSlice()[0]);
 
-    // advanceFrame drains the queue and promotes
     cache_inst.advanceFrame();
     try std.testing.expectEqual(@as(usize, 0), cache_inst.promote_queue.len);
     try std.testing.expectEqual(Tier.hot, cache_inst.lookup(key).?.tier);
 }
 
 test "GlyphCache: same-frame lookups skip LRU touch" {
-    // Verify that same-frame duplicate lookups do not change eviction order.
+    // Same-frame duplicate lookups must not disturb eviction order.
     var cache_inst = try GlyphCache.init(std.testing.allocator, 0, 3, 3);
     defer cache_inst.deinit();
 
@@ -775,16 +732,12 @@ test "GlyphCache: same-frame lookups skip LRU touch" {
     try cache_inst.insertCold(key_b, testGlyphRef(1), .{ .offset = 64, .size = 64 }, dummy_box);
     try cache_inst.insertCold(key_c, testGlyphRef(2), .{ .offset = 128, .size = 64 }, dummy_box);
 
-    // Advance frame so lookups aren't same-frame as insert
     cache_inst.advanceFrame();
 
-    // Touch A once — moves to MRU (frame 1 != frame 0 → lruTouch)
     _ = cache_inst.lookup(key_a);
 
-    // Touch A again in the same frame — should NOT re-touch LRU
     _ = cache_inst.lookup(key_a);
 
-    // Evict order: B (LRU), C, A (MRU) — same as if only touched once
     try std.testing.expectEqual(key_b, cache_inst.evictLru().?.key);
     try std.testing.expectEqual(key_c, cache_inst.evictLru().?.key);
     try std.testing.expectEqual(key_a, cache_inst.evictLru().?.key);

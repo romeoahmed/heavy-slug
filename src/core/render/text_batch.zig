@@ -1,3 +1,5 @@
+//! Borrowed per-frame glyph command storage.
+
 pub fn TextBatch(comptime Command: type) type {
     return struct {
         const Self = @This();

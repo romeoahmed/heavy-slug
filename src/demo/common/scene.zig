@@ -1,3 +1,5 @@
+//! Shared demo scene state and input handling.
+
 const std = @import("std");
 const heavy_slug = @import("heavy_slug");
 const glfw = @import("demo_glfw");

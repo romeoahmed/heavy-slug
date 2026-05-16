@@ -1,3 +1,5 @@
+//! Build-system helpers for translated C headers and bundled C libraries.
+
 const std = @import("std");
 
 pub const CoreDeps = struct {

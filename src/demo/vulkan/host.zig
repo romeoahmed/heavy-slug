@@ -1,14 +1,11 @@
-//! Demo Vulkan bootstrap: instance, device, swapchain, and frame management.
-//! This is demo infrastructure — the heavy-slug library itself only needs
-//! a VkDevice and dispatch table (provided via VulkanContext).
+//! Demo-only Vulkan bootstrap: instance, device, swapchain, and frame management.
 
 const std = @import("std");
 const vk = @import("vulkan");
 const glfw = @import("demo_glfw");
 const gpu_context = @import("heavy_slug_vulkan").context;
 
-// Vulkan-related GLFW functions are declared as manual externs to avoid
-// including vulkan.h, which would conflict with vulkan-zig types.
+// Manual externs avoid including vulkan.h alongside vulkan-zig types.
 extern fn glfwGetInstanceProcAddress(instance: vk.Instance, procname: [*:0]const u8) vk.PfnVoidFunction;
 extern fn glfwCreateWindowSurface(instance: vk.Instance, window: glfw.Window, allocator: ?*const anyopaque, surface: *vk.SurfaceKHR) vk.Result;
 
@@ -26,10 +23,6 @@ fn createSurface(instance: vk.Instance, window: glfw.Window) glfw.Error!vk.Surfa
     if (result != .success) return error.SurfaceCreationFailed;
     return surface;
 }
-
-// ============================================================
-// Dispatch types
-// ============================================================
 
 /// Pre-instance Vulkan functions (loaded with null instance).
 const BaseDispatchTable = struct {
@@ -92,10 +85,7 @@ const DemoDeviceTable = struct {
 };
 pub const DemoDeviceDispatch = vk.DeviceWrapperWithCustomDispatch(DemoDeviceTable);
 
-// ============================================================
-// Graphics context — owns all demo Vulkan state
-// ============================================================
-
+/// Owns all demo Vulkan state.
 pub const GraphicsContext = struct {
     instance: vk.Instance,
     surface: vk.SurfaceKHR,
@@ -130,7 +120,6 @@ pub const GraphicsContext = struct {
     pub const FRAMES_IN_FLIGHT = 2;
 
     pub fn init(window: glfw.Window, allocator: std.mem.Allocator) !GraphicsContext {
-        // 1. Load base dispatch and create instance
         const base = BaseDispatch.load(getInstanceProcAddress);
         const glfw_exts = getRequiredInstanceExtensions();
         const app_info = vk.ApplicationInfo{
@@ -146,14 +135,11 @@ pub const GraphicsContext = struct {
             .pp_enabled_extension_names = @ptrCast(glfw_exts.ptr),
         }, null);
 
-        // 2. Load dispatch tables
         const demo_idisp = DemoInstanceDispatch.load(instance, getInstanceProcAddress);
         const lib_idisp = gpu_context.InstanceDispatch.load(instance, getInstanceProcAddress);
 
-        // 3. Create surface
         const surface = try createSurface(instance, window);
 
-        // 4. Pick physical device
         var dev_count: u32 = 0;
         _ = try demo_idisp.enumeratePhysicalDevices(instance, &dev_count, null);
         const devices = try allocator.alloc(vk.PhysicalDevice, dev_count);
@@ -164,10 +150,8 @@ pub const GraphicsContext = struct {
         var chosen_gfx: u32 = undefined;
         var chosen_present: u32 = undefined;
         for (devices[0..dev_count]) |pdev| {
-            // Check heavy-slug requirements (mesh shader, robustness2)
             gpu_context.VulkanContext.checkDeviceSupport(pdev, lib_idisp, allocator) catch continue;
 
-            // Find graphics + present queue families
             const families = findQueueFamilies(pdev, surface, demo_idisp, allocator) catch continue;
             chosen_gfx = families[0];
             chosen_present = families[1];
@@ -176,7 +160,6 @@ pub const GraphicsContext = struct {
         }
         const physical_device = chosen_pdev orelse return error.NoSuitableDevice;
 
-        // 5. Create logical device
         const unique_families = if (chosen_gfx == chosen_present)
             &[_]u32{chosen_gfx}
         else
@@ -243,7 +226,6 @@ pub const GraphicsContext = struct {
             .p_enabled_features = null,
         }, null);
 
-        // 6. Load device dispatch + get queues
         const get_device_proc_addr: vk.PfnGetDeviceProcAddr = @ptrCast(
             demo_idisp.dispatch.vkGetDeviceProcAddr orelse return error.MissingFunction,
         );
@@ -257,7 +239,6 @@ pub const GraphicsContext = struct {
         const gfx_queue = demo_ddisp.getDeviceQueue(device, chosen_gfx, 0);
         const present_queue = demo_ddisp.getDeviceQueue(device, chosen_present, 0);
 
-        // 7. Choose surface format (prefer B8G8R8A8_SRGB + sRGB nonlinear)
         var fmt_count: u32 = 0;
         _ = try demo_idisp.getPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &fmt_count, null);
         const formats = try allocator.alloc(vk.SurfaceFormatKHR, fmt_count);
@@ -289,7 +270,6 @@ pub const GraphicsContext = struct {
             .allocator = allocator,
         };
 
-        // 8. Create sync + command objects
         errdefer ctx.deinit();
         try ctx.createSyncObjects();
 
@@ -369,7 +349,6 @@ pub const GraphicsContext = struct {
             self.demo_ddisp.destroySwapchainKHR(self.device, old_swapchain, null);
         }
 
-        // Get images
         var img_count: u32 = 0;
         _ = try self.demo_ddisp.getSwapchainImagesKHR(self.device, self.swapchain, &img_count, null);
         self.swapchain_images = try self.allocator.alloc(vk.Image, img_count);
@@ -379,7 +358,6 @@ pub const GraphicsContext = struct {
         }
         _ = try self.demo_ddisp.getSwapchainImagesKHR(self.device, self.swapchain, &img_count, self.swapchain_images.ptr);
 
-        // Create image views
         self.swapchain_views = try self.allocator.alloc(vk.ImageView, img_count);
         var views_created: usize = 0;
         errdefer {
@@ -418,7 +396,7 @@ pub const GraphicsContext = struct {
     }
 
     pub fn beginFrame(self: *GraphicsContext) !?FrameInfo {
-        // Guard: swapchain is not yet created (e.g. window minimized during recreation)
+        // Window minimization can leave swapchain creation deferred.
         if (self.swapchain == .null_handle) return null;
 
         const fi = self.frame_index;
@@ -447,10 +425,8 @@ pub const GraphicsContext = struct {
             .flags = .{ .one_time_submit_bit = true },
         });
 
-        // Transition image: undefined → color attachment
         self.transitionImage(cmd, self.swapchain_images[image_index], .undefined, .color_attachment_optimal);
 
-        // Begin dynamic rendering
         const clear_value = vk.ClearValue{ .color = .{ .float_32 = self.clear_color } };
         const color_attachment = vk.RenderingAttachmentInfo{
             .image_view = self.swapchain_views[image_index],
@@ -488,12 +464,10 @@ pub const GraphicsContext = struct {
 
         self.demo_ddisp.cmdEndRendering(cmd);
 
-        // Transition: color attachment → present
         self.transitionImage(cmd, frame.image, .color_attachment_optimal, .present_src_khr);
 
         try self.demo_ddisp.endCommandBuffer(cmd);
 
-        // Submit with synchronization2
         const wait_info = vk.SemaphoreSubmitInfo{
             .semaphore = self.image_available[fi],
             .stage_mask = .{ .color_attachment_output_bit = true },
@@ -545,7 +519,6 @@ pub const GraphicsContext = struct {
         old_layout: vk.ImageLayout,
         new_layout: vk.ImageLayout,
     ) void {
-        // Choose stage/access masks based on the specific transition.
         const src_stage: vk.PipelineStageFlags2 = if (old_layout == .undefined)
             .{ .top_of_pipe_bit = true }
         else
@@ -617,10 +590,6 @@ pub const GraphicsContext = struct {
         self.demo_idisp.destroyInstance(self.instance, null);
     }
 };
-
-// ============================================================
-// Internal helpers
-// ============================================================
 
 fn findQueueFamilies(
     pdev: vk.PhysicalDevice,

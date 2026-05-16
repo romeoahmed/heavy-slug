@@ -18,11 +18,11 @@ typedef struct hs_metal_frame hs_metal_frame;
 typedef struct hs_metal_target hs_metal_target;
 
 typedef struct hs_metal_host_objects {
-    /* Borrowed id<MTLDevice>; caller retains ownership and must outlive context. */
+    /* Borrowed id<MTLDevice>; must outlive the context. */
     void *device;
-    /* Borrowed id<MTLCommandQueue>; caller retains ownership and must outlive context. */
+    /* Borrowed id<MTLCommandQueue>; must belong to device. */
     void *command_queue;
-    /* Borrowed CAMetalLayer*; caller retains ownership and must outlive context. */
+    /* Borrowed CAMetalLayer*; must outlive the context. */
     void *layer;
 } hs_metal_host_objects;
 
@@ -34,9 +34,8 @@ typedef struct hs_metal_resource_indices {
 } hs_metal_resource_indices;
 
 /*
- * Slang emits Metal argument indices from shaders/backend_metal/resources.slang:
- * glyphPool -> buffer(0), commands -> buffer(1), PushConstants -> buffer(2).
- * Keep these bridge indices in lockstep with the generated MSL.
+ * Keep these indices in lockstep with shaders/backend_metal/resources.slang
+ * and the generated MSL argument table.
  */
 enum {
     HS_METAL_BUFFER_GLYPH_POOL = 0,
@@ -50,7 +49,7 @@ hs_metal_resource_indices hs_metal_get_resource_indices(void);
 /*
  * Ownership model:
  * - create/destroy pairs transfer ownership of hs_metal_context and hs_metal_buffer.
- * - Host Objective-C objects are borrowed unless a function name explicitly says retain.
+ * - Host Objective-C objects are borrowed.
  * - The context owns its internal pipeline, frame slots, target/drawable state, and
  *   completion handlers. Zig sees only typed opaque C handles.
  * - Errors cross the ABI as a boolean status plus caller-provided UTF-8 text buffer.

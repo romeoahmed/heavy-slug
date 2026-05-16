@@ -1,3 +1,5 @@
+//! Normalize native outline segments into quantization-stable cubic spans.
+
 const std = @import("std");
 const stream = @import("stream.zig");
 const blob_format = @import("../blob/format.zig");
@@ -59,6 +61,7 @@ pub fn quadAsCubic(p0: Point, control: Point, p1: Point) RegularizedCubicSpan {
     };
 }
 
+/// Split lines, quadratics, and cubics into spans suitable for blob encoding.
 pub fn appendRegularized(
     out: *std.ArrayList(RegularizedCubicSpan),
     allocator: std.mem.Allocator,

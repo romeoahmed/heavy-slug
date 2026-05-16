@@ -1,21 +1,16 @@
-//! VulkanContext: wraps a caller-provided Vulkan device.
-//! Loads the device dispatch table, queries physical device properties,
-//! and validates that required features/extensions are supported.
+//! Wraps caller-owned Vulkan objects and validates heavy-slug device requirements.
 
 const std = @import("std");
 const vk = @import("vulkan");
 
-/// Required device extensions for heavy-slug.
-/// Callers must enable these when creating the VkDevice.
-/// Descriptor indexing is required too, but it is queried as Vulkan 1.2 core
-/// features because the demo targets Vulkan 1.4.
+/// Device extensions that callers must enable on the VkDevice.
+/// Descriptor indexing is validated through Vulkan 1.2 feature structs.
 const required_extensions = [_][*:0]const u8{
     "VK_EXT_mesh_shader",
     "VK_EXT_robustness2",
 };
 
-/// Filtered instance dispatch — only the commands heavy-slug needs
-/// for physical device feature/property queries.
+/// Instance commands needed for device capability queries.
 const HeavySlugInstanceDispatch = struct {
     vkGetPhysicalDeviceMemoryProperties: ?vk.PfnGetPhysicalDeviceMemoryProperties = null,
     vkGetPhysicalDeviceFeatures2: ?vk.PfnGetPhysicalDeviceFeatures2 = null,
@@ -25,8 +20,7 @@ const HeavySlugInstanceDispatch = struct {
 
 pub const InstanceDispatch = vk.InstanceWrapperWithCustomDispatch(HeavySlugInstanceDispatch);
 
-/// Wraps a caller-provided Vulkan device with a loaded dispatch table
-/// and cached physical device properties.
+/// Caller-owned Vulkan device plus loaded dispatch and queried properties.
 ///
 /// Usage:
 /// 1. Call `VulkanContext.checkDeviceSupport(physical_device, instance_dispatch)` to validate
@@ -53,7 +47,6 @@ pub const VulkanContext = struct {
         instance_dispatch: InstanceDispatch,
         allocator: std.mem.Allocator,
     ) (FeatureError || error{OutOfMemory})!void {
-        // --- Extension validation ---
         const available = instance_dispatch.enumerateDeviceExtensionPropertiesAlloc(
             physical_device,
             null,
@@ -77,7 +70,6 @@ pub const VulkanContext = struct {
             if (!found) return FeatureError.ExtensionNotSupported;
         }
 
-        // --- Feature validation ---
         var mesh_features = vk.PhysicalDeviceMeshShaderFeaturesEXT{};
         var robustness_features = vk.PhysicalDeviceRobustness2FeaturesEXT{
             .p_next = @ptrCast(&mesh_features),
@@ -146,10 +138,7 @@ pub const VulkanContext = struct {
     }
 };
 
-/// Filtered device dispatch struct — only the commands heavy-slug uses.
-/// vulkan-zig API: define a struct with the exact vkXxx fields you need,
-/// then pass its type to DeviceWrapperWithCustomDispatch() to get a
-/// wrapper type with named helper methods + a .load() constructor.
+/// Device commands used by the Vulkan backend.
 const HeavySlugDispatch = struct {
     vkDestroyDevice: ?vk.PfnDestroyDevice = null,
     vkCreateDescriptorSetLayout: ?vk.PfnCreateDescriptorSetLayout = null,
@@ -184,8 +173,7 @@ const HeavySlugDispatch = struct {
     vkCmdSetScissor: ?vk.PfnCmdSetScissor = null,
 };
 
-/// Vulkan device dispatch wrapper — provides named helper methods for
-/// all commands in HeavySlugDispatch. Load via DeviceDispatch.load(device, loader).
+/// vulkan-zig wrapper loaded from `HeavySlugDispatch`.
 pub const DeviceDispatch = vk.DeviceWrapperWithCustomDispatch(HeavySlugDispatch);
 
 pub const FeatureError = error{
@@ -197,7 +185,6 @@ pub const FeatureError = error{
 };
 
 test "vulkan types are available" {
-    // Verify binding generation produced usable types
     _ = vk.PhysicalDevice;
     _ = vk.Device;
     _ = vk.CommandBuffer;

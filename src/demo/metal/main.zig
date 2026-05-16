@@ -1,3 +1,5 @@
+//! Metal demo entry point.
+
 const std = @import("std");
 const heavy_slug_metal = @import("heavy_slug_metal");
 const glfw = @import("demo_glfw");

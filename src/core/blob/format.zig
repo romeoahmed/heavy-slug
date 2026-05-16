@@ -1,12 +1,17 @@
+//! Coverage blob storage layout shared by the CPU encoder and GPU shaders.
+
 const std = @import("std");
 
+/// Number of texels in the blob header.
 pub const header_len: u32 = 2;
+/// Number of texels used by each regularized cubic.
 pub const curve_texel_len: u32 = 3;
 pub const curve_ids_per_texel: u32 = 4;
 pub const units_per_pixel: f32 = 4.0;
 pub const hband_height_pixels: f32 = 4.0;
 pub const hband_height_units: i16 = @intFromFloat(hband_height_pixels * units_per_pixel);
 
+/// Four signed 16-bit lanes packed into one 8-byte blob texel.
 pub const Texel = extern struct {
     r: i16,
     g: i16,
@@ -14,6 +19,7 @@ pub const Texel = extern struct {
     a: i16,
 };
 
+/// Owned texel buffer ready to upload as bytes.
 pub const CoverageBlob = struct {
     allocator: std.mem.Allocator,
     texels: []Texel,
@@ -40,6 +46,7 @@ pub const CoverageBlob = struct {
     }
 };
 
+/// Decoded view of the first two texels.
 pub const Header = struct {
     bounds: Texel,
     meta: Texel,

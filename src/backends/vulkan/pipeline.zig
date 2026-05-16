@@ -17,7 +17,6 @@ pub const Pipeline = struct {
     ) !Pipeline {
         const device = ctx.device;
         const dispatch = ctx.dispatch;
-        // --- Pipeline layout ---
         const push_range = vk.PushConstantRange{
             .stage_flags = .{
                 .task_bit_ext = true,
@@ -38,7 +37,7 @@ pub const Pipeline = struct {
         const pipeline_layout = try dispatch.createPipelineLayout(device, &layout_ci, null);
         errdefer dispatch.destroyPipelineLayout(device, pipeline_layout, null);
 
-        // --- Shader modules (transient — destroyed after pipeline creation) ---
+        // Shader modules are transient and destroyed after pipeline creation.
         const task_module = try createShaderModule(device, dispatch, spv.task);
         defer dispatch.destroyShaderModule(device, task_module, null);
 
@@ -48,7 +47,6 @@ pub const Pipeline = struct {
         const frag_module = try createShaderModule(device, dispatch, spv.fragment);
         defer dispatch.destroyShaderModule(device, frag_module, null);
 
-        // --- Shader stages ---
         const stages = [3]vk.PipelineShaderStageCreateInfo{
             .{
                 .s_type = .pipeline_shader_stage_create_info,
@@ -76,7 +74,6 @@ pub const Pipeline = struct {
             },
         };
 
-        // --- Dynamic rendering (no VkRenderPass) ---
         const rendering_info = vk.PipelineRenderingCreateInfo{
             .s_type = .pipeline_rendering_create_info,
             .p_next = null,
@@ -87,7 +84,6 @@ pub const Pipeline = struct {
             .stencil_attachment_format = .undefined,
         };
 
-        // --- Viewport (dynamic state) ---
         const viewport_state = vk.PipelineViewportStateCreateInfo{
             .s_type = .pipeline_viewport_state_create_info,
             .flags = .{},
@@ -97,7 +93,6 @@ pub const Pipeline = struct {
             .p_scissors = null,
         };
 
-        // --- Rasterization ---
         const raster_state = vk.PipelineRasterizationStateCreateInfo{
             .s_type = .pipeline_rasterization_state_create_info,
             .flags = .{},
@@ -113,7 +108,6 @@ pub const Pipeline = struct {
             .line_width = 1.0,
         };
 
-        // --- Multisample ---
         const multisample_state = vk.PipelineMultisampleStateCreateInfo{
             .s_type = .pipeline_multisample_state_create_info,
             .flags = .{},
@@ -125,7 +119,7 @@ pub const Pipeline = struct {
             .alpha_to_one_enable = .false,
         };
 
-        // --- Color blend: premultiplied alpha ---
+        // Output color is premultiplied by coverage in the fragment shader.
         const blend_attachment = vk.PipelineColorBlendAttachmentState{
             .blend_enable = .true,
             .src_color_blend_factor = .one,
@@ -146,7 +140,6 @@ pub const Pipeline = struct {
             .blend_constants = .{ 0.0, 0.0, 0.0, 0.0 },
         };
 
-        // --- Dynamic state ---
         const dynamic_states = [_]vk.DynamicState{ .viewport, .scissor };
         const dynamic_state = vk.PipelineDynamicStateCreateInfo{
             .s_type = .pipeline_dynamic_state_create_info,
@@ -155,7 +148,6 @@ pub const Pipeline = struct {
             .p_dynamic_states = &dynamic_states,
         };
 
-        // --- Graphics pipeline ---
         const pipeline_ci = vk.GraphicsPipelineCreateInfo{
             .s_type = .graphics_pipeline_create_info,
             .p_next = @ptrCast(&rendering_info),

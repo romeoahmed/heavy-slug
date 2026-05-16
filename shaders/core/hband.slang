@@ -1,3 +1,5 @@
+// Conservative h-band range selection for curve candidate lookup.
+
 static const float kHBandEpsilon = 1.0 / 1048576.0;
 
 bool conservativeHBandRange(

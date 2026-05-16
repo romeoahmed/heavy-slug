@@ -1,3 +1,5 @@
+//! Vulkan demo entry point.
+
 const std = @import("std");
 const heavy_slug_vulkan = @import("heavy_slug_vulkan");
 const glfw = @import("demo_glfw");

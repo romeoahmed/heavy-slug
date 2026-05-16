@@ -1,3 +1,5 @@
+//! FreeType and HarfBuzz lifetime management for loaded fonts.
+
 const std = @import("std");
 const ft = @import("freetype.zig");
 const hb = @import("harfbuzz.zig");

@@ -1,3 +1,5 @@
+//! Backend-neutral GPU ABI and diagnostics.
+
 pub const abi = @import("abi.zig");
 pub const resource_model = @import("resource_model.zig");
 pub const shader_stats = @import("shader_stats.zig");

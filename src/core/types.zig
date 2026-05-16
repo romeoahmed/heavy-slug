@@ -1,3 +1,5 @@
+//! Public core value types used by renderers and applications.
+
 const std = @import("std");
 const pga = @import("../math/pga.zig");
 

@@ -51,7 +51,6 @@ test "integration: shape text and encode all unique glyphs" {
     try std.testing.expect(infos.len > 0);
     try std.testing.expectEqual(infos.len, positions.len);
 
-    // Encode each unique glyph
     var seen = std.AutoHashMap(u32, void).init(std.testing.allocator);
     defer seen.deinit();
 
@@ -62,13 +61,11 @@ test "integration: shape text and encode all unique glyphs" {
         const encoded = try loaded.encodeGlyph(info.codepoint);
         defer encoded.destroy();
 
-        // Visible glyphs produce non-empty blobs with non-zero extents
         if (encoded.data.len > 0) {
             try std.testing.expect(encoded.extents.width != 0);
         }
     }
 
-    // Total pen advance should be positive (LTR text)
     var total_advance: i32 = 0;
     for (positions) |pos| total_advance += pos.x_advance;
     try std.testing.expect(total_advance > 0);
@@ -100,20 +97,17 @@ test "integration: cache eviction reclaims pool space" {
     var pa = pool.PoolAllocator.init(std.testing.allocator, 1024, 256);
     defer pa.deinit();
 
-    // cold_capacity=2, no hot slots
     var gc = try cache.GlyphCache.init(std.testing.allocator, 0, 2, 3);
     defer gc.deinit();
 
     const dummy_box = cache.EmBox{ .x_min = 0, .y_min = 0, .x_max = 64, .y_max = 64 };
 
-    // Fill cold cache with pool-backed allocations
     const alloc_a = pa.alloc(100).?;
     try gc.insertCold(.{ .font_id = 1, .glyph_id = 1 }, testGlyphRef(0), alloc_a, dummy_box);
 
     const alloc_b = pa.alloc(100).?;
     try gc.insertCold(.{ .font_id = 1, .glyph_id = 2 }, testGlyphRef(1), alloc_b, dummy_box);
 
-    // Cold is full -- evict LRU (alloc_a was inserted first)
     const evicted = gc.evictLru().?;
     try std.testing.expectEqual(alloc_a.offset, evicted.pool_alloc.offset);
     pa.free(evicted.pool_alloc);
@@ -135,19 +129,16 @@ test "integration: cold-to-hot promotion preserves pool allocation" {
     const key = cache.CacheKey{ .font_id = 1, .glyph_id = 42 };
     try gc.insertCold(key, testGlyphRef(0), alloc, dummy_box);
 
-    // Use for 2 consecutive frames to trigger promotion (promote_frames=2)
     gc.advanceFrame();
     _ = gc.lookup(key);
     gc.advanceFrame();
     _ = gc.lookup(key);
-    gc.advanceFrame(); // promotion happens here
+    gc.advanceFrame();
 
-    // Verify promoted: no cold entries left to evict
     try std.testing.expectEqual(@as(?cache.EvictedEntry, null), gc.evictLru());
     try std.testing.expectEqual(@as(u32, 1), gc.hot_count);
     try std.testing.expectEqual(@as(u32, 0), gc.cold_count);
 
-    // Pool allocation is unchanged after promotion
     const entry = gc.lookup(key).?;
     try std.testing.expectEqual(alloc.offset, entry.pool_alloc.offset);
     try std.testing.expectEqual(alloc.size, entry.pool_alloc.size);
@@ -162,7 +153,6 @@ test "integration: removeFont reclaims all pool and cache resources" {
 
     const dummy_box = cache.EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
 
-    // Font 1: one hot + two cold entries
     const alloc_1a = pa.alloc(128).?;
     try gc.insertHot(.{ .font_id = 1, .glyph_id = 65 }, testGlyphRef(0), alloc_1a, dummy_box);
     const alloc_1b = pa.alloc(128).?;
@@ -170,24 +160,20 @@ test "integration: removeFont reclaims all pool and cache resources" {
     const alloc_1c = pa.alloc(128).?;
     try gc.insertCold(.{ .font_id = 1, .glyph_id = 67 }, testGlyphRef(2), alloc_1c, dummy_box);
 
-    // Font 2: one cold entry
     const alloc_2 = pa.alloc(128).?;
     try gc.insertCold(.{ .font_id = 2, .glyph_id = 65 }, testGlyphRef(3), alloc_2, dummy_box);
 
     try std.testing.expectEqual(@as(u32, 4), gc.count());
 
-    // Remove font 1 -- returns 3 evicted entries
     const evicted = try gc.removeFont(std.testing.allocator, 1);
     defer std.testing.allocator.free(evicted);
 
     try std.testing.expectEqual(@as(usize, 3), evicted.len);
     for (evicted) |e| pa.free(e.pool_alloc);
 
-    // Only font 2 remains
     try std.testing.expectEqual(@as(u32, 1), gc.count());
     try std.testing.expect(gc.lookup(.{ .font_id = 2, .glyph_id = 65 }) != null);
 
-    // Pool space from font 1 is reusable
     const recycled = pa.alloc(128).?;
     const recycled_matches = for (evicted) |e| {
         if (recycled.offset == e.pool_alloc.offset) break true;
@@ -207,7 +193,6 @@ test "integration: motor positions shaped glyphs monotonically" {
     const shaped = try loaded.shape(shape_plan, "Hello World", .{});
     const positions = shaped.positions;
 
-    // Position glyphs using motors (mirrors renderer's drawText logic)
     const base = pga.Motor.fromTranslation(100.0, 200.0);
     var pen_x: f32 = 0;
     var prev_x: f32 = -std.math.inf(f32);

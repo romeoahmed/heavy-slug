@@ -1,3 +1,5 @@
+//! Repository build graph: core library, optional backends, shaders, demos, and tests.
+
 const std = @import("std");
 const backends = @import("build/backends.zig");
 const c_libs = @import("build/c_libs.zig");

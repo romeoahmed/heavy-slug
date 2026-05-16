@@ -1,13 +1,11 @@
-// shaders/core/pga.slang
-// PGA Cl(2,0,1) Motor — mirrors src/math/pga.zig layout.
+// PGA Cl(2,0,1) motor; mirrors src/math/pga.zig layout.
 // Storage: float4 [s, e12, e01, e02] = 16 bytes.
 
 struct Motor
 {
     float4 m; // [s, e12, e01, e02]
 
-    // Apply motor to a 2D point via sandwich product.
-    // Uses unit-motor identity: s^2 + alpha^2 = 1  =>  s^2 - alpha^2 = 1 - 2*alpha^2.
+    // Unit-motor identity: s^2 + alpha^2 = 1  =>  s^2 - alpha^2 = 1 - 2*alpha^2.
     // For motor [s, alpha, tx, ty] and point (x, y):
     //   x' = (1-2*alpha^2)*x - 2*s*alpha*y + 2*(s*tx + alpha*ty)
     //   y' =  2*s*alpha*x + (1-2*alpha^2)*y + 2*(s*ty - alpha*tx)

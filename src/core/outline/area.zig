@@ -1,3 +1,5 @@
+//! Signed area helper for determining contour orientation.
+
 const std = @import("std");
 const regularize = @import("regularize.zig");
 

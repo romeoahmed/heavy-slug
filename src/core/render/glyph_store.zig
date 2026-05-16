@@ -1,3 +1,5 @@
+//! Backend-neutral glyph cache, byte pool, and deferred retirement state.
+
 const std = @import("std");
 const cache_mod = @import("../cache/glyph_cache.zig");
 const pool_mod = @import("../cache/byte_pool.zig");

@@ -1,3 +1,5 @@
+//! Core module surface and subsystem re-exports.
+
 pub const types = @import("types.zig");
 pub const units = @import("units.zig");
 pub const errors = @import("errors.zig");

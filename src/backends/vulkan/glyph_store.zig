@@ -1,3 +1,5 @@
+//! Vulkan glyph resources are addressed through bindless storage-buffer slots.
+
 const heavy_slug = @import("heavy_slug");
 
 pub const ResourceModel = heavy_slug.gpu.ResourceModel.bindless_storage_buffers;

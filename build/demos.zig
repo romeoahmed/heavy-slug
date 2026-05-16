@@ -1,3 +1,5 @@
+//! Demo executable build helpers.
+
 const std = @import("std");
 const backends = @import("backends.zig");
 const c_libs = @import("c_libs.zig");

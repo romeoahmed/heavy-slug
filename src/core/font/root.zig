@@ -1,3 +1,5 @@
+//! Font loading, shaping, and glyph encoding.
+
 pub const freetype = @import("freetype.zig");
 pub const harfbuzz = @import("harfbuzz.zig");
 pub const glyph = @import("glyph.zig");

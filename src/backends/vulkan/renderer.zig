@@ -189,16 +189,15 @@ pub const Renderer = struct {
     descriptor_table: descriptors.DescriptorTable,
     pip: pipeline_mod.Pipeline,
 
-    // Vulkan buffers
+    // Host-visible storage buffers.
     pool_buffer: MappedBuffer,
     command_buffers: [frames_in_flight]MappedBuffer,
     shader_stats_buffers: ShaderStatsBuffers,
     active_frame: u32,
 
-    // Per-frame debug counters (zero-cost in release)
+    // Per-frame debug counters, compiled to no-ops outside Debug.
     stats: Stats,
 
-    // Stored for future buffer creation
     memory_properties: vk.PhysicalDeviceMemoryProperties,
     allocator: std.mem.Allocator,
     last_submitted_frame: render.FrameToken,
@@ -214,7 +213,6 @@ pub const Renderer = struct {
     ) !Renderer {
         const device = ctx.device;
         const dispatch = ctx.dispatch;
-        // 1. Descriptor table
         var desc_table = try descriptors.DescriptorTable.init(
             ctx,
             allocator,
@@ -223,7 +221,6 @@ pub const Renderer = struct {
         );
         errdefer desc_table.deinit(allocator);
 
-        // 2. Pipeline
         var pip = try pipeline_mod.Pipeline.init(
             ctx,
             desc_table.layout,
@@ -234,7 +231,7 @@ pub const Renderer = struct {
         var core = try render.RendererCore.init(allocator, options);
         errdefer core.deinit();
 
-        // 3. Pool buffer (glyph blob storage, GPU reads as storage buffer)
+        // Glyph blob storage, read by the fragment shader.
         const pool_buf = try createMappedBuffer(
             ctx,
             options.pool_buffer_size,
@@ -242,7 +239,7 @@ pub const Renderer = struct {
         );
         errdefer destroyMappedBuffer(pool_buf, device, dispatch);
 
-        // 4. Command buffers (GlyphCommand[] per frame, GPU reads as storage buffer)
+        // One command buffer per frame slot.
         const cmd_buf_size = @as(vk.DeviceSize, options.max_glyphs_per_frame) *
             @sizeOf(descriptors.GlyphCommand);
         var command_buffers: [frames_in_flight]MappedBuffer = undefined;
@@ -300,8 +297,7 @@ pub const Renderer = struct {
         };
     }
 
-    /// Load a font from a file path at the given pixel size.
-    /// Returns a FontHandle used in drawText calls.
+    /// Load a font and return the handle used by draw calls.
     pub fn loadFont(
         self: *Renderer,
         source: core_types.FontSource,
@@ -310,9 +306,7 @@ pub const Renderer = struct {
         return self.core.loadFont(source, options);
     }
 
-    /// Unload a font and evict all its cached glyphs.
-    /// Caller must ensure the GPU has finished consuming any commands that
-    /// reference this font's glyphs before calling this function.
+    /// Unload a font and defer retirement of its cached glyph resources.
     pub fn unloadFont(self: *Renderer, handle: FontHandle) !void {
         self.core.setRetireAfterToken(self.last_submitted_frame);
         try self.core.unloadFont(handle);
@@ -413,7 +407,6 @@ pub const Renderer = struct {
         const proj = target.projection;
         const viewport = target.viewport;
 
-        // Set dynamic viewport state
         const vk_viewport = vk.Viewport{
             .x = 0,
             .y = 0,
@@ -433,7 +426,6 @@ pub const Renderer = struct {
         };
         self.dispatch.cmdSetScissor(cmd_buf, 0, &.{vk_scissor});
 
-        // Bind pipeline
         self.dispatch.cmdBindPipeline(cmd_buf, .graphics, self.pip.pipeline);
 
         const command_buffer = self.command_buffers[self.active_frame];
@@ -450,7 +442,6 @@ pub const Renderer = struct {
         // Commit all descriptor writes before binding the frame-local set.
         self.descriptor_table.flushWrites();
 
-        // Bind descriptor set
         self.dispatch.cmdBindDescriptorSets(
             cmd_buf,
             .graphics,
@@ -465,7 +456,6 @@ pub const Renderer = struct {
         // Dividing columns 0 and 1 by 64 maps 26.6 world coords to clip space.
         const proj_em = render.projectionToEm(proj);
 
-        // Push constants
         const push = descriptors.PushConstants{
             .proj = proj_em,
             .viewport_dim = viewport,
@@ -481,7 +471,7 @@ pub const Renderer = struct {
             @ptrCast(&push),
         );
 
-        // Dispatch mesh shader workgroups (32 threads per workgroup in task shader)
+        // The task shader handles 32 glyphs per workgroup.
         const workgroup_count = (glyph_count + 31) / 32;
         self.dispatch.cmdDrawMeshTasksEXT(cmd_buf, workgroup_count, 1, 1);
         if (@import("builtin").mode == .Debug) {
@@ -497,7 +487,6 @@ pub const Renderer = struct {
 
     pub fn deinit(self: *Renderer) void {
         self.markFrameComplete(std.math.maxInt(render.FrameToken));
-        // Destroy Vulkan buffers (unmap + destroy buffer + free memory)
         for (self.command_buffers) |cmd_buf| {
             destroyMappedBuffer(cmd_buf, self.device, self.dispatch);
         }
@@ -508,7 +497,6 @@ pub const Renderer = struct {
         }
         destroyMappedBuffer(self.pool_buffer, self.device, self.dispatch);
 
-        // Destroy subsystems (reverse init order)
         self.core.deinit();
         self.pip.deinit();
         self.descriptor_table.deinit(self.allocator);
@@ -540,28 +528,21 @@ test "RendererOptions has correct defaults" {
 test "findMemoryType selects correct memory type" {
     var props = std.mem.zeroes(vk.PhysicalDeviceMemoryProperties);
     props.memory_type_count = 3;
-    // Type 0: device-local only
     props.memory_types[0].property_flags = .{ .device_local_bit = true };
-    // Type 1: host-visible only
     props.memory_types[1].property_flags = .{ .host_visible_bit = true };
-    // Type 2: host-visible + host-coherent
     props.memory_types[2].property_flags = .{ .host_visible_bit = true, .host_coherent_bit = true };
 
     const filter: u32 = 0b111;
 
-    // Require host-visible + host-coherent → type 2
     const result = findMemoryType(props, filter, .{ .host_visible_bit = true, .host_coherent_bit = true });
     try std.testing.expectEqual(@as(?u32, 2), result);
 
-    // Require device-local → type 0
     const dl = findMemoryType(props, filter, .{ .device_local_bit = true });
     try std.testing.expectEqual(@as(?u32, 0), dl);
 
-    // Require something unavailable → null
     const none = findMemoryType(props, filter, .{ .protected_bit = true });
     try std.testing.expectEqual(@as(?u32, null), none);
 
-    // Type filter excludes type 2 → null for host-visible + host-coherent
     const filtered = findMemoryType(props, 0b011, .{ .host_visible_bit = true, .host_coherent_bit = true });
     try std.testing.expectEqual(@as(?u32, null), filtered);
 }
@@ -584,7 +565,7 @@ test "Renderer satisfies core backend contract" {
 }
 
 test "Renderer.init compiles" {
-    // Type-check only — cannot call without a live Vulkan device
+    // Cannot call without a live Vulkan device.
     _ = @TypeOf(Renderer.init);
 }
 

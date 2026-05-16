@@ -1,3 +1,5 @@
+//! Coverage blob format, encoder, decoder, and reference helpers.
+
 pub const format = @import("format.zig");
 pub const decode = @import("decode.zig");
 pub const encode = @import("encode.zig");

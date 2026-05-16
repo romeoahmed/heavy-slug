@@ -1,5 +1,7 @@
 #pragma once
 
+/* Demo-only Cocoa/Metal host bridge. */
+
 #include <stddef.h>
 
 #ifdef __cplusplus

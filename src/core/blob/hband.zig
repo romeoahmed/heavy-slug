@@ -1,3 +1,5 @@
+//! CPU helpers for reading a blob's horizontal-band candidate index.
+
 const std = @import("std");
 const format = @import("format.zig");
 const decode = @import("decode.zig");

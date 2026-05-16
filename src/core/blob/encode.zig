@@ -1,3 +1,5 @@
+//! Encode regularized cubic spans into the compact GPU coverage blob format.
+
 const std = @import("std");
 const format = @import("format.zig");
 const decode = @import("decode.zig");
@@ -19,6 +21,7 @@ const curve_ids_per_texel = format.curve_ids_per_texel;
 const hband_height_q = format.hband_height_units;
 const blob_units_per_pixel = format.units_per_pixel;
 
+/// Quantizes cubics, writes their bounds, and builds the h-band candidate table.
 pub fn curves(allocator: std.mem.Allocator, source_curves: []const RegularizedCubicSpan) Error!CoverageBlob {
     if (source_curves.len == 0) return CoverageBlob.empty(allocator);
     if (source_curves.len > std.math.maxInt(i16)) return error.GlyphOffsetOverflow;

@@ -2,8 +2,6 @@
 
 pub const c = @import("glfw_c");
 
-// --- Public API ---
-
 pub const Window = *c.GLFWwindow;
 
 pub const Error = error{

@@ -1,6 +1,9 @@
+//! Backend-neutral render orchestration.
+
 pub const backend_contract = @import("backend_contract.zig");
 pub const glyph_store = @import("glyph_store.zig");
 pub const text_batch = @import("text_batch.zig");
+
 pub const renderer_core = @import("renderer_core.zig");
 
 pub const BackendContract = backend_contract.BackendContract;

@@ -1,10 +1,14 @@
+//! Native outline segment stream captured from HarfBuzz draw callbacks.
+
 const std = @import("std");
 
+/// Point in HarfBuzz outline coordinates.
 pub const Point = struct {
     x: f64,
     y: f64,
 };
 
+/// One native outline operation before cubic regularization.
 pub const Segment = union(enum) {
     move_to: Point,
     line_to: Point,
@@ -13,6 +17,7 @@ pub const Segment = union(enum) {
     close,
 };
 
+/// Append-only outline stream reused by the glyph encoder.
 pub const OutlineStream = struct {
     allocator: std.mem.Allocator,
     segments: std.ArrayList(Segment) = .empty,

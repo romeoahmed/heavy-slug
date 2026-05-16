@@ -2,7 +2,7 @@ const std = @import("std");
 
 const log = std.log.scoped(.pool);
 
-/// A sub-allocation within the pool: byte offset and size.
+/// Byte range inside the pool.
 pub const Allocation = struct {
     offset: u32,
     size: u32,
@@ -15,13 +15,13 @@ pub const Snapshot = struct {
     free_blocks: u32 = 0,
 };
 
-/// Internal free-list node: offset and size are always alignment-rounded.
+/// Free-list node with alignment-rounded offset and size.
 const FreeBlock = struct {
     offset: u32,
     size: u32, // always aligned
 };
 
-/// Variable-size sub-allocator for a contiguous byte pool (e.g. a large VkBuffer).
+/// Variable-size sub-allocator for a contiguous GPU-visible byte pool.
 /// Uses bump allocation with an offset-sorted free-list for reuse of freed blocks.
 /// Free list uses best-fit allocation and adjacent-block coalescing on free().
 /// All offsets are aligned to `alignment` (must be power of 2).
@@ -30,7 +30,7 @@ pub const PoolAllocator = struct {
     capacity: u32,
     alignment: u32,
     cursor: u32,
-    /// Offset-sorted free list. Sorted ascending by offset at all times.
+    /// Free list kept sorted by ascending offset.
     free_blocks: std.ArrayList(FreeBlock),
 
     pub fn init(allocator: std.mem.Allocator, capacity: u32, alignment: u32) PoolAllocator {
@@ -65,13 +65,11 @@ pub const PoolAllocator = struct {
         };
     }
 
-    /// Allocate `size` bytes from the pool. Returns null if the pool is full.
-    /// Searches the free list first (best-fit), then falls back to bump allocation.
+    /// Allocate `size` bytes, using best-fit free blocks before bump allocation.
     pub fn alloc(self: *PoolAllocator, size: u32) ?Allocation {
         if (size == 0) return null;
         const aligned_size = alignUp(size, self.alignment);
 
-        // Best-fit search of sorted free list
         var best_idx: ?usize = null;
         var best_waste: u32 = std.math.maxInt(u32);
         for (self.free_blocks.items, 0..) |block, i| {
@@ -90,44 +88,37 @@ pub const PoolAllocator = struct {
             const result = Allocation{ .offset = block.offset, .size = size };
             const remaining = block.size - aligned_size;
             if (remaining > 0) {
-                // Shrink block in-place (offset increases, stays sorted)
                 self.free_blocks.items[i] = .{
                     .offset = block.offset + aligned_size,
                     .size = remaining,
                 };
             } else {
-                // Remove block, preserving sort order
                 _ = self.free_blocks.orderedRemove(i);
             }
             return result;
         }
 
-        // Bump allocate
         if (self.cursor + aligned_size > self.capacity) return null;
         const result = Allocation{ .offset = self.cursor, .size = size };
         self.cursor += aligned_size;
         return result;
     }
 
-    /// Return an allocation to the free list for future reuse.
-    /// Coalesces with adjacent free blocks to prevent fragmentation.
+    /// Return an allocation and coalesce adjacent free blocks.
     pub fn free(self: *PoolAllocator, allocation: Allocation) void {
         const aligned_size = alignUp(allocation.size, self.alignment);
         var new_offset = allocation.offset;
         var new_size = aligned_size;
 
-        // Binary search for insertion point (sorted by offset ascending)
         const insert_idx = self.findInsertPoint(new_offset);
 
-        // Try coalesce with predecessor
         if (insert_idx > 0) {
             const prev = &self.free_blocks.items[insert_idx - 1];
             if (prev.offset + prev.size == new_offset) {
-                // Merge into predecessor
                 new_offset = prev.offset;
                 new_size += prev.size;
                 _ = self.free_blocks.orderedRemove(insert_idx - 1);
-                // insert_idx shifted down by 1; try coalesce with what is now at (insert_idx - 1)
+                // After removing the predecessor, its old index now holds the successor.
                 const succ_idx = insert_idx - 1;
                 if (succ_idx < self.free_blocks.items.len) {
                     const next = &self.free_blocks.items[succ_idx];
@@ -146,7 +137,6 @@ pub const PoolAllocator = struct {
             }
         }
 
-        // Try coalesce with successor only
         if (insert_idx < self.free_blocks.items.len) {
             const next = &self.free_blocks.items[insert_idx];
             if (new_offset + new_size == next.offset) {
@@ -156,7 +146,6 @@ pub const PoolAllocator = struct {
             }
         }
 
-        // No coalescing: insert at sorted position
         self.free_blocks.insert(self.allocator, insert_idx, .{
             .offset = new_offset,
             .size = new_size,
@@ -277,7 +266,6 @@ test "PoolAllocator: best-fit selects smallest suitable block" {
     var pa = PoolAllocator.init(std.testing.allocator, 4096, 16);
     defer pa.deinit();
 
-    // Allocate blocks with a guard between b and c to prevent coalescing
     const a = pa.alloc(64).?; // offset 0, aligned 64
     const b = pa.alloc(128).?; // offset 64, aligned 128
     _ = pa.alloc(16); // offset 192, guard — prevents b and c from coalescing
@@ -285,7 +273,6 @@ test "PoolAllocator: best-fit selects smallest suitable block" {
     pa.free(b); // free the 128-byte block: [{offset=64, size=128}]
     pa.free(c); // free the 32-byte block:  [{offset=64, size=128}, {offset=208, size=32}]
 
-    // Request 30 bytes: should pick the 32-byte block (best fit), not the 128-byte block
     const d = pa.alloc(30).?;
     try std.testing.expectEqual(c.offset, d.offset);
 
@@ -303,13 +290,8 @@ test "PoolAllocator: free coalesces adjacent blocks" {
 
     pa.free(a);
     pa.free(c);
-    // Free list: [a @ 0, size 48] and [c @ 96, size 48] — not adjacent
-
     pa.free(b);
-    // b @ 48, size 48 is adjacent to a (0+48=48) and c (48+48=96)
-    // After coalescing: single block [0, size 144]
 
-    // Verify: can allocate 144 bytes from the coalesced block
     const big = pa.alloc(144).?;
     try std.testing.expectEqual(@as(u32, 0), big.offset);
 }
@@ -323,12 +305,10 @@ test "PoolAllocator: free list maintains sorted order" {
     const c = pa.alloc(16).?; // offset 32
     _ = pa.alloc(16); // offset 48, guard
 
-    // Free in reverse order
     pa.free(c); // offset 32
     pa.free(a); // offset 0
     pa.free(b); // offset 16 — adjacent to both a and c, should coalesce all three
 
-    // Single coalesced block of 48 bytes at offset 0
     const big = pa.alloc(48).?;
     try std.testing.expectEqual(@as(u32, 0), big.offset);
 }

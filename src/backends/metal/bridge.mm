@@ -1,3 +1,5 @@
+// Objective-C++ bridge for the Metal renderer ABI exposed to Zig.
+
 #include "bridge.h"
 
 #import <Metal/Metal.h>

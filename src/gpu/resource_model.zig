@@ -1,3 +1,5 @@
+//! Backend resource-addressing strategies used by current renderers.
+
 pub const ResourceModel = enum {
     bindless_storage_buffers,
     single_storage_buffer_offsets,

@@ -1,3 +1,5 @@
+//! Slang shader compilation and reflection-driven ABI generation.
+
 const std = @import("std");
 
 pub const SpirvShaders = struct {

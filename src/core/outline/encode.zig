@@ -1,3 +1,5 @@
+//! HarfBuzz outline capture and coverage blob encoding.
+
 const std = @import("std");
 const hb = @import("../font/harfbuzz.zig");
 const blob_encode = @import("../blob/encode.zig");

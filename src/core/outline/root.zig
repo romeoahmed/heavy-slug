@@ -1,3 +1,5 @@
+//! Outline capture, regularization, and analysis helpers.
+
 pub const stream = @import("stream.zig");
 pub const regularize = @import("regularize.zig");
 pub const area = @import("area.zig");

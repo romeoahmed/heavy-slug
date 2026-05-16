@@ -1,13 +1,8 @@
-// shaders/entries/slug_task.slang
-// Task (amplification) shader: frustum cull glyphs and dispatch mesh workgroups.
-// Uses wave ballot for parallel compaction (no atomics).
-// Workgroup size: 32 threads, each handles one glyph.
+// Task shader: frustum-cull glyphs and compact visible indices for mesh workgroups.
 
 import pga;
 import abi;
 import resources;
-
-// --- Payload to mesh shader ---
 
 struct TaskPayload
 {
@@ -21,8 +16,7 @@ groupshared TaskPayload s_payload;
 groupshared uint s_survivorCount;
 #endif
 
-// XY frustum test: check if a clip-space AABB is at least partially visible.
-// Divides by w for correctness with both orthographic and perspective projections.
+// Divide by w so the cull works for both orthographic and perspective projections.
 bool isVisible(float4 c0, float4 c1, float4 c2, float4 c3)
 {
     float2 ndc0 = c0.xy / c0.w;
@@ -66,9 +60,8 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
     }
 
 #if HEAVY_SLUG_METAL
-    // Slang's Metal target supports mesh/task stages, but wave ballot
-    // intrinsics are not currently available for Metal object functions.
-    // Use one atomic counter per taskgroup for the Metal path.
+    // Slang's Metal target lacks wave ballot intrinsics for object functions.
+    // Use one taskgroup-local atomic counter instead.
     if (gtid == 0) s_survivorCount = 0;
     GroupMemoryBarrierWithGroupSync();
 
@@ -92,7 +85,7 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
     GroupMemoryBarrierWithGroupSync();
     survivorCount = s_survivorCount;
 #else
-    // Wave ballot compaction - no atomics, no shared memory contention.
+    // Wave ballot compaction avoids shared-memory atomics.
     uint survivorCount = WaveActiveCountBits(alive);
     uint localIdx = WavePrefixCountBits(alive);
 
@@ -100,7 +93,7 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
     {
         s_payload.glyphIndices[localIdx] = glyphIndex;
 
-        // Precompute dilation values for mesh shader (avoids 2x sqrt per mesh workgroup).
+        // Avoid two sqrt operations per mesh workgroup.
         float ms = cmd.motor.x * cmd.motor.x + cmd.motor.y * cmd.motor.y;
         float2 halfDim = pc.viewport_dim * 0.5;
         float2 ppe = float2(

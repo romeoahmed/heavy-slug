@@ -1,3 +1,5 @@
+//! Read-only validation and indexing for encoded coverage blobs.
+
 const std = @import("std");
 const format = @import("format.zig");
 

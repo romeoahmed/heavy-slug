@@ -1,3 +1,5 @@
+// Vulkan resource bindings.
+
 import abi;
 
 [[vk::binding(0, 0)]]

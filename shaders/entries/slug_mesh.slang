@@ -1,12 +1,8 @@
-// shaders/entries/slug_mesh.slang
-// Mesh shader: emit a dilated screen-space quad per glyph.
-// One workgroup = one glyph = 4 vertices + 2 triangles.
+// Mesh shader: emit one dilated quad per visible glyph.
 
 import pga;
 import abi;
 import resources;
-
-// --- Payload from task shader ---
 
 struct TaskPayload
 {
@@ -14,8 +10,6 @@ struct TaskPayload
     float motorScales[kTaskGroupSize];   // precomputed motor scale (dot product of motor rotor)
     float2 emPerPixels[kTaskGroupSize];  // precomputed em-per-pixel for dilation
 };
-
-// --- Mesh output ---
 
 struct VertexOutput
 {
@@ -61,29 +55,24 @@ void meshMain(
     GlyphCommand cmd = commands[glyphIndex];
     Motor motor = { cmd.motor };
 
-    // Em-space bounding box.
     float2 emMin = float2(cmd.em_x_min, cmd.em_y_min);
     float2 emMax = float2(cmd.em_x_max, cmd.em_y_max);
     float2 emSize = emMax - emMin;
 
-    // Dilate by half a pixel in em-space to avoid clipping edge fragments.
-    // em-per-pixel is precomputed in the task shader to avoid 2x sqrt per workgroup.
+    // Half-pixel dilation prevents clipping fragments at analytic edges.
     float2 emPerPixel = taskPayload.emPerPixels[gid];
     float2 dilate = emPerPixel * 0.5;
     float2 dilMin = emMin - dilate;
     float2 dilMax = emMax + dilate;
     float2 dilSize = dilMax - dilMin;
 
-    // Each thread handles one vertex.
     float2 corner = kCornerOffsets[gtid];
     float2 emPos = dilMin + corner * dilSize;
 
-    // Transform through motor → clip space.
     float2 worldPos = motor.apply(emPos);
     float4 clipPos = mul(pc.proj, float4(worldPos, 0.0, 1.0));
 
-    // Em-space sample coordinate. This must match the dilated screen-space
-    // quad, otherwise edge fragments evaluate coverage at the wrong location.
+    // Sample coordinates must match the dilated quad used for rasterization.
     float2 texcoord = emPos;
 
     VertexOutput v;
@@ -94,7 +83,6 @@ void meshMain(
     v.flags = cmd.flags;
     verts[gtid] = v;
 
-    // First two threads emit triangle indices.
     if (gtid < 2)
     {
         tris[gtid] = kTriIndices[gtid];

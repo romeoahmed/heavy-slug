@@ -1,8 +1,11 @@
+//! Glyph outline encoding facade used by loaded fonts.
+
 const std = @import("std");
 const hb = @import("harfbuzz.zig");
 const outline = @import("../outline/encode.zig");
 const blob_mod = @import("../blob/format.zig");
 
+/// Encoded glyph data plus metrics and debug counters.
 pub const EncodedGlyph = struct {
     data: []const u8,
     extents: hb.GlyphExtents,
@@ -16,6 +19,7 @@ pub const EncodedGlyph = struct {
     }
 };
 
+/// Reusable glyph encoder that owns the outline capture state.
 pub const GlyphEncoder = struct {
     outline_encoder: outline.Encoder,
 

@@ -1,7 +1,11 @@
+//! CPU representation of optional shader diagnostic counters.
+
 const std = @import("std");
 
+/// Number of u32 counters exposed by the shader ABI.
 pub const counter_count: usize = 6;
 
+/// Counter order must match `slug_fragment.slang`.
 pub const CounterIndex = enum(u32) {
     fragment_invocations = 0,
     candidate_path_fragments = 1,
@@ -11,6 +15,7 @@ pub const CounterIndex = enum(u32) {
     empty_fragments = 5,
 };
 
+/// Snapshot copied from the shader counter buffer.
 pub const Snapshot = extern struct {
     fragment_invocations: u32 = 0,
     candidate_path_fragments: u32 = 0,

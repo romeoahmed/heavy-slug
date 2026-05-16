@@ -1,3 +1,5 @@
+//! Optional backend module wiring for Vulkan and Metal.
+
 const std = @import("std");
 const shaders = @import("shaders.zig");
 

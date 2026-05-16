@@ -1,3 +1,5 @@
+//! Glyph cache, byte pool, and deferred retirement utilities.
+
 pub const glyph_cache = @import("glyph_cache.zig");
 pub const byte_pool = @import("byte_pool.zig");
 pub const retirement = @import("retirement.zig");

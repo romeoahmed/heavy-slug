@@ -1,3 +1,5 @@
+// Metal resource bindings as seen by Slang before MSL generation.
+
 import abi;
 
 [[vk::binding(0, 0)]]
