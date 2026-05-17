@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Slang shader modules moved to Slang 2026 rules:** shader sources now use
+  explicit `#language slang 2026` and module declarations instead of legacy
+  module inference, with shared shader-stat constants centralized in
+  `shaders/core/stats.slang`.
+- **Shader build graph tightened:** `build/shaders.zig` now compiles from
+  source-declared `[shader(...)]` entries, applies explicit Slang 2026,
+  capability, warning-as-error, and restrictive capability-check flags, and
+  targets SPIR-V with `spirv_1_6` plus required mesh/subgroup capabilities.
+- **Reflection ABI generation hardened:** `tools/layout_gen.zig` now
+  deduplicates identical reflected structs, rejects conflicting or overlapping
+  layouts, and emits generated Zig tests that assert reflected sizes and field
+  offsets match Zig `extern struct` layout.
+- **SPIR-V target wording clarified:** the project targets SPIR-V 1.6; Khronos
+  SPIR-V document revisions are not separately targetable through the SPIR-V
+  module header or Slang `spirv_1_6` profile.
 - **Breaking font-wrapper cleanup:** HarfBuzz/FreeType Zig wrappers now use
   Zig-style `init`/`deinit`/`len` naming, shape buffer writes report allocation
   failures, and `hb.Font.fromFace()` takes a sized `ft.Face` instead of a raw

@@ -26,7 +26,7 @@ requirements, shader layout, build commands, or major algorithmic behavior.
 - `src/demo/vulkan/` and `src/demo/metal/` contain platform demo hosts.
 - `src/c/` contains headers translated by build-system `addTranslateC()`.
 - `build/` contains modular Zig build helpers.
-- `shaders/core/` contains shared Slang logic.
+- `shaders/core/` contains shared Slang 2026 ABI, stats, and analytic logic.
 - `shaders/backend_vulkan/` and `shaders/backend_metal/` contain binding shims.
 - `shaders/entries/` contains `task.slang`, `mesh.slang`, and
   `fragment.slang`.
@@ -68,7 +68,8 @@ the compiled source list, and do not reintroduce bitmap/compression/SVG helper
 dependencies without updating `README.md` and `CHANGELOG.md`.
 
 `slangc` must be on `PATH` for shader steps, backend builds, backend tests, and
-demos. Core-only `zig build` and `zig build test` do not require `slangc`.
+demos. It must support Slang 2026, SPIR-V 1.6, and `metallib_4_0`. Core-only
+`zig build` and `zig build test` do not require `slangc`.
 
 Vulkan builds use lazy `vulkan` and `vulkan_headers` package dependencies.
 Runtime/demo execution needs a Vulkan loader, a Vulkan 1.4 driver, and
@@ -100,6 +101,7 @@ Prefer semantic names tied to renderer roles:
 - build steps: `spirv`, `msl`,
 - demo backends: `vulkan`, `metal`,
 - shader entries: `task`, `mesh`, `fragment`,
+- shader language mode: explicit `#language slang 2026` modules,
 - per-frame glyph records: `GlyphInstance`,
 - per-frame glyph storage: `GlyphBatch`,
 - glyph-pool references: `GlyphBlobRef`,
@@ -110,7 +112,9 @@ Prefer semantic names tied to renderer roles:
 
 Use build-system `addTranslateC()` modules for C headers instead of source-level
 `@cImport`. Keep GPU layouts generated from Slang reflection; do not hand-edit
-generated GPU structs.
+generated GPU structs. Slang entry stages should be declared in source with
+`[shader(...)]`; keep `build/shaders.zig` as target/capability policy rather
+than duplicating entry-stage names there.
 
 ## GPU Resource Rules
 
@@ -121,6 +125,9 @@ as architectural churn. The current hot path deliberately uses byte-offset
 `GlyphBlobRef` values and Vulkan 1.4 push descriptors for per-frame bindings.
 Keep Vulkan pNext chains in `chains.zig`; use the chain structs there rather
 than open-coded feature/property chains in demos or backend init paths.
+The Vulkan shader target is SPIR-V 1.6 via Slang `spirv_1_6` plus explicit
+mesh/subgroup capability atoms. Do not describe Khronos SPIR-V 1.6 spec
+revisions as a separately targetable build setting.
 
 For Metal, new command submission and resource binding work should use the
 Metal 4 API family: `MTL4CommandQueue`, `MTL4CommandAllocator`,

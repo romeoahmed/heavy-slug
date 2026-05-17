@@ -2,6 +2,39 @@
 
 const std = @import("std");
 
+const Stage = enum {
+    task,
+    mesh,
+    fragment,
+
+    fn source(self: Stage) []const u8 {
+        return switch (self) {
+            .task => "shaders/entries/task.slang",
+            .mesh => "shaders/entries/mesh.slang",
+            .fragment => "shaders/entries/fragment.slang",
+        };
+    }
+
+    fn outputName(self: Stage, target: SlangTarget) []const u8 {
+        return switch (target) {
+            .spirv => switch (self) {
+                .task => "task.spv",
+                .mesh => "mesh.spv",
+                .fragment => "fragment.spv",
+            },
+            .msl => switch (self) {
+                .task => "task.metal",
+                .mesh => "mesh.metal",
+                .fragment => "fragment.metal",
+            },
+        };
+    }
+};
+
+const SlangTarget = enum { spirv, msl };
+const spirv_profile = "spirv_1_6";
+const metal_capability = "metallib_4_0";
+
 pub const SpirvBundle = struct {
     task: std.Build.LazyPath,
     mesh: std.Build.LazyPath,
@@ -17,17 +50,9 @@ pub const MslBundle = struct {
 };
 
 pub fn compileSpirv(b: *std.Build, shader_stats: bool) SpirvBundle {
-    const task_spv = compileSpirvStage(
-        b,
-        "task.spv",
-        "shaders/entries/task.slang",
-        "taskMain",
-        "amplification",
-        "spvGroupNonUniform+spvGroupNonUniformBallot+spvGroupNonUniformArithmetic",
-        shader_stats,
-    );
-    const mesh_spv = compileSpirvStage(b, "mesh.spv", "shaders/entries/mesh.slang", "meshMain", "mesh", "", shader_stats);
-    const fragment_spv = compileSpirvStage(b, "fragment.spv", "shaders/entries/fragment.slang", "fragmentMain", "fragment", "", shader_stats);
+    const task_spv = compileStage(b, .spirv, .task, shader_stats);
+    const mesh_spv = compileStage(b, .spirv, .mesh, shader_stats);
+    const fragment_spv = compileStage(b, .spirv, .fragment, shader_stats);
 
     const files = b.addWriteFiles();
     _ = files.addCopyFile(task_spv, "task.spv");
@@ -48,9 +73,9 @@ pub fn compileSpirv(b: *std.Build, shader_stats: bool) SpirvBundle {
 }
 
 pub fn compileMsl(b: *std.Build, shader_stats: bool) MslBundle {
-    const task_msl = compileMslStage(b, "task.metal", "shaders/entries/task.slang", "taskMain", "amplification", shader_stats);
-    const mesh_msl = compileMslStage(b, "mesh.metal", "shaders/entries/mesh.slang", "meshMain", "mesh", shader_stats);
-    const fragment_msl = compileMslStage(b, "fragment.metal", "shaders/entries/fragment.slang", "fragmentMain", "fragment", shader_stats);
+    const task_msl = compileStage(b, .msl, .task, shader_stats);
+    const mesh_msl = compileStage(b, .msl, .mesh, shader_stats);
+    const fragment_msl = compileStage(b, .msl, .fragment, shader_stats);
 
     const files = b.addWriteFiles();
     _ = files.addCopyFile(task_msl, "task.metal");
@@ -98,11 +123,9 @@ pub fn installMsl(
 
 fn generateReflectionJson(b: *std.Build) std.Build.LazyPath {
     const cmd = b.addSystemCommand(&.{"slangc"});
-    cmd.addFileArg(b.path("shaders/entries/task.slang"));
-    addStageArgs(cmd, "taskMain", "amplification", .spirv, false);
-    cmd.addArgs(&.{ "-target", "spirv" });
-    cmd.addArgs(&.{ "-profile", "spirv_1_6+spvGroupNonUniform+spvGroupNonUniformBallot+spvGroupNonUniformArithmetic" });
-    addIncludeAndOptArgs(b, cmd, .spirv);
+    cmd.setName("slangc reflection");
+    cmd.addFileArg(b.path(Stage.task.source()));
+    addCommonArgs(b, cmd, .spirv, .task, false);
     cmd.addArg("-o");
     _ = cmd.addOutputFileArg("reflection.spv");
     cmd.addArg("-reflection-json");
@@ -131,63 +154,43 @@ pub fn buildGpuStructsModule(b: *std.Build) *std.Build.Module {
     return b.addModule("gpu_structs", .{ .root_source_file = gpu_structs_zig });
 }
 
-fn compileSpirvStage(
+fn compileStage(
     b: *std.Build,
-    name: []const u8,
-    source: []const u8,
-    entry: []const u8,
-    stage: []const u8,
-    extra_caps: []const u8,
-    shader_stats: bool,
-) std.Build.LazyPath {
-    const cmd = b.addSystemCommand(&.{"slangc"});
-    cmd.addFileArg(b.path(source));
-    addStageArgs(cmd, entry, stage, .spirv, shader_stats);
-    cmd.addArgs(&.{ "-target", "spirv" });
-    const profile = if (extra_caps.len > 0)
-        std.mem.concat(b.allocator, u8, &.{ "spirv_1_6+", extra_caps }) catch @panic("OOM")
-    else
-        "spirv_1_6";
-    cmd.addArgs(&.{ "-profile", profile });
-    addIncludeAndOptArgs(b, cmd, .spirv);
-    cmd.addArg("-o");
-    return cmd.addOutputFileArg(name);
-}
-
-fn compileMslStage(
-    b: *std.Build,
-    name: []const u8,
-    source: []const u8,
-    entry: []const u8,
-    stage: []const u8,
-    shader_stats: bool,
-) std.Build.LazyPath {
-    const cmd = b.addSystemCommand(&.{"slangc"});
-    cmd.addFileArg(b.path(source));
-    addStageArgs(cmd, entry, stage, .msl, shader_stats);
-    cmd.addArgs(&.{ "-target", "metal" });
-    cmd.addArgs(&.{ "-capability", "metallib_4_0" });
-    addIncludeAndOptArgs(b, cmd, .msl);
-    cmd.addArg("-o");
-    return cmd.addOutputFileArg(name);
-}
-
-fn addStageArgs(
-    cmd: *std.Build.Step.Run,
-    entry: []const u8,
-    stage: []const u8,
     target: SlangTarget,
+    stage: Stage,
+    shader_stats: bool,
+) std.Build.LazyPath {
+    const cmd = b.addSystemCommand(&.{"slangc"});
+    cmd.setName(b.fmt("slangc {s} {s}", .{ @tagName(target), @tagName(stage) }));
+    cmd.addFileArg(b.path(stage.source()));
+    addCommonArgs(b, cmd, target, stage, shader_stats);
+    cmd.addArg("-o");
+    return cmd.addOutputFileArg(stage.outputName(target));
+}
+
+fn addCommonArgs(
+    b: *std.Build,
+    cmd: *std.Build.Step.Run,
+    target: SlangTarget,
+    stage: Stage,
     shader_stats: bool,
 ) void {
+    cmd.addArgs(&.{ "-std", "2026" });
     cmd.addArgs(&.{if (target == .msl) "-DHEAVY_SLUG_METAL=1" else "-DHEAVY_SLUG_METAL=0"});
     cmd.addArgs(&.{if (shader_stats) "-DHEAVY_SLUG_SHADER_STATS=1" else "-DHEAVY_SLUG_SHADER_STATS=0"});
-    cmd.addArgs(&.{ "-entry", entry });
-    cmd.addArgs(&.{ "-stage", stage });
-}
 
-const SlangTarget = enum { spirv, msl };
+    switch (target) {
+        .spirv => {
+            cmd.addArgs(&.{ "-target", "spirv" });
+            cmd.addArgs(&.{ "-profile", spirv_profile });
+            addCapabilities(cmd, spirvCapabilities(stage));
+        },
+        .msl => {
+            cmd.addArgs(&.{ "-target", "metal" });
+            cmd.addArgs(&.{ "-capability", metal_capability });
+        },
+    }
 
-fn addIncludeAndOptArgs(b: *std.Build, cmd: *std.Build.Step.Run, target: SlangTarget) void {
     addSlangImportInputs(b, cmd, target);
     cmd.addArgs(&.{"-matrix-layout-column-major"});
     cmd.addArgs(&.{ "-I", "shaders" });
@@ -197,7 +200,30 @@ fn addIncludeAndOptArgs(b: *std.Build, cmd: *std.Build.Step.Run, target: SlangTa
         .msl => "shaders/backend_metal",
     } });
     cmd.addArgs(&.{ "-I", "shaders/entries" });
+    cmd.addArgs(&.{"-restrictive-capability-check"});
+    cmd.addArgs(&.{ "-warnings-as-errors", "all" });
     cmd.addArgs(&.{"-O2"});
+}
+
+fn addCapabilities(cmd: *std.Build.Step.Run, caps: []const []const u8) void {
+    for (caps) |cap| cmd.addArgs(&.{ "-capability", cap });
+}
+
+fn spirvCapabilities(stage: Stage) []const []const u8 {
+    return switch (stage) {
+        .task => &.{
+            "SPV_EXT_mesh_shader",
+            "spvMeshShadingEXT",
+            "spvGroupNonUniform",
+            "spvGroupNonUniformBallot",
+            "spvGroupNonUniformArithmetic",
+        },
+        .mesh => &.{
+            "SPV_EXT_mesh_shader",
+            "spvMeshShadingEXT",
+        },
+        .fragment => &.{},
+    };
 }
 
 fn addSlangImportInputs(b: *std.Build, cmd: *std.Build.Step.Run, target: SlangTarget) void {
@@ -207,6 +233,7 @@ fn addSlangImportInputs(b: *std.Build, cmd: *std.Build.Step.Run, target: SlangTa
         "shaders/core/coverage_integral.slang",
         "shaders/core/hband.slang",
         "shaders/core/pga.slang",
+        "shaders/core/stats.slang",
     };
     for (core_inputs) |path| cmd.addFileInput(b.path(path));
     cmd.addFileInput(b.path(switch (target) {

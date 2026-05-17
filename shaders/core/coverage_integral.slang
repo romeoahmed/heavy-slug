@@ -1,3 +1,6 @@
+#language slang 2026
+module coverage_integral;
+
 // Analytic cubic coverage integration helpers.
 
 import coverage_blob;
@@ -10,7 +13,7 @@ struct Cubic
     float2 p3;
 };
 
-static const float kCoverageEpsilon = 1.0 / 1048576.0;
+public static const float kCoverageEpsilon = 1.0 / 1048576.0;
 static const float kParamEpsilon = 1.0e-8;
 static const float kRootMergeEpsilon = 1.0e-7;
 static const float kGaussRoot = 0.7745966692414834;
@@ -346,7 +349,7 @@ float2 toPixelLocal(float2 p, float2 center, float2 dx, float2 dy, float invDet)
     );
 }
 
-bool curveBboxMayContribute(float4 bbox, float2 center, float2 dx, float2 dy, float invDet)
+public bool curveBboxMayContribute(float4 bbox, float2 center, float2 dx, float2 dy, float invDet)
 {
     float2 bboxMin = float2(bbox.x, bbox.z);
     float2 bboxMax = float2(bbox.y, bbox.w);
@@ -372,7 +375,7 @@ bool curveBboxMayContribute(float4 bbox, float2 center, float2 dx, float2 dy, fl
     return true;
 }
 
-float resolveCoverage(float signedArea, float fillSign, float detSign, uint flags)
+public float resolveCoverage(float signedArea, float fillSign, float detSign, uint flags)
 {
     float windingCoverage = signedArea;
     float coverage = fillSign * detSign * windingCoverage;
@@ -391,7 +394,7 @@ float resolveCoverage(float signedArea, float fillSign, float detSign, uint flag
     return coverage;
 }
 
-float integrateCurvePayload(
+public float integrateCurvePayload(
     BlobReader blob,
     uint curveBase,
     uint curveIndex,
@@ -411,7 +414,7 @@ float integrateCurvePayload(
     return integrateCurve(curve);
 }
 
-float integrateFullScan(
+public float integrateFullScan(
     BlobReader blob,
     uint curveBase,
     uint curveCount,
@@ -431,7 +434,7 @@ float integrateFullScan(
 }
 
 #if HEAVY_SLUG_SHADER_STATS
-float integrateCurveFromBlobWithStats(
+public float integrateCurveFromBlobWithStats(
     BlobReader blob,
     uint curveBase,
     uint curveIndex,
@@ -452,7 +455,7 @@ float integrateCurveFromBlobWithStats(
     return integrateCurvePayload(blob, curveBase, curveIndex, renderCoord, dx, dy, invDet);
 }
 
-float integrateFullScanWithStats(
+public float integrateFullScanWithStats(
     BlobReader blob,
     uint curveBase,
     uint curveCount,

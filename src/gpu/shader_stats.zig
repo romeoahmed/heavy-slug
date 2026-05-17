@@ -5,7 +5,7 @@ const std = @import("std");
 /// Number of u32 counters exposed by the shader ABI.
 pub const counter_count: usize = 19;
 
-/// Counter order must match the shader-stage constants in `shaders/entries/`.
+/// Counter order must match `shaders/core/stats.slang`.
 pub const CounterIndex = enum(u32) {
     fragment_invocations = 0,
     candidate_path_fragments = 1,

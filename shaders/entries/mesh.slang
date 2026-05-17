@@ -1,9 +1,13 @@
+#language slang 2026
+module mesh;
+
 // Mesh shader: emit one tightened h-band strip per visible glyph meshlet.
 
 import pga;
 import abi;
 import coverage_blob;
 import resources;
+import stats;
 
 static const float kNoBoundsMin = 1.0e20;
 static const float kNoBoundsMax = -1.0e20;
@@ -41,17 +45,6 @@ groupshared float s_threadMaxX[kMeshThreadCount];
 groupshared uint s_threadCandidateCounts[kMeshThreadCount];
 groupshared float4 s_rect;
 groupshared uint s_emit;
-
-#if HEAVY_SLUG_SHADER_STATS
-static const uint kShaderStatMeshWorkgroups = 10;
-static const uint kShaderStatMeshTilesEmitted = 17;
-static const uint kShaderStatMeshTilesCulled = 18;
-
-void addShaderStat(uint index, uint value)
-{
-    InterlockedAdd(shaderStats[index], value);
-}
-#endif
 
 BlobReader blobReader(uint blobRef)
 {
@@ -132,7 +125,7 @@ void meshMain(
 {
 #if HEAVY_SLUG_SHADER_STATS
     if (gtid == 0)
-        addShaderStat(kShaderStatMeshWorkgroups, 1);
+        addShaderStat(shaderStats, kShaderStatMeshWorkgroups, 1);
 #endif
 
     uint glyphIndex = taskPayload.glyphIndices[gid];
@@ -209,7 +202,7 @@ void meshMain(
         s_emit = emit ? 1u : 0u;
 
 #if HEAVY_SLUG_SHADER_STATS
-        addShaderStat(emit ? kShaderStatMeshTilesEmitted : kShaderStatMeshTilesCulled, 1);
+        addShaderStat(shaderStats, emit ? kShaderStatMeshTilesEmitted : kShaderStatMeshTilesCulled, 1);
 #endif
     }
 

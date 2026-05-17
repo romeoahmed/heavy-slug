@@ -1,29 +1,19 @@
+#language slang 2026
+module task;
+
 // Task shader: frustum-cull glyphs and compact visible h-band meshlets.
 
 import pga;
 import abi;
 import resources;
+import stats;
 
 static const float kTargetMeshletExtentPixels = 96.0;
-
-#if HEAVY_SLUG_SHADER_STATS
-static const uint kShaderStatTaskWorkgroups = 6;
-static const uint kShaderStatTaskGlyphsTested = 7;
-static const uint kShaderStatTaskGlyphsVisible = 8;
-static const uint kShaderStatTaskGlyphsCulled = 9;
-#endif
 
 groupshared TaskPayload s_payload;
 #if HEAVY_SLUG_METAL
 groupshared uint s_survivorCount;
 groupshared uint s_meshletCount;
-#endif
-
-#if HEAVY_SLUG_SHADER_STATS
-void addShaderStat(uint index, uint value)
-{
-    InterlockedAdd(shaderStats[index], value);
-}
 #endif
 
 // Divide by w so the cull works for both orthographic and perspective projections.
@@ -70,7 +60,7 @@ uint subdivisionCount(float4 c0, float4 c1, float4 c2, float4 c3)
     return clamp(count, 1u, kMaxSubdivisionsPerGlyph);
 }
 
-[shader("amplification")]
+[shader("task")]
 [numthreads(kTaskGroupSize, 1, 1)]
 void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
 {
@@ -154,10 +144,10 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
     if (gtid == 0)
     {
 #if HEAVY_SLUG_SHADER_STATS
-        addShaderStat(kShaderStatTaskWorkgroups, 1);
-        addShaderStat(kShaderStatTaskGlyphsTested, groupSize);
-        addShaderStat(kShaderStatTaskGlyphsVisible, survivorCount);
-        addShaderStat(kShaderStatTaskGlyphsCulled, groupSize - survivorCount);
+        addShaderStat(shaderStats, kShaderStatTaskWorkgroups, 1);
+        addShaderStat(shaderStats, kShaderStatTaskGlyphsTested, groupSize);
+        addShaderStat(shaderStats, kShaderStatTaskGlyphsVisible, survivorCount);
+        addShaderStat(shaderStats, kShaderStatTaskGlyphsCulled, groupSize - survivorCount);
 #endif
         DispatchMesh(meshletCount, 1, 1, s_payload);
     }

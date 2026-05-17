@@ -118,10 +118,10 @@ workflow.
 | Target | Required to build | Extra for demo/runtime |
 | --- | --- | --- |
 | Core, all platforms | Zig `0.16.0`; C/C++ toolchain; first-build network access for pinned Zig packages | No `slangc`, Vulkan, Metal, or GLFW required |
-| Vulkan backend, Linux | Zig; `slangc`; lazy `vulkan_headers`; lazy `vulkan-zig` | Vulkan loader/driver; Vulkan 1.4; core `pushDescriptor`; `VK_EXT_mesh_shader`; task/mesh features; sufficient mesh limits |
+| Vulkan backend, Linux | Zig; `slangc` with Slang 2026 and SPIR-V 1.6 support; lazy `vulkan_headers`; lazy `vulkan-zig` | Vulkan loader/driver; Vulkan 1.4; core `pushDescriptor`; `VK_EXT_mesh_shader`; task/mesh features; sufficient mesh limits |
 | Vulkan demo, Linux | Vulkan backend deps; lazy GLFW source; `wayland-scanner`; `wayland-client`; `wayland-cursor`; `wayland-egl`; `xkbcommon` dev libraries | Wayland-capable desktop/session and Vulkan runtime |
-| Vulkan backend/demo, Windows | Zig; `slangc`; lazy `vulkan_headers`; lazy `vulkan-zig`; lazy GLFW source | Vulkan loader/runtime; Vulkan 1.4 driver; core `pushDescriptor`; `VK_EXT_mesh_shader`; links `gdi32`, `user32`, `shell32` |
-| Metal backend, macOS | Zig; `slangc`; Apple SDK with Metal 4 APIs; Objective-C++ support; `Metal`, `QuartzCore`, `Foundation` | GPU supporting `MTLGPUFamilyMetal4`; host supplies `id<MTLDevice>`, `id<MTL4CommandQueue>`, `CAMetalLayer *` |
+| Vulkan backend/demo, Windows | Zig; `slangc` with Slang 2026 and SPIR-V 1.6 support; lazy `vulkan_headers`; lazy `vulkan-zig`; lazy GLFW source | Vulkan loader/runtime; Vulkan 1.4 driver; core `pushDescriptor`; `VK_EXT_mesh_shader`; links `gdi32`, `user32`, `shell32` |
+| Metal backend, macOS | Zig; `slangc` with Slang 2026 and `metallib_4_0` support; Apple SDK with Metal 4 APIs; Objective-C++ support; `Metal`, `QuartzCore`, `Foundation` | GPU supporting `MTLGPUFamilyMetal4`; host supplies `id<MTLDevice>`, `id<MTL4CommandQueue>`, `CAMetalLayer *` |
 | Metal demo, macOS | Metal backend deps; lazy GLFW source; Cocoa GLFW backend | `Cocoa`, `IOKit`, `CoreFoundation` |
 
 Important dependency facts:
@@ -134,7 +134,9 @@ Important dependency facts:
   such as zlib, bzip2, libpng, Brotli, and FreeType's own HarfBuzz auto-hint
   integration.
 - `slangc` is needed for shader generation, backend builds/tests, demos, and
-  reflected GPU ABI generation.
+  reflected GPU ABI generation. The shader build uses explicit Slang 2026
+  modules, warning-as-error diagnostics, restrictive capability checks, and
+  source-declared `[shader(...)]` entry points.
 - `vulkan`, `vulkan_headers`, and `glfw_src` are lazy dependencies; core-only
   builds do not fetch them.
 
@@ -270,6 +272,12 @@ command-buffer and stage-specific setter model.
 | `shaders/entries/mesh.slang` | Mesh shader entry. |
 | `shaders/entries/fragment.slang` | Fragment shader entry. |
 
+Shader sources are explicit Slang 2026 modules. `build/shaders.zig` compiles
+the source-declared entry points with `spirv_1_6` for Vulkan and
+`metallib_4_0` for Metal. SPIR-V specification revisions are Khronos document
+revisions rather than selectable module versions; generated SPIR-V declares
+version 1.6 in the module header.
+
 <details>
 <summary>Shader output paths</summary>
 
@@ -325,6 +333,7 @@ zig build test -Dmetal=true -Dshader-stats=true
 | Glyph resources | Cached glyph blobs live in one backend-owned glyph-pool buffer. |
 | Blob references | `GlyphBlobRef` values are byte offsets instead of descriptor slots. |
 | GPU ABI | GPU structs are generated from Slang reflection. |
+| Reflection guardrails | `tools/layout_gen.zig` rejects conflicting reflected layouts and emits generated layout tests. |
 | C headers | C declarations are translated through build-system `addTranslateC()` modules. |
 
 ## Dependency Summary

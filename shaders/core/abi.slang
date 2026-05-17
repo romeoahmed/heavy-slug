@@ -1,36 +1,39 @@
+#language slang 2026
+module abi;
+
 // GPU ABI shared by all heavy-slug shader stages.
 // CPU structs are generated from slangc reflection of these definitions.
 
-struct GlyphInstance
+public struct GlyphInstance
 {
-    float4 motor;
-    float4 color;
-    float  em_x_min;
-    float  em_y_min;
-    float  em_x_max;
-    float  em_y_max;
-    uint   blob_ref;
-    uint   flags;
-    uint2  _pad;
+    public float4 motor;
+    public float4 color;
+    public float  em_x_min;
+    public float  em_y_min;
+    public float  em_x_max;
+    public float  em_y_max;
+    public uint   blob_ref;
+    public uint   flags;
+    public uint2  _pad;
 };
 
-struct FrameParams
+public struct FrameParams
 {
-    float4x4 projection;
-    float2   viewport_size;
-    uint     glyph_count;
-    uint     glyph_base;
+    public float4x4 projection;
+    public float2   viewport_size;
+    public uint     glyph_count;
+    public uint     glyph_base;
 };
 
-static const uint kTaskGroupSize = 32;
-static const uint kMeshThreadCount = 32;
-static const uint kMaxSubdivisionsPerGlyph = 16;
-static const uint kTaskMaxMeshlets = kTaskGroupSize * kMaxSubdivisionsPerGlyph;
-static const uint kMeshOutputVertices = 4;
-static const uint kMeshOutputPrimitives = 2;
+public static const uint kTaskGroupSize = 32;
+public static const uint kMeshThreadCount = 32;
+public static const uint kMaxSubdivisionsPerGlyph = 16;
+public static const uint kTaskMaxMeshlets = kTaskGroupSize * kMaxSubdivisionsPerGlyph;
+public static const uint kMeshOutputVertices = 4;
+public static const uint kMeshOutputPrimitives = 2;
 
-struct TaskPayload
+public struct TaskPayload
 {
-    uint glyphIndices[kTaskMaxMeshlets];
-    uint sliceInfos[kTaskMaxMeshlets];
+    public uint glyphIndices[kTaskMaxMeshlets];
+    public uint sliceInfos[kTaskMaxMeshlets];
 };

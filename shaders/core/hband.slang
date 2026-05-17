@@ -1,8 +1,11 @@
+#language slang 2026
+module hband;
+
 // Conservative h-band range selection for curve candidate lookup.
 
 static const float kHBandEpsilon = 1.0 / 1048576.0;
 
-bool conservativeHBandRange(
+public bool conservativeHBandRange(
     float2 renderCoord,
     float2 dx,
     float invDet,

@@ -1,3 +1,6 @@
+#language slang 2026
+module coverage_blob;
+
 // CoverageBlob decoding.
 
 static const float UNITS_PER_EM = 4.0;
@@ -7,12 +10,12 @@ static const float HBAND_HEIGHT = 4.0;
 static const uint  CURVE_TEXEL_LEN = 3;
 static const uint  CURVE_IDS_PER_TEXEL = 4;
 
-struct BlobReader
+public struct BlobReader
 {
-    ByteAddressBuffer buf;
-    uint base;
+    public ByteAddressBuffer buf;
+    public uint base;
 
-    int4 readTexel(uint index)
+    public int4 readTexel(uint index)
     {
         uint2 raw = buf.Load2(base + index * 8);
         return int4(
@@ -23,12 +26,12 @@ struct BlobReader
         );
     }
 
-    float4 readTexelF(uint index)
+    public float4 readTexelF(uint index)
     {
         return float4(readTexel(index)) * INV_UNITS_PER_EM;
     }
 
-    void readHeader(
+    public void readHeader(
         out float4 bounds,
         out uint curveCount,
         out float fillSign,
@@ -52,13 +55,13 @@ struct BlobReader
         idBase = bandBase + bandCount;
     }
 
-    float4 readCurveBounds(uint curveBase, uint curveIndex)
+    public float4 readCurveBounds(uint curveBase, uint curveIndex)
     {
         uint off = curveBase + curveIndex * CURVE_TEXEL_LEN;
         return readTexelF(off + 2);
     }
 
-    void readCurvePoints(uint curveBase, uint curveIndex, out float2 p0, out float2 p1,
+    public void readCurvePoints(uint curveBase, uint curveIndex, out float2 p0, out float2 p1,
                          out float2 p2, out float2 p3)
     {
         uint off = curveBase + curveIndex * CURVE_TEXEL_LEN;
@@ -70,21 +73,21 @@ struct BlobReader
         p3 = b.zw;
     }
 
-    void readCurve(uint curveBase, uint curveIndex, out float2 p0, out float2 p1,
+    public void readCurve(uint curveBase, uint curveIndex, out float2 p0, out float2 p1,
                    out float2 p2, out float2 p3, out float4 bbox)
     {
         bbox = readCurveBounds(curveBase, curveIndex);
         readCurvePoints(curveBase, curveIndex, p0, p1, p2, p3);
     }
 
-    void readBand(uint bandBase, uint bandIndex, out uint idStart, out uint bandIdCount)
+    public void readBand(uint bandBase, uint bandIndex, out uint idStart, out uint bandIdCount)
     {
         int4 band = readTexel(bandBase + bandIndex);
         idStart = uint(max(band.x, 0));
         bandIdCount = uint(max(band.y, 0));
     }
 
-    uint readCurveId(uint idBase, uint idIndex)
+    public uint readCurveId(uint idBase, uint idIndex)
     {
         int4 ids = readTexel(idBase + idIndex / CURVE_IDS_PER_TEXEL);
         uint lane = idIndex % CURVE_IDS_PER_TEXEL;
