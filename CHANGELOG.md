@@ -39,7 +39,10 @@ implementation notes belong in commits and code review history.
   installs normal app menu actions, and routes close/quit shortcuts through the
   same graceful shutdown path.
 - **Shared demo input extracted:** native hosts translate platform input into
-  `src/demo/common/input.zig`, keeping scene controls backend-independent.
+  `demo/common/input.zig`, keeping scene controls backend-independent.
+- **Demo source boundary tightened:** demo entry points, shared scene code,
+  native platform hosts, and demo-only Wayland C translation moved from `src/`
+  to root-level `demo/`, keeping `src/` focused on library modules.
 - **Shader build graph tightened:** Slang sources now use explicit Slang 2026
   modules, source-declared shader entries, stricter capability checks, and
   shared shader-stat constants.
@@ -100,8 +103,8 @@ implementation notes belong in commits and code review history.
 - **Documentation refreshed:** `README.md` became the maintained architecture
   overview, with aligned contributor guidance in `AGENTS.md`.
 - **Breaking source layout refactor:** core, GPU, backend, demo, shader, and
-  build logic moved into the current `src/core/`, `src/gpu/`,
-  `src/backends/`, `src/demo/`, `shaders/`, and `build/` structure.
+  build logic moved into dedicated `src/core/`, `src/gpu/`, `src/backends/`,
+  `demo/`, `shaders/`, and `build/` roots.
 - **Breaking renderer API cleanup:** backends now expose explicit
   `Renderer.beginFrame()`, `Frame.drawText()`, and `Frame.submit()` flow with
   `FrameToken`-based retirement.

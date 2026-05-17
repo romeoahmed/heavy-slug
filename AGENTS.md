@@ -28,10 +28,10 @@ window-toolkit object.
 - `src/backends/vulkan/` provides the opt-in `heavy_slug_vulkan` module.
 - `src/backends/metal/` provides the opt-in `heavy_slug_metal` module and the
   Objective-C++ bridge.
-- `src/demo/common/` contains demo-only scene and input helpers.
-- `src/demo/vulkan/` and `src/demo/metal/` contain demo entry points.
-- `src/demo/platform/` contains native Win32, Wayland, and Cocoa hosts.
-- `src/c/` contains headers translated by build-system `addTranslateC()`.
+- `demo/common/` contains demo-only scene and input helpers.
+- `demo/vulkan/` and `demo/metal/` contain demo entry points.
+- `demo/platform/` contains native Win32, Wayland, and Cocoa hosts.
+- `src/c/` contains core C headers translated by build-system `addTranslateC()`.
 - `build/` contains modular Zig build helpers.
 - `shaders/core/` contains shared Slang 2026 ABI, stats, PGA, h-band, and
   coverage logic.
@@ -110,9 +110,10 @@ architecture decision reverses the native-demo-host model.
 
 ## Coding Style And Naming
 
-Run `zig fmt build.zig build/ src/ tools/` before submitting code changes. Use
-lowercase module filenames, `PascalCase` public types, `camelCase` functions
-and fields, and descriptive constants matching local style.
+Run `zig fmt build.zig build/ demo/ src/ tools/` before submitting code
+changes. Use lowercase module filenames, `PascalCase` public types,
+`camelCase` functions and fields, and descriptive constants matching local
+style.
 
 Prefer semantic names tied to renderer roles:
 

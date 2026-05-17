@@ -15,7 +15,7 @@ pub fn buildVulkan(
     const exe = b.addExecutable(.{
         .name = "heavy_slug_demo",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/demo/vulkan/main.zig"),
+            .root_source_file = b.path("demo/vulkan/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -48,7 +48,7 @@ pub fn buildMetal(
     const exe = b.addExecutable(.{
         .name = "heavy_slug_demo",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/demo/metal/main.zig"),
+            .root_source_file = b.path("demo/metal/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -61,7 +61,7 @@ pub fn buildMetal(
     const demo_input = buildDemoInputModule(b, target, optimize);
     const demo_scene = buildDemoSceneModule(b, target, optimize, core_mod, demo_input);
     const demo_platform = b.createModule(.{
-        .root_source_file = b.path("src/demo/platform/cocoa.zig"),
+        .root_source_file = b.path("demo/platform/cocoa.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "demo_input", .module = demo_input }},
@@ -69,14 +69,14 @@ pub fn buildMetal(
 
     exe.root_module.addImport("demo_scene", demo_scene);
     exe.root_module.addImport("demo_platform", demo_platform);
-    exe.root_module.addIncludePath(b.path("src/demo/platform"));
+    exe.root_module.addIncludePath(b.path("demo/platform"));
     exe.root_module.link_libcpp = true;
     exe.root_module.linkFramework("Cocoa", .{});
     exe.root_module.linkFramework("QuartzCore", .{});
     exe.root_module.linkFramework("Metal", .{});
     exe.root_module.linkFramework("Foundation", .{});
     exe.root_module.addCSourceFiles(.{
-        .root = b.path("src/demo/platform"),
+        .root = b.path("demo/platform"),
         .files = &.{"cocoa.mm"},
         .flags = &.{ "-std=c++17", "-fobjc-arc" },
     });
@@ -91,7 +91,7 @@ fn buildDemoInputModule(
     optimize: std.builtin.OptimizeMode,
 ) *std.Build.Module {
     return b.createModule(.{
-        .root_source_file = b.path("src/demo/common/input.zig"),
+        .root_source_file = b.path("demo/common/input.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -105,7 +105,7 @@ fn buildDemoSceneModule(
     demo_input: *std.Build.Module,
 ) *std.Build.Module {
     return b.createModule(.{
-        .root_source_file = b.path("src/demo/common/scene.zig"),
+        .root_source_file = b.path("demo/common/scene.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -127,7 +127,7 @@ fn buildVulkanPlatformModule(
         .windows => blk: {
             exe.root_module.linkSystemLibrary("user32", .{});
             break :blk b.createModule(.{
-                .root_source_file = b.path("src/demo/platform/windows.zig"),
+                .root_source_file = b.path("demo/platform/windows.zig"),
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
@@ -152,7 +152,7 @@ fn buildVulkanPlatformModule(
                 },
             });
             break :blk b.createModule(.{
-                .root_source_file = b.path("src/demo/platform/wayland.zig"),
+                .root_source_file = b.path("demo/platform/wayland.zig"),
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
@@ -173,7 +173,7 @@ fn translateWaylandC(
     wayland_protocols: std.Build.LazyPath,
 ) *std.Build.Module {
     const translate = b.addTranslateC(.{
-        .root_source_file = b.path("src/c/wayland.h"),
+        .root_source_file = b.path("demo/platform/wayland.h"),
         .target = target,
         .optimize = optimize,
     });

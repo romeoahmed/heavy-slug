@@ -286,8 +286,8 @@ zig build test -Dmetal=true -Dshader-stats=true
 | `src/math/` | PGA motor math used by transforms. |
 | `src/backends/vulkan/` | Vulkan backend. |
 | `src/backends/metal/` | Metal backend and Objective-C++ bridge. |
-| `src/demo/` | Demo entry points, native platform hosts, shared scene/input code. |
-| `src/c/` | Headers translated by build-system `addTranslateC()`. |
+| `demo/` | Demo entry points, native platform hosts, shared scene/input code. |
+| `src/c/` | Core C headers translated by build-system `addTranslateC()`. |
 | `build/` | Modular Zig build graph. |
 | `shaders/` | Slang shader modules and entries. |
 | `tools/layout_gen.zig` | Slang reflection to Zig extern structs. |
