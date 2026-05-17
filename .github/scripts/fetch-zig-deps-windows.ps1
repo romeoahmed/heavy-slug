@@ -68,7 +68,7 @@ if ($Attempts -lt 1) {
 
 $exitCode = 1
 for ($attempt = 1; $attempt -le $Attempts; $attempt += 1) {
-    Write-Host "Fetching Zig dependencies, attempt $attempt/$Attempts: $Command"
+    Write-Host "Fetching Zig dependencies, attempt ${attempt}/${Attempts}: $Command"
 
     $output = & cmd.exe /d /s /c $Command 2>&1
     $exitCode = $LASTEXITCODE
