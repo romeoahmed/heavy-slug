@@ -15,6 +15,9 @@ implementation notes belong in commits and code review history.
 - **CI rewritten:** GitHub Actions now use one test matrix across Ubuntu,
   macOS, and `windows-2025-vs2026`, add native demo build tests through
   `-Ddemo=true`, and use dedicated PowerShell 7 setup scripts for Windows.
+- **Windows CI hardened:** Windows jobs now prepare short Zig cache/temp paths,
+  enable long paths, and prefetch Zig dependencies through a retry wrapper for
+  transient network/archive failures before running tests normally.
 - **Slang CI setup updated:** the POSIX setup script now accepts current Slang
   `.zip` release assets and Linux glibc-suffixed asset names.
 - **Documentation refreshed:** `README.md`, `AGENTS.md`, and `CHANGELOG.md`
