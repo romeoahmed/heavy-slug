@@ -10,6 +10,8 @@ pub const Error = error{
 };
 
 pub const Point = stream.Point;
+const Vec2 = @Vector(2, f64);
+const Vec4 = @Vector(4, f64);
 
 pub const RegularizedCubicSpan = struct {
     p0: Point,
@@ -18,19 +20,27 @@ pub const RegularizedCubicSpan = struct {
     p3: Point,
 
     pub fn minX(self: RegularizedCubicSpan) f64 {
-        return @min(@min(self.p0.x, self.p1.x), @min(self.p2.x, self.p3.x));
+        return @reduce(.Min, self.xValues());
     }
 
     pub fn maxX(self: RegularizedCubicSpan) f64 {
-        return @max(@max(self.p0.x, self.p1.x), @max(self.p2.x, self.p3.x));
+        return @reduce(.Max, self.xValues());
     }
 
     pub fn minY(self: RegularizedCubicSpan) f64 {
-        return @min(@min(self.p0.y, self.p1.y), @min(self.p2.y, self.p3.y));
+        return @reduce(.Min, self.yValues());
     }
 
     pub fn maxY(self: RegularizedCubicSpan) f64 {
-        return @max(@max(self.p0.y, self.p1.y), @max(self.p2.y, self.p3.y));
+        return @reduce(.Max, self.yValues());
+    }
+
+    fn xValues(self: RegularizedCubicSpan) Vec4 {
+        return .{ self.p0.x, self.p1.x, self.p2.x, self.p3.x };
+    }
+
+    fn yValues(self: RegularizedCubicSpan) Vec4 {
+        return .{ self.p0.y, self.p1.y, self.p2.y, self.p3.y };
     }
 };
 
@@ -257,10 +267,16 @@ fn samePoint(a: Point, b: Point) bool {
 }
 
 fn lerpPoint(a: Point, b: Point, t: f64) Point {
-    return .{
-        .x = a.x + (b.x - a.x) * t,
-        .y = a.y + (b.y - a.y) * t,
-    };
+    const av = pointVec(a);
+    return pointFromVec(av + (pointVec(b) - av) * @as(Vec2, @splat(t)));
+}
+
+fn pointVec(p: Point) Vec2 {
+    return .{ p.x, p.y };
+}
+
+fn pointFromVec(v: Vec2) Point {
+    return .{ .x = v[0], .y = v[1] };
 }
 
 fn cross(a: Point, b: Point) f64 {

@@ -2,6 +2,9 @@ const std = @import("std");
 const math = std.math;
 const testing = std.testing;
 
+const Vec2 = @Vector(2, f32);
+const Vec4 = @Vector(4, f32);
+
 /// PGA Cl(2,0,1) motor for 2D rigid transforms.
 /// Storage layout: [s, e12, e01, e02] matching GPU float4.
 pub const Motor = extern struct {
@@ -17,25 +20,24 @@ pub const Motor = extern struct {
         s3: f32,
 
         pub fn compose(self: TranslationComposer, tx: f32, ty: f32) Motor {
-            const half: @Vector(2, f32) = .{ tx * 0.5, ty * 0.5 };
-            const row_x: @Vector(2, f32) = .{ self.c3, -self.s3 };
-            const row_y: @Vector(2, f32) = .{ self.s3, self.c3 };
+            const half_translation: Vec2 = .{ tx * 0.5, ty * 0.5 };
+            const translated = rotate(.{ self.c3, self.s3 }, half_translation);
             return .{ .m = .{
                 self.base.m[0],
                 self.base.m[1],
-                @reduce(.Add, row_x * half) + self.base.m[2],
-                @reduce(.Add, row_y * half) + self.base.m[3],
+                translated[0] + self.base.m[2],
+                translated[1] + self.base.m[3],
             } };
         }
     };
 
     /// Precompute constants used by repeated `composeTranslation()` calls.
     pub fn translationComposer(self: Motor) TranslationComposer {
-        const a2 = self.m[1] * self.m[1];
+        const rot3 = tripleHalfRotor(self.rotor());
         return .{
             .base = self,
-            .c3 = self.m[0] * (1.0 - 4.0 * a2),
-            .s3 = self.m[1] * (3.0 - 4.0 * a2),
+            .c3 = rot3[0],
+            .s3 = rot3[1],
         };
     }
 
@@ -62,24 +64,17 @@ pub const Motor = extern struct {
     ///   q' = R(θB/2)·qA + R(3θA/2)·qB
     /// where R(3θA/2) uses the triple-angle identities below.
     pub fn compose(a: Motor, b: Motor) Motor {
-        const sa = a.m[0];
-        const aa = a.m[1];
-        const ta = a.m[2];
-        const ua = a.m[3];
-        const sb = b.m[0];
-        const ab = b.m[1];
-        const tb = b.m[2];
-        const ub = b.m[3];
-        const sc = sa * sb - aa * ab;
-        const ac = sa * ab + aa * sb;
-        const aa2 = aa * aa;
-        const c3 = sa * (1.0 - 4.0 * aa2);
-        const s3 = aa * (3.0 - 4.0 * aa2);
+        const rotor_a = a.rotor();
+        const rotor_b = b.rotor();
+        const rotor_c = multiplyRotors(rotor_a, rotor_b);
+        const translation = rotate(rotor_b, a.translationStorage()) +
+            rotate(tripleHalfRotor(rotor_a), b.translationStorage());
+
         return .{ .m = .{
-            sc,
-            ac,
-            sb * ta - ab * ua + c3 * tb - s3 * ub,
-            ab * ta + sb * ua + s3 * tb + c3 * ub,
+            rotor_c[0],
+            rotor_c[1],
+            translation[0],
+            translation[1],
         } };
     }
 
@@ -106,18 +101,19 @@ pub const Motor = extern struct {
     ///   col2 = [0,      0,    1, 0]
     ///   col3 = [2(s·tx+α·ty), 2(s·ty-α·tx), 0, 1]
     pub fn toMat(self: Motor, projection: [4][4]f32) [4][4]f32 {
-        const a = self.m[1];
-        const c: @Vector(4, f32) = @splat(1.0 - 2.0 * a * a);
-        const sv: @Vector(4, f32) = @splat(2.0 * self.m[0] * a);
-        const dx: @Vector(4, f32) = @splat(2.0 * (self.m[0] * self.m[2] + a * self.m[3]));
-        const dy: @Vector(4, f32) = @splat(2.0 * (self.m[0] * self.m[3] - a * self.m[2]));
-        const p0: @Vector(4, f32) = projection[0];
-        const p1: @Vector(4, f32) = projection[1];
+        const linear = self.linearRotor();
+        const translation = self.translationVector();
+        const c: Vec4 = @splat(linear[0]);
+        const s: Vec4 = @splat(linear[1]);
+        const dx: Vec4 = @splat(translation[0]);
+        const dy: Vec4 = @splat(translation[1]);
+        const p0: Vec4 = projection[0];
+        const p1: Vec4 = projection[1];
         return .{
-            p0 * c + p1 * sv,
-            p1 * c - p0 * sv,
+            p0 * c + p1 * s,
+            p1 * c - p0 * s,
             projection[2],
-            p0 * dx + p1 * dy + @as(@Vector(4, f32), projection[3]),
+            p0 * dx + p1 * dy + @as(Vec4, projection[3]),
         };
     }
 
@@ -127,22 +123,27 @@ pub const Motor = extern struct {
     ///   x' = (1-2α²)·x - 2sα·y + 2(s·tx + α·ty)
     ///   y' =  2sα·x + (1-2α²)·y + 2(s·ty - α·tx)
     pub fn apply(self: Motor, p: [2]f32) [2]f32 {
-        const s = self.m[0];
-        const a = self.m[1];
-        const tx = self.m[2];
-        const ty = self.m[3];
-        const z2 = 1.0 - 2.0 * a * a;
-        const zw = 2.0 * s * a;
-        return .{
-            z2 * p[0] - zw * p[1] + 2.0 * (s * tx + a * ty),
-            zw * p[0] + z2 * p[1] + 2.0 * (s * ty - a * tx),
-        };
+        const transformed = rotate(self.linearRotor(), @as(Vec2, p)) + self.translationVector();
+        return transformed;
     }
 
     /// Reverse of a unit motor — the inverse transform.
-    /// Negates the bivector components: [s, -e12, -e01, -e02].
+    /// Converts through Euclidean translation space because this storage keeps
+    /// translation as a half-angle-rotated homogeneous component.
     pub fn reverse(self: Motor) Motor {
-        return .{ .m = .{ self.m[0], -self.m[1], -self.m[2], -self.m[3] } };
+        const inverse_rotor: Vec2 = .{ self.m[0], -self.m[1] };
+        const linear = self.linearRotor();
+        const translation = self.translationVector();
+        const inverse_linear: Vec2 = .{ linear[0], -linear[1] };
+        const inverse_translation = @as(Vec2, @splat(-1.0)) * rotate(inverse_linear, translation);
+        const inverse_storage = @as(Vec2, @splat(0.5)) * rotate(inverse_rotor, inverse_translation);
+
+        return .{ .m = .{
+            inverse_rotor[0],
+            inverse_rotor[1],
+            inverse_storage[0],
+            inverse_storage[1],
+        } };
     }
 
     /// Motor from rotation by `angle` radians about an arbitrary center `(cx, cy)`.
@@ -157,15 +158,51 @@ pub const Motor = extern struct {
     /// Renormalize a motor so that s² + e12² = 1.
     /// Scales every component because motors are homogeneous coordinates.
     pub fn unitize(self: Motor) Motor {
-        const inv = 1.0 / @sqrt(self.m[0] * self.m[0] + self.m[1] * self.m[1]);
-        return .{ .m = .{
-            self.m[0] * inv,
-            self.m[1] * inv,
-            self.m[2] * inv,
-            self.m[3] * inv,
-        } };
+        const r = self.rotor();
+        const norm_sq = @reduce(.Add, r * r);
+        std.debug.assert(std.math.isFinite(norm_sq) and norm_sq > 0.0);
+
+        const scaled: Vec4 = @as(Vec4, self.m) * @as(Vec4, @splat(1.0 / @sqrt(norm_sq)));
+        return .{ .m = scaled };
+    }
+
+    fn rotor(self: Motor) Vec2 {
+        return .{ self.m[0], self.m[1] };
+    }
+
+    fn translationStorage(self: Motor) Vec2 {
+        return .{ self.m[2], self.m[3] };
+    }
+
+    fn linearRotor(self: Motor) Vec2 {
+        const s = self.m[0];
+        const a = self.m[1];
+        return .{ 1.0 - 2.0 * a * a, 2.0 * s * a };
+    }
+
+    fn translationVector(self: Motor) Vec2 {
+        return @as(Vec2, @splat(2.0)) * rotate(.{ self.m[0], -self.m[1] }, self.translationStorage());
     }
 };
+
+fn multiplyRotors(a: Vec2, b: Vec2) Vec2 {
+    return .{
+        a[0] * b[0] - a[1] * b[1],
+        a[0] * b[1] + a[1] * b[0],
+    };
+}
+
+fn tripleHalfRotor(rotor: Vec2) Vec2 {
+    const s = rotor[0];
+    const a = rotor[1];
+    const a2 = a * a;
+    return .{ s * (1.0 - 4.0 * a2), a * (3.0 - 4.0 * a2) };
+}
+
+fn rotate(rotor: Vec2, v: Vec2) Vec2 {
+    const swapped = @shuffle(f32, v, undefined, [2]i32{ 1, 0 });
+    return @as(Vec2, @splat(rotor[0])) * v + Vec2{ -rotor[1], rotor[1] } * swapped;
+}
 
 comptime {
     std.debug.assert(@sizeOf(Motor) == 16);
@@ -381,6 +418,25 @@ test "Motor round-trip: reverse recovers original point" {
     const back = rot.reverse().apply(tr.reverse().apply(forward));
     try testing.expectApproxEqAbs(original[0], back[0], 1e-4);
     try testing.expectApproxEqAbs(original[1], back[1], 1e-4);
+}
+
+test "Motor.reverse inverts composed motor directly" {
+    const m = Motor.compose(
+        Motor.fromRotationAbout(0.8, 3.0, -4.0),
+        Motor.compose(Motor.fromTranslation(12.0, -7.0), Motor.fromRotation(-0.35)),
+    );
+    const points = [_][2]f32{
+        .{ 0, 0 },
+        .{ 1, -2 },
+        .{ 128, 64 },
+    };
+
+    const inverse = m.reverse();
+    for (points) |point| {
+        const round_trip = inverse.apply(m.apply(point));
+        try testing.expectApproxEqAbs(point[0], round_trip[0], 1.0e-4);
+        try testing.expectApproxEqAbs(point[1], round_trip[1], 1.0e-4);
+    }
 }
 
 test "Motor.fromRotationAbout: center is fixed point" {

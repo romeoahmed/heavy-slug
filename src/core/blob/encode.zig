@@ -4,6 +4,7 @@ const std = @import("std");
 const format = @import("format.zig");
 const decode = @import("decode.zig");
 const regularize = @import("../outline/regularize.zig");
+const outline_area = @import("../outline/area.zig");
 
 const RegularizedCubicSpan = regularize.RegularizedCubicSpan;
 
@@ -265,57 +266,8 @@ fn dequantize(v: i16) f64 {
 }
 
 fn fillSignCubics(curve_spans: []const RegularizedCubicSpan) i16 {
-    const area = signedAreaCubics(curve_spans);
+    const area = outline_area.signedArea(curve_spans);
     return if (area < 0) -1 else 1;
-}
-
-fn signedAreaCubics(curve_spans: []const RegularizedCubicSpan) f64 {
-    var area: f64 = 0;
-    for (curve_spans) |curve| area += cubicSignedArea(curve);
-    return area;
-}
-
-fn cubicSignedArea(curve: RegularizedCubicSpan) f64 {
-    const mid: f64 = 0.5;
-    const half: f64 = 0.5;
-    const root: f64 = 0.7745966692414834;
-    return half * (5.0 / 9.0 * greenIntegrand(curve, mid - half * root) +
-        8.0 / 9.0 * greenIntegrand(curve, mid) +
-        5.0 / 9.0 * greenIntegrand(curve, mid + half * root));
-}
-
-fn greenIntegrand(curve: RegularizedCubicSpan, t: f64) f64 {
-    const p = cubicPoint(curve, t);
-    const d = cubicDerivative(curve, t);
-    return 0.5 * (p.x * d.y - p.y * d.x);
-}
-
-fn cubicPoint(curve: RegularizedCubicSpan, t: f64) regularize.Point {
-    const a = lerpPoint(curve.p0, curve.p1, t);
-    const b = lerpPoint(curve.p1, curve.p2, t);
-    const c = lerpPoint(curve.p2, curve.p3, t);
-    const d = lerpPoint(a, b, t);
-    const e = lerpPoint(b, c, t);
-    return lerpPoint(d, e, t);
-}
-
-fn cubicDerivative(curve: RegularizedCubicSpan, t: f64) regularize.Point {
-    const u = 1.0 - t;
-    return .{
-        .x = 3.0 * (u * u * (curve.p1.x - curve.p0.x) +
-            2.0 * u * t * (curve.p2.x - curve.p1.x) +
-            t * t * (curve.p3.x - curve.p2.x)),
-        .y = 3.0 * (u * u * (curve.p1.y - curve.p0.y) +
-            2.0 * u * t * (curve.p2.y - curve.p1.y) +
-            t * t * (curve.p3.y - curve.p2.y)),
-    };
-}
-
-fn lerpPoint(a: regularize.Point, b: regularize.Point, t: f64) regularize.Point {
-    return .{
-        .x = a.x + (b.x - a.x) * t,
-        .y = a.y + (b.y - a.y) * t,
-    };
 }
 
 fn addU32(a: u32, b: u32) Error!u32 {
@@ -403,4 +355,27 @@ test "blob encode: stores glyph fill direction in header" {
 
     try std.testing.expectEqual(@as(i16, 1), ccw_blob.texels[1].g);
     try std.testing.expectEqual(@as(i16, -1), cw_blob.texels[1].g);
+}
+
+test "blob encode: fill direction uses exact cubic area" {
+    const negative = [_]RegularizedCubicSpan{.{
+        .p0 = .{ .x = 0, .y = 0 },
+        .p1 = .{ .x = 0, .y = 1 },
+        .p2 = .{ .x = 1, .y = 1 },
+        .p3 = .{ .x = 1, .y = 0 },
+    }};
+    const positive = [_]RegularizedCubicSpan{.{
+        .p0 = .{ .x = 1, .y = 0 },
+        .p1 = .{ .x = 1, .y = 1 },
+        .p2 = .{ .x = 0, .y = 1 },
+        .p3 = .{ .x = 0, .y = 0 },
+    }};
+
+    var negative_blob = try curves(std.testing.allocator, &negative);
+    defer negative_blob.deinit();
+    var positive_blob = try curves(std.testing.allocator, &positive);
+    defer positive_blob.deinit();
+
+    try std.testing.expectEqual(@as(i16, -1), negative_blob.texels[1].g);
+    try std.testing.expectEqual(@as(i16, 1), positive_blob.texels[1].g);
 }

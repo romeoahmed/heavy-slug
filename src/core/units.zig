@@ -6,6 +6,8 @@ const pga = @import("../math/pga.zig");
 pub const hb_subpixels_per_pixel: f32 = 64.0;
 pub const blob_units_per_pixel: f32 = 4.0;
 
+const Vec4 = @Vector(4, f32);
+
 pub fn hb26p6ToPixels(value: i32) f32 {
     return @as(f32, @floatFromInt(value)) / hb_subpixels_per_pixel;
 }
@@ -23,20 +25,15 @@ pub fn blobUnitsToPixels(value: i16) f32 {
 }
 
 pub fn motorPixelsToHb26p6(motor: pga.Motor) pga.Motor {
-    return .{ .m = .{
-        motor.m[0],
-        motor.m[1],
-        motor.m[2] * hb_subpixels_per_pixel,
-        motor.m[3] * hb_subpixels_per_pixel,
-    } };
+    const scale: Vec4 = .{ 1.0, 1.0, hb_subpixels_per_pixel, hb_subpixels_per_pixel };
+    return .{ .m = @as(Vec4, motor.m) * scale };
 }
 
 pub fn projectionPixelsToHb26p6(projection: [4][4]f32) [4][4]f32 {
     var result = projection;
-    for (0..4) |j| {
-        result[0][j] /= hb_subpixels_per_pixel;
-        result[1][j] /= hb_subpixels_per_pixel;
-    }
+    const scale: Vec4 = @splat(1.0 / hb_subpixels_per_pixel);
+    result[0] = @as(Vec4, result[0]) * scale;
+    result[1] = @as(Vec4, result[1]) * scale;
     return result;
 }
 

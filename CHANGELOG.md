@@ -56,6 +56,12 @@ implementation notes belong in commits and code review history.
   fixed per-frame queue cap, deferred retirement compacts in one pass, and the
   byte pool reclaims tail frees to reduce fragmentation.
 
+### Fixed
+
+- **CPU transform math corrected:** composed 2D PGA motors now invert directly
+  through `Motor.reverse()`, and cubic outline area uses an exact Bezier
+  integral shared by blob fill-sign encoding.
+
 ### Removed
 
 - **ReleaseFast CI job removed:** release-mode build verification is no longer
