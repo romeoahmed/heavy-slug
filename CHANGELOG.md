@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking font-wrapper cleanup:** HarfBuzz/FreeType Zig wrappers now use
+  Zig-style `init`/`deinit`/`len` naming, shape buffer writes report allocation
+  failures, and `hb.Font.fromFace()` takes a sized `ft.Face` instead of a raw
+  `FT_Face` handle.
+- **Bundled C library build tightened:** FreeType now uses generated
+  outline-focused `ftmodule`/`ftoption` config headers, and HarfBuzz is built
+  with the same bundled-FreeType feature macros its official Meson build would
+  enable for variable coordinates and face transforms.
+
 ## [3.1.0] - 2026-05-17
 
 ### Changed

@@ -62,6 +62,11 @@ dependencies in `build.zig.zon` and are built statically by the Zig build; do
 not require contributors to install system FreeType or HarfBuzz for normal
 builds.
 
+The bundled FreeType build is outline-focused for analytic text rendering. Keep
+its generated `ftmodule`/`ftoption` config in `build/c_libs.zig` aligned with
+the compiled source list, and do not reintroduce bitmap/compression/SVG helper
+dependencies without updating `README.md` and `CHANGELOG.md`.
+
 `slangc` must be on `PATH` for shader steps, backend builds, backend tests, and
 demos. Core-only `zig build` and `zig build test` do not require `slangc`.
 

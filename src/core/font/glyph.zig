@@ -13,7 +13,7 @@ pub const EncodedGlyph = struct {
     outline_segments: u32,
     regularized_spans: u32,
 
-    pub fn destroy(self: EncodedGlyph) void {
+    pub fn deinit(self: EncodedGlyph) void {
         var blob = self.blob;
         blob.deinit();
     }
@@ -57,8 +57,8 @@ test "GlyphEncoder: captures native outlines and encodes CoverageBlob" {
     defer face.deinit();
     try face.setPixelSizes(0, 32);
 
-    const font = try hb.Font.createFromFtFace(face.rawHandle());
-    defer font.destroy();
+    const font = try hb.Font.fromFace(face);
+    defer font.deinit();
 
     var plan = try shape.ShapePlan.init();
     defer plan.deinit();
@@ -69,7 +69,7 @@ test "GlyphEncoder: captures native outlines and encodes CoverageBlob" {
     defer encoder.deinit();
 
     const encoded = try encoder.encodeGlyph(font, glyph_id);
-    defer encoded.destroy();
+    defer encoded.deinit();
 
     try std.testing.expect(encoded.data.len > 0);
     try std.testing.expect(encoder.outline_encoder.capture.stream.segments.items.len > 0);

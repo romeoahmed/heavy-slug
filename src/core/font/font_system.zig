@@ -15,7 +15,7 @@ pub const LoadedFont = struct {
 
     pub fn deinit(self: *LoadedFont) void {
         self.encoder.deinit();
-        self.font.destroy();
+        self.font.deinit();
         self.face.deinit();
         self.* = undefined;
     }
@@ -53,8 +53,8 @@ pub const FontSystem = struct {
         errdefer face.deinit();
         try face.setPixelSizes(0, options.size_px);
 
-        const font = try hb.Font.createFromFtFace(face.rawHandle());
-        errdefer font.destroy();
+        const font = try hb.Font.fromFace(face);
+        errdefer font.deinit();
 
         var encoder = try glyph.GlyphEncoder.init(self.allocator);
         errdefer encoder.deinit();
@@ -95,6 +95,6 @@ test "FontSystem shapes and encodes through explicit plan" {
     try std.testing.expectEqual(@as(usize, 1), run.infos.len);
 
     const encoded = try loaded.encodeGlyph(run.infos[0].codepoint);
-    defer encoded.destroy();
+    defer encoded.deinit();
     try std.testing.expect(encoded.data.len > 0);
 }

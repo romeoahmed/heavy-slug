@@ -28,7 +28,7 @@ pub fn build(b: *std.Build) void {
         null;
 
     const c_deps = c_libs.resolveCoreDeps(b);
-    const ft_lib = c_libs.buildFreetype(b, opts.target, opts.optimize, c_deps.freetype);
+    const ft_lib = c_libs.buildFreetype(b, opts.target, opts.optimize, c_deps);
     const hb_lib = c_libs.buildHarfbuzz(b, opts.target, opts.optimize, c_deps, ft_lib);
     const c_mod = c_libs.translateHeavySlugC(b, opts.target, opts.optimize, c_deps);
     core_mod.addImport("heavy_slug_c", c_mod);

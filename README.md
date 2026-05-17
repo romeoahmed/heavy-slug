@@ -128,6 +128,11 @@ Important dependency facts:
 
 - FreeType and HarfBuzz are pinned source packages in `build.zig.zon` and are
   built statically; system FreeType/HarfBuzz installs are not required.
+- The bundled FreeType build is intentionally outline-focused: it compiles the
+  scalable TrueType/OpenType, CFF/CID, Type 1, and Type42 loaders used through
+  HarfBuzz `hb-ft`, and disables bitmap/compression/SVG helper dependencies
+  such as zlib, bzip2, libpng, Brotli, and FreeType's own HarfBuzz auto-hint
+  integration.
 - `slangc` is needed for shader generation, backend builds/tests, demos, and
   reflected GPU ABI generation.
 - `vulkan`, `vulkan_headers`, and `glfw_src` are lazy dependencies; core-only

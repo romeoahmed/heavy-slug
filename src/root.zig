@@ -53,7 +53,7 @@ test "integration: shape text and encode all unique glyphs" {
         try seen.put(info.codepoint, {});
 
         const encoded = try loaded.encodeGlyph(info.codepoint);
-        defer encoded.destroy();
+        defer encoded.deinit();
 
         if (encoded.data.len > 0) {
             try std.testing.expect(encoded.extents.width != 0);

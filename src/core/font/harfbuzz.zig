@@ -5,6 +5,9 @@ pub const c = ft.c;
 pub const Error = error{
     HarfBuzzBufferCreateFailed,
     HarfBuzzAllocationFailed,
+    HarfBuzzFontCreateFailed,
+    HarfBuzzFaceNotSized,
+    HarfBuzzTextTooLong,
 };
 
 /// Zig-native wrapper for hb_direction_t.
@@ -41,7 +44,7 @@ pub const Buffer = struct {
     pub const GlyphInfo = c.hb_glyph_info_t;
     pub const GlyphPosition = c.hb_glyph_position_t;
 
-    pub fn create() Error!Buffer {
+    pub fn init() Error!Buffer {
         const buf = c.hb_buffer_create() orelse return error.HarfBuzzBufferCreateFailed;
         if (c.hb_buffer_allocation_successful(buf) == 0) {
             c.hb_buffer_destroy(buf);
@@ -50,22 +53,24 @@ pub const Buffer = struct {
         return .{ .handle = buf };
     }
 
-    pub fn destroy(self: Buffer) void {
+    pub fn deinit(self: Buffer) void {
         c.hb_buffer_destroy(self.handle);
     }
 
-    pub fn addUtf8(self: Buffer, text: []const u8) void {
+    pub fn addUtf8(self: Buffer, text: []const u8) Error!void {
+        const byte_len = std.math.cast(c_int, text.len) orelse return error.HarfBuzzTextTooLong;
         c.hb_buffer_add_utf8(
             self.handle,
             text.ptr,
-            @intCast(text.len),
+            byte_len,
             0,
-            @intCast(text.len),
+            byte_len,
         );
+        try self.ensureAllocated();
     }
 
-    pub fn getLength(self: Buffer) u32 {
-        return c.hb_buffer_get_length(self.handle);
+    pub fn len(self: Buffer) usize {
+        return @intCast(c.hb_buffer_get_length(self.handle));
     }
 
     pub fn setDirection(self: Buffer, dir: Direction) void {
@@ -82,97 +87,114 @@ pub const Buffer = struct {
     }
 
     /// Get shaped glyph info array. Valid until buffer is modified.
-    pub fn getGlyphInfos(self: Buffer) []const GlyphInfo {
-        var len: c_uint = 0;
-        const ptr = c.hb_buffer_get_glyph_infos(self.handle, &len);
-        if (len == 0) return &.{};
-        return @as([*]const GlyphInfo, @ptrCast(ptr))[0..len];
+    pub fn glyphInfos(self: Buffer) []const GlyphInfo {
+        var glyph_count: c_uint = 0;
+        const ptr = c.hb_buffer_get_glyph_infos(self.handle, &glyph_count);
+        if (glyph_count == 0) return &.{};
+        return @as([*]const GlyphInfo, @ptrCast(ptr))[0..glyph_count];
     }
 
     /// Get shaped glyph position array. Valid until buffer is modified.
-    pub fn getGlyphPositions(self: Buffer) []const GlyphPosition {
-        var len: c_uint = 0;
-        const ptr = c.hb_buffer_get_glyph_positions(self.handle, &len);
-        if (len == 0) return &.{};
-        return @as([*]const GlyphPosition, @ptrCast(ptr))[0..len];
+    pub fn glyphPositions(self: Buffer) []const GlyphPosition {
+        var glyph_count: c_uint = 0;
+        const ptr = c.hb_buffer_get_glyph_positions(self.handle, &glyph_count);
+        if (glyph_count == 0) return &.{};
+        return @as([*]const GlyphPosition, @ptrCast(ptr))[0..glyph_count];
     }
 
     /// Reset buffer content and segment properties for reuse.
     pub fn reset(self: Buffer) void {
         c.hb_buffer_reset(self.handle);
     }
+
+    fn ensureAllocated(self: Buffer) Error!void {
+        if (c.hb_buffer_allocation_successful(self.handle) == 0) {
+            return error.HarfBuzzAllocationFailed;
+        }
+    }
 };
 
 pub const Font = struct {
     handle: *c.hb_font_t,
 
-    /// Create a HarfBuzz font from a raw FT_Face handle.
-    /// Uses hb_ft_font_create_referenced — HarfBuzz takes a reference to the face,
-    /// so the caller must keep the FT_Face alive for the lifetime of this Font.
-    pub fn createFromFtFace(ft_face: c.FT_Face) !Font {
-        const hb_font = c.hb_ft_font_create_referenced(ft_face) orelse return error.HarfBuzzAllocationFailed;
+    /// Create a HarfBuzz font from a sized FreeType face.
+    /// hb_ft_font_create_referenced takes its own FT_Face reference; the
+    /// wrapper still destroys the hb_font before its owning Face for clarity.
+    pub fn fromFace(face: ft.Face) Error!Font {
+        if (!face.isSized()) return error.HarfBuzzFaceNotSized;
+        const hb_font = c.hb_ft_font_create_referenced(face.handle) orelse return error.HarfBuzzFontCreateFailed;
         return .{ .handle = hb_font };
     }
 
-    pub fn destroy(self: Font) void {
+    pub fn deinit(self: Font) void {
         c.hb_font_destroy(self.handle);
     }
 };
 
 /// Shape text in `buf` using `font`. After calling, use
-/// buf.getGlyphInfos() and buf.getGlyphPositions() to read results.
-pub fn shape(font: Font, buf: Buffer) void {
+/// buf.glyphInfos() and buf.glyphPositions() to read results.
+pub fn shape(font: Font, buf: Buffer) Error!void {
     c.hb_shape(font.handle, buf.handle, null, 0);
+    try buf.ensureAllocated();
 }
 
 const test_font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
 
-test "create and destroy HarfBuzz buffer" {
-    const buf = try Buffer.create();
-    defer buf.destroy();
+test "init and deinit HarfBuzz buffer" {
+    const buf = try Buffer.init();
+    defer buf.deinit();
 }
 
 test "add UTF-8 text to buffer" {
-    const buf = try Buffer.create();
-    defer buf.destroy();
-    buf.addUtf8("hello");
-    try std.testing.expectEqual(@as(u32, 5), buf.getLength());
+    const buf = try Buffer.init();
+    defer buf.deinit();
+    try buf.addUtf8("hello");
+    try std.testing.expectEqual(@as(usize, 5), buf.len());
 }
 
 test "set direction and script" {
-    const buf = try Buffer.create();
-    defer buf.destroy();
+    const buf = try Buffer.init();
+    defer buf.deinit();
     buf.setDirection(.ltr);
     buf.setScript(.latin);
-    buf.addUtf8("test");
-    try std.testing.expectEqual(@as(u32, 4), buf.getLength());
+    try buf.addUtf8("test");
+    try std.testing.expectEqual(@as(usize, 4), buf.len());
 }
 
-test "Font: create from FT_Face and shape text" {
+test "Font: create from sized FreeType face and shape text" {
     const ft_lib = try ft.Library.init();
     defer ft_lib.deinit();
     const ft_face = ft.Face.init(ft_lib, test_font_path, 0) catch return;
     defer ft_face.deinit();
     try ft_face.setPixelSizes(0, 32);
 
-    const font = try Font.createFromFtFace(ft_face.rawHandle());
-    defer font.destroy();
+    const font = try Font.fromFace(ft_face);
+    defer font.deinit();
 
-    const buf = try Buffer.create();
-    defer buf.destroy();
+    const buf = try Buffer.init();
+    defer buf.deinit();
     buf.setDirection(.ltr);
     buf.setScript(.latin);
-    buf.addUtf8("AB");
-    shape(font, buf);
+    try buf.addUtf8("AB");
+    try shape(font, buf);
 
-    const infos = buf.getGlyphInfos();
+    const infos = buf.glyphInfos();
     try std.testing.expectEqual(@as(usize, 2), infos.len);
     try std.testing.expect(infos[0].codepoint != 0);
     try std.testing.expect(infos[1].codepoint != 0);
 
-    const positions = buf.getGlyphPositions();
+    const positions = buf.glyphPositions();
     try std.testing.expectEqual(@as(usize, 2), positions.len);
     try std.testing.expect(positions[0].x_advance > 0);
+}
+
+test "Font: rejects unsized FreeType face" {
+    const ft_lib = try ft.Library.init();
+    defer ft_lib.deinit();
+    const ft_face = ft.Face.init(ft_lib, test_font_path, 0) catch return;
+    defer ft_face.deinit();
+
+    try std.testing.expectError(error.HarfBuzzFaceNotSized, Font.fromFace(ft_face));
 }
 
 pub const GlyphExtents = c.hb_glyph_extents_t;
@@ -181,27 +203,27 @@ pub const Blob = struct {
     handle: *c.hb_blob_t,
 
     /// Get the raw blob data as a byte slice.
-    pub fn getData(self: Blob) []const u8 {
-        var len: c_uint = 0;
-        const ptr = c.hb_blob_get_data(self.handle, &len);
-        if (len == 0) return &.{};
-        return @as([*]const u8, @ptrCast(ptr))[0..len];
+    pub fn data(self: Blob) []const u8 {
+        var byte_count: c_uint = 0;
+        const ptr = c.hb_blob_get_data(self.handle, &byte_count);
+        if (byte_count == 0) return &.{};
+        return @as([*]const u8, @ptrCast(ptr))[0..byte_count];
     }
 
-    pub fn getLength(self: Blob) u32 {
-        return c.hb_blob_get_length(self.handle);
+    pub fn len(self: Blob) usize {
+        return @intCast(c.hb_blob_get_length(self.handle));
     }
 
-    pub fn destroy(self: Blob) void {
+    pub fn deinit(self: Blob) void {
         c.hb_blob_destroy(self.handle);
     }
 };
 
 test "Buffer.reset clears contents" {
-    const buf = try Buffer.create();
-    defer buf.destroy();
-    buf.addUtf8("hello");
-    try std.testing.expectEqual(@as(u32, 5), buf.getLength());
+    const buf = try Buffer.init();
+    defer buf.deinit();
+    try buf.addUtf8("hello");
+    try std.testing.expectEqual(@as(usize, 5), buf.len());
     buf.reset();
-    try std.testing.expectEqual(@as(u32, 0), buf.getLength());
+    try std.testing.expectEqual(@as(usize, 0), buf.len());
 }

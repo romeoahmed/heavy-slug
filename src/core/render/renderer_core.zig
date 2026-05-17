@@ -322,7 +322,7 @@ pub const RendererCore = struct {
     ) !CachedGlyph {
         const encoded = font_entry.loaded.encodeGlyph(cache_key.glyph_id) catch
             return Error.ShapingFailed;
-        defer encoded.destroy();
+        defer encoded.deinit();
         if (@import("builtin").mode == .Debug) {
             self.stats.glyphs_encoded += 1;
             self.stats.outline_segments += encoded.outline_segments;
