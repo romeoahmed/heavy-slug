@@ -8,35 +8,36 @@
 
 `heavy-slug` is a Zig 0.16 GPU text rendering library for analytic,
 resolution-independent text. It shapes Unicode with HarfBuzz, captures native
-font outlines, encodes cubic coverage blobs, and renders those blobs with task,
-mesh, and fragment shaders on Vulkan 1.4 and Metal 4.
+font outlines through FreeType, encodes compact cubic coverage blobs, and draws
+them with task, mesh, and fragment shaders on Vulkan 1.4 and Metal 4.
 
-It starts from the [Slug algorithm](https://jcgt.org/published/0006/02/02/),
-then takes a modern path: cubic-native analytics, mesh/task shader culling, one
-glyph-pool buffer, generated GPU ABI, and shared Slang sources for Vulkan and
-Metal.
+The project is inspired by the
+[Slug algorithm](https://jcgt.org/published/0006/02/02/), but the implementation
+is intentionally modern: cubic-native outline data, conservative GPU culling,
+host-owned graphics lifetimes, generated GPU ABI structs, and shared Slang 2026
+shader sources.
 
 ```text
-HarfBuzz shaping -> native outlines -> cubic blobs -> mesh/task culling -> analytic coverage
+UTF-8 text -> HarfBuzz shaping -> font outlines -> cubic blobs -> GPU culling -> analytic coverage
 ```
 
-| Design promise | What it means |
+| Design promise | Practical effect |
 | --- | --- |
-| Analytic until the fragment shader | No CPU glyph raster atlas or SDF reconstruction step. |
-| Backend opt-in | Core builds do not fetch Vulkan, Metal, window-system code, or `slangc`. |
-| Host-owned graphics lifecycle | Applications keep control of devices, queues, swapchains, and frame completion. |
-| Reflection-owned ABI | Slang reflection generates the Zig GPU structs consumed by backends. |
+| Analytic text | No CPU glyph atlas or SDF reconstruction path. |
+| Explicit ownership | Applications keep their windows, devices, queues, and frame pacing. |
+| Opt-in backends | Core builds stay free of Vulkan, Metal, `slangc`, and window-system deps. |
+| Shared shader model | Vulkan and Metal consume the same Slang source layout. |
 
 ## Quick Start
 
 | Goal | Command | Notes |
 | --- | --- | --- |
-| Core build | `zig build` | No GPU backend, no `slangc` needed. |
-| Core tests | `zig build test` | Builds pinned FreeType/HarfBuzz source deps. |
-| Vulkan tests | `zig build test -Dvulkan=true` | Needs `slangc`; supported on Windows/Linux targets. |
-| Metal tests | `zig build test -Dmetal=true` | Needs macOS + Metal 4 SDK + `slangc`. |
-| SPIR-V shaders | `zig build spirv` | Emits SPIR-V 1.6 shader outputs. |
-| Metal shaders | `zig build msl` | Emits Metal Shading Language outputs. |
+| Core build | `zig build` | Builds the backend-neutral library. |
+| Core tests | `zig build test` | No shader compiler or GPU SDK required. |
+| Vulkan tests | `zig build test -Dvulkan=true` | Requires `slangc` and Vulkan packages. |
+| Metal tests | `zig build test -Dmetal=true` | macOS only; requires Metal 4 SDK and `slangc`. |
+| SPIR-V shaders | `zig build spirv` | Installs SPIR-V 1.6 outputs under `zig-out/`. |
+| Metal shaders | `zig build msl` | Installs Metal shader outputs under `zig-out/`. |
 
 <details>
 <summary>Demo commands</summary>
@@ -46,7 +47,7 @@ zig build run -Ddemo=true -Ddemo-backend=vulkan
 zig build run -Ddemo=true -Ddemo-backend=metal
 ```
 
-`-Ddemo-backend=auto` resolves to Vulkan on Windows/Linux and Metal on macOS.
+`-Ddemo-backend=auto` selects Vulkan on Windows/Linux and Metal on macOS.
 
 </details>
 
@@ -54,7 +55,7 @@ zig build run -Ddemo=true -Ddemo-backend=metal
 <summary>Useful verification commands</summary>
 
 ```bash
-zig fmt --check build.zig src/ tools/
+zig fmt --check build.zig build/ src/ tools/
 zig build test
 zig build test -Dvulkan=true
 zig build test -Dmetal=true
@@ -84,27 +85,19 @@ zig build -Doptimize=ReleaseFast
 
 ## Why It Exists
 
-Text rendering usually asks you to choose between a fast cached approximation
-and a precise but geometry-heavy path. `heavy-slug` is built around a different
-tradeoff: keep compact outline data on the GPU, cull aggressively, and compute
-coverage analytically where pixels are finally known.
+High-quality text rendering is usually forced into one of three buckets: cached
+bitmaps, signed-distance fields, or dense outline geometry. `heavy-slug` takes a
+different route: keep outline coverage data compact, make the GPU reject work
+that cannot affect a pixel, and evaluate coverage analytically at the end.
 
-| Common text path | Typical tradeoff | `heavy-slug` path |
+| Common path | Typical cost | `heavy-slug` path |
 | --- | --- | --- |
-| CPU raster atlas | Atlas invalidation, scale artifacts | Analytic coverage from outline blobs. |
-| Signed-distance field | Reconstruction artifacts | Direct cubic crossing and integration. |
-| Outline tessellation | Geometry cost, MSAA dependence | Mesh/task culling plus analytic fragment coverage. |
+| Raster atlas | Scale artifacts and atlas churn | Reusable outline blobs. |
+| SDF/MSDF | Reconstruction artifacts | Direct analytic coverage. |
+| Tessellated outlines | More geometry and MSAA pressure | Mesh/task culling plus fragment integration. |
 
-Core highlights:
-
-| Highlight | Meaning |
-| --- | --- |
-| Cubic-native coverage | TrueType quadratics are raised to cubics; CFF/CFF2 cubics stay cubic. |
-| Conservative h-band culling | Task/mesh stages reduce work only after proving regions are empty. |
-| Single glyph-pool buffer | `GlyphBlobRef` is a byte offset; there are no per-glyph descriptors. |
-| Host-owned GPU state | Applications own devices, queues, swapchains, windows, and frame completion. |
-| Shared Slang source | Vulkan SPIR-V and Metal MSL come from the same shader modules. |
-| Reflection ABI | GPU structs are generated from Slang reflection by `tools/layout_gen.zig`. |
+The core library focuses on text preparation and cache ownership. It does not
+try to be a windowing toolkit, application framework, or GPU device manager.
 
 ## Architecture At A Glance
 
@@ -114,91 +107,56 @@ Application
       |
       v
 Backend module: heavy_slug_vulkan or heavy_slug_metal
-  owns GPU buffers, pipeline objects, frame submission glue
+  owns GPU buffers, pipelines, and backend submission glue
       |
       v
 Core module: heavy_slug
-  shapes text, captures outlines, encodes blobs, manages cache, emits instances
+  shapes text, encodes glyphs, manages cache metadata, emits draw batches
       |
       v
 Task -> Mesh -> Fragment shaders
-  cull glyph bands, tighten strips, integrate analytic coverage
+  cull glyph work, emit compact meshlets, integrate analytic coverage
 ```
 
 | Layer | Owns | Does not own |
 | --- | --- | --- |
-| `heavy_slug` | Shaping, outline encoding, cache metadata, backend-neutral batches. | GPU context, window, swapchain. |
-| `heavy_slug_vulkan` | Vulkan glyph pool, push frame bindings, pipeline, draw recording. | Instance, surface, swapchain, queue submission policy. |
-| `heavy_slug_metal` | Metal 4 bridge objects, argument tables, pipeline, buffers. | Cocoa app lifecycle. |
-| Demo code | Native Win32, Wayland, and Cocoa hosts plus shared scene input. | Core library behavior. |
-
-The important boundary is ownership: `heavy_slug` prepares text work, while the
-application remains the graphics host.
+| `heavy_slug` | Fonts, shaping, outline encoding, cache metadata, backend-neutral batches. | GPU context, swapchain, command queue, window. |
+| `heavy_slug_vulkan` | Vulkan buffers, pipeline state, frame binding, draw recording. | Instance, surface, swapchain, queue policy. |
+| `heavy_slug_metal` | Metal bridge state, buffers, pipeline state, frame slots. | Cocoa app lifecycle. |
+| Demo code | Native Win32, Wayland, Cocoa hosts, and shared scene/input helpers. | Library API policy. |
 
 ## Build Dependencies
 
-The table below reflects `build.zig`, `build/`, `build.zig.zon`, and the CI
-workflow.
-
-| Target | Required to build | Extra for demo/runtime |
+| Area | Build requirements | Runtime/demo requirements |
 | --- | --- | --- |
-| Core, all platforms | Zig `0.16.0`; C/C++ toolchain; first-build network access for pinned Zig packages. | No `slangc`, Vulkan, Metal, or window-system dependencies required. |
-| Vulkan backend, Linux | Zig; `slangc` with Slang 2026 and SPIR-V 1.6 support; lazy `vulkan_headers`; lazy `vulkan-zig`. | Vulkan loader/driver; Vulkan 1.4; core `pushDescriptor`; `VK_EXT_mesh_shader`; task/mesh features; sufficient mesh limits. |
-| Vulkan demo, Linux | Vulkan backend deps; `wayland-scanner`; `wayland-client` and `xkbcommon` headers/libraries; `wayland-protocols` xdg-shell, viewporter, and fractional-scale XML. | Wayland-capable desktop/session; Vulkan loader/runtime loaded at startup; client-side decorations are drawn with `wl_subsurface`/`wl_shm`. |
-| Vulkan backend/demo, Windows | Zig; `slangc` with Slang 2026 and SPIR-V 1.6 support; lazy `vulkan_headers`; lazy `vulkan-zig`; Win32 `user32`. | Vulkan loader/runtime loaded at startup; DWM dark-titlebar support loaded from `dwmapi.dll`; Vulkan 1.4 driver; core `pushDescriptor`; `VK_EXT_mesh_shader`. |
-| Metal backend, macOS | Zig; `slangc` with Slang 2026 and `metallib_4_0` support; Apple SDK with Metal 4 APIs; Objective-C++ support; `Metal`, `QuartzCore`, `Foundation`. | GPU supporting `MTLGPUFamilyMetal4`; host supplies `id<MTLDevice>`, `id<MTL4CommandQueue>`, `CAMetalLayer *`. |
-| Metal demo, macOS | Metal backend deps; native Cocoa `NSWindow` host. | `Cocoa`, `QuartzCore`, `Metal`, `Foundation`. |
+| Core | Zig `0.16.0`, C/C++ toolchain, pinned package fetch on first build. | None beyond the embedding application. |
+| Shaders and backends | `slangc` with Slang 2026 support. | Backend-specific GPU runtime. |
+| Vulkan backend | Lazy `vulkan-zig` and Vulkan Headers packages. | Vulkan 1.4, mesh shaders, dynamic rendering, push descriptors. |
+| Windows Vulkan demo | Native Win32 host; links `user32`; loads the Vulkan loader at runtime. | Vulkan-capable Windows 11 system. |
+| Linux Vulkan demo | `wayland-scanner`, `wayland-client`, `xkbcommon`, and xdg-shell/viewporter/fractional-scale protocol XML. | Modern Wayland session and Vulkan loader/driver. |
+| Metal backend/demo | macOS, Apple SDK with Metal 4 APIs, Objective-C++ support, `Metal`, `QuartzCore`, `Foundation`, and `Cocoa` for the demo. | Metal 4 capable device and native Cocoa host. |
 
 Important dependency facts:
 
-- FreeType and HarfBuzz are pinned source packages in `build.zig.zon` and are
-  built statically; system FreeType/HarfBuzz installs are not required.
-- The bundled FreeType build is intentionally outline-focused: it compiles the
-  scalable TrueType/OpenType, CFF/CID, Type 1, and Type42 loaders used through
-  HarfBuzz `hb-ft`, and disables bitmap/compression/SVG helper dependencies
-  such as zlib, bzip2, libpng, Brotli, and FreeType's own HarfBuzz auto-hint
-  integration.
-- `slangc` is needed for shader generation, backend builds/tests, demos, and
-  reflected GPU ABI generation. The shader build uses explicit Slang 2026
-  modules, warning-as-error diagnostics, restrictive capability checks, and
-  source-declared `[shader(...)]` entry points.
-- `vulkan` and `vulkan_headers` are lazy dependencies; core-only builds do not
-  fetch them.
-- The Vulkan demo does not link a Vulkan import library. Its platform layer
-  loads the system Vulkan loader at startup and then uses `vkGetInstanceProcAddr`.
-- The Windows demo intentionally stays on direct Win32 rather than WinRT or
-  Windows App SDK UI layers because Vulkan WSI needs an `HWND` and the demo's
-  job is window/surface/input hosting, not application UI composition. It still
-  follows the scene's light/dark toggle for the non-client title bar through
-  `DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE)` and handles per-monitor
-  DPI changes through the normal `WM_DPICHANGED` resize path. Initial demo
-  dimensions are treated as logical pixels and converted with the window's
-  `GetDpiForWindow()` value after Windows has assigned the hidden window to a
-  monitor.
-- Linux demo builds use xdg-shell, viewporter, and fractional-scale protocol
-  sources generated by `wayland-scanner`. Override
-  `-Dwayland-scanner=` or `-Dwayland-protocols-dir=` when those tools live
-  outside the default Linux paths. Keyboard events use `xkbcommon` keymaps from
-  `wl_keyboard.keymap`, with raw evdev keycodes only as a fallback.
-- The Wayland demo requires `fractional-scale-v1` and `wp_viewporter`. It keeps
-  xdg-shell window sizes in surface-local logical coordinates, renders the
-  Vulkan swapchain and client-side decoration shm buffers at the
-  compositor-preferred fractional scale, then maps those buffers back to the
-  logical surface size with `wp_viewport`.
-- The Wayland demo always draws a small client-side frame using Wayland core
-  `wl_subsurface` and `wl_shm`, then delegates drag/resize to xdg-shell
-  `move`/`resize` requests. Decoration buffers are bounded per decoration part
-  and wait for `wl_buffer.release` before reuse or teardown.
-- The macOS demo installs a minimal Cocoa app menu with About, Close Window,
-  and Quit actions while keeping the window chrome native and leaving Metal
-  device, command queue, and `CAMetalLayer` ownership inside the demo host.
+- FreeType and HarfBuzz are pinned source dependencies in `build.zig.zon` and
+  are built statically by the Zig build. Normal builds do not require system
+  FreeType or HarfBuzz packages.
+- Core-only `zig build` and `zig build test` do not require `slangc`, Vulkan,
+  Metal, Wayland, Cocoa, or a window toolkit.
+- Vulkan and Vulkan Headers stay lazy; they are fetched only when the Vulkan
+  backend or Vulkan demo is requested.
+- The demo hosts are deliberately native: Win32 on Windows, Wayland on Linux,
+  and Cocoa on macOS. GLFW/SDL-style toolkit dependencies are not part of the
+  current build model.
+- Linux demo builds can override tool locations with `-Dwayland-scanner=` and
+  `-Dwayland-protocols-dir=`.
 
 ## Public Modules
 
 | Module | Enabled by | Purpose |
 | --- | --- | --- |
 | `heavy_slug` | default | Core public types and backend-neutral renderer logic. |
-| `heavy_slug_vulkan` | `-Dvulkan=true` or Vulkan demo | Vulkan 1.4 / SPIR-V 1.6 mesh-shader backend. |
+| `heavy_slug_vulkan` | `-Dvulkan=true` or Vulkan demo | Vulkan 1.4 / SPIR-V 1.6 backend. |
 | `heavy_slug_metal` | `-Dmetal=true` or Metal demo | macOS Metal 4 backend. |
 
 Stable top-level core exports include `FontHandle`, `FontSource`,
@@ -207,73 +165,32 @@ Stable top-level core exports include `FontHandle`, `FontSource`,
 
 Backend modules expose `Context`, `Renderer`, `Frame`, `Target`,
 `RendererOptions`, `FontHandle`, `FrameToken`, `Stats`, and
-`shader_stats_enabled`. The Metal module also exposes `Host`, the borrowed
-`id<MTLDevice>` / `id<MTL4CommandQueue>` / `CAMetalLayer *` contract used to
-create a backend context.
+`shader_stats_enabled`. The Metal backend also exposes `Host`, the borrowed
+`id<MTLDevice>` / `id<MTL4CommandQueue>` / `CAMetalLayer *` contract used by
+the bridge.
 
 <details>
-<summary>Basic Vulkan usage shape</summary>
+<summary>Typical frame shape</summary>
 
 ```zig
 const heavy_slug = @import("heavy_slug");
-const heavy_slug_vulkan = @import("heavy_slug_vulkan");
 
-try heavy_slug_vulkan.Context.checkDeviceSupport(
-    physical_device,
-    instance_dispatch,
-    allocator,
-);
-
-const ctx = heavy_slug_vulkan.Context.init(
-    physical_device,
-    device,
-    instance_dispatch,
-    get_device_proc_addr,
-);
-
-var renderer = try heavy_slug_vulkan.Renderer.init(ctx, color_format, allocator, .{});
-defer renderer.deinit();
+// After the selected backend renderer has been initialized by the host:
 
 const font = try renderer.loadFont(.{ .path = "assets/Inter-Regular.otf" }, .{
-    .size_px = 24,
+    .size_px = 32,
 });
 
 var frame = try renderer.beginFrame();
 try frame.drawText(.{
     .font = font,
-    .text = "Hello, world!",
-    .transform = heavy_slug.Transform.translation(100, 200),
-    .color = .white,
+    .text = "Heavy Slug",
+    .transform = heavy_slug.Transform.translation(80, 140),
+    .color = heavy_slug.Color.white,
 });
 
-const token = try frame.submit(.{
-    .command_buffer = cmd_buf,
-    .projection = projection,
-    .viewport = .{ viewport_w, viewport_h },
-});
-
+const token = try frame.submit(target); // backend-specific Target
 renderer.markFrameComplete(token);
-```
-
-</details>
-
-<details>
-<summary>Basic Metal usage shape</summary>
-
-```zig
-const heavy_slug_metal = @import("heavy_slug_metal");
-
-const host = heavy_slug_metal.Host{
-    .device = mtl_device,
-    .command_queue = mtl4_queue,
-    .layer = metal_layer,
-};
-
-var ctx = try heavy_slug_metal.Context.init(host);
-defer ctx.deinit();
-
-var renderer = try heavy_slug_metal.Renderer.init(ctx, allocator, .{});
-defer renderer.deinit();
 ```
 
 </details>
@@ -281,58 +198,54 @@ defer renderer.deinit();
 ## Pipeline
 
 ```text
-UTF-8 text
+TextRun
   -> HarfBuzz shaping
   -> HarfBuzz outline draw callbacks
   -> cubic normalization and regularization
-  -> CoverageBlob with h-band candidates
-  -> GlyphStore cache + byte pool
-  -> GlyphBatch of GlyphInstance records
+  -> CoverageBlob cache entry
+  -> GlyphInstance batch
   -> backend frame submission
   -> task/mesh/fragment shaders
 ```
 
 | Stage | Key invariant |
 | --- | --- |
-| Outline capture | No CPU rasterization. |
-| Cubic normalization | Lines, quadratics, and native cubics share one GPU representation. |
-| Regularization | Quantized cubic spans remain stable for shader evaluation. |
-| H-band index | Accelerates common fragments while preserving full-scan fallback. |
-| Task/mesh culling | Discards only regions proven unable to affect coverage. |
-| Fragment coverage | Solves cubic crossings and integrates clipped `x dy` area. |
+| Shaping | Unicode shaping is delegated to HarfBuzz. |
+| Outline capture | Glyphs stay as outline data; there is no CPU raster pass. |
+| Cubic encoding | Lines, quadratics, and cubics share one GPU representation. |
+| Cache | Glyph blobs are reused through a backend-owned byte pool. |
+| GPU culling | Work is rejected only when it is conservatively safe. |
+| Fragment coverage | Coverage is integrated analytically from the encoded curves. |
 
 ## Backend Notes
 
-| Backend | Resource model | Required API path |
+| Backend | Resource model | Host responsibility |
 | --- | --- | --- |
-| Vulkan | One glyph blob storage buffer; one frame-local `GlyphInstance[]`; optional shader stats buffer; `FrameBindings` pushes per-frame buffer views. | Vulkan 1.4, SPIR-V 1.6, core `pushDescriptor`, `VK_EXT_mesh_shader`, dynamic rendering. |
-| Metal | Bridge-owned buffers; per-frame `MTL4ArgumentTable`; Metal residency set. | Metal 4, `MTL4CommandQueue`, `MTL4CommandAllocator`, `MTL4Compiler`, `MTL4MeshRenderPipelineDescriptor`. |
-
-The current Vulkan hot path is the single glyph-pool buffer plus `GlyphBlobRef`
-byte offsets. Vulkan frame bindings use core 1.4 push descriptors, so there is
-no per-frame descriptor pool or descriptor set allocation. The Metal backend
-follows the Metal 4 command and argument-table model rather than the older
-command-buffer and stage-specific setter model.
+| Vulkan | One glyph blob buffer, one per-frame glyph instance buffer, optional stats buffer. | Provide Vulkan objects, command buffers, render targets, and completed frame tokens. |
+| Metal | Bridge-owned buffers and Metal 4 pipeline resources. | Provide borrowed Metal device, command queue, layer, and app lifecycle. |
 
 Frame lifetime is explicit. Backends return `FrameToken` values on submit, and
-cached glyph storage is retired only after the backend reports completed work.
+cached GPU storage is retired only after the host reports completed work.
+
+The Vulkan backend intentionally uses byte-offset `GlyphBlobRef` values rather
+than per-glyph descriptor slots. The Metal backend follows the Metal 4 command
+and argument-table path exposed through the Objective-C++ bridge.
 
 ## Shader Layout
 
 | Path | Role |
 | --- | --- |
-| `shaders/core/` | Shared ABI, PGA, coverage, h-band logic. |
+| `shaders/core/` | Shared ABI, coverage, h-band, stats, and PGA logic. |
 | `shaders/backend_vulkan/` | Vulkan resource binding shim. |
 | `shaders/backend_metal/` | Metal resource binding shim. |
 | `shaders/entries/task.slang` | Task shader entry. |
 | `shaders/entries/mesh.slang` | Mesh shader entry. |
 | `shaders/entries/fragment.slang` | Fragment shader entry. |
 
-Shader sources are explicit Slang 2026 modules. `build/shaders.zig` compiles
-the source-declared entry points with `spirv_1_6` for Vulkan and
-`metallib_4_0` for Metal. SPIR-V specification revisions are Khronos document
-revisions rather than selectable module versions; generated SPIR-V declares
-version 1.6 in the module header.
+Shader sources use explicit Slang 2026 modules. `build/shaders.zig` compiles
+source-declared entry points to SPIR-V 1.6 for Vulkan and Metal Shading
+Language for Metal. GPU ABI structs are generated from Slang reflection by
+`tools/layout_gen.zig`.
 
 <details>
 <summary>Shader output paths</summary>
@@ -352,30 +265,27 @@ zig-out/shaders/msl/fragment.metal
 
 | Diagnostic source | Signals |
 | --- | --- |
-| CPU/backend debug stats | Shaping counts, cache hits/misses, encoded spans, uploaded bytes, pool fragmentation, deferred retirements, Vulkan binding writes/pushes, Metal frame-slot waits. |
-| Shader stats opt-in | Visible glyphs, emitted mesh tiles, mesh culls, fragment counts, candidate-path usage, full-scan fallback, curve tests, zero-coverage fragments. |
+| CPU/backend debug stats | Shaping counts, cache hits/misses, uploads, retirements, pool state, backend binding work. |
+| Shader stats opt-in | Visible glyphs, emitted mesh work, culling, candidate-path usage, fallback scans, fragment pressure. |
 
-Enable shader counters only when investigating performance:
+Enable shader counters only when investigating GPU behavior:
 
 ```bash
 zig build test -Dvulkan=true -Dshader-stats=true
 zig build test -Dmetal=true -Dshader-stats=true
 ```
 
-The shader counters are meant to explain where work went: task visibility,
-meshlet emission, h-band candidate efficiency, full-scan fallback rate, and
-fragment-side curve integration pressure.
-
 ## Project Layout
 
 | Path | Purpose |
 | --- | --- |
 | `src/root.zig` | Public core module. |
-| `src/core/` | Types, font, outline, blob, cache, renderer core. |
-| `src/gpu/` | GPU ABI marker, mesh limits, shader stats, resource model notes. |
-| `src/backends/vulkan/` | Vulkan backend, including `bindings.zig` push-frame binding helpers. |
-| `src/backends/metal/` | Metal backend, Zig bridge context, and Objective-C++ bridge. |
-| `src/demo/` | Demo-only Vulkan/Metal entry points, native platform hosts, and shared scene/input code. |
+| `src/core/` | Types, fonts, outlines, blob encoding, cache, renderer core. |
+| `src/gpu/` | Backend-neutral GPU ABI markers, mesh limits, shader stats. |
+| `src/math/` | PGA motor math used by transforms. |
+| `src/backends/vulkan/` | Vulkan backend. |
+| `src/backends/metal/` | Metal backend and Objective-C++ bridge. |
+| `src/demo/` | Demo entry points, native platform hosts, shared scene/input code. |
 | `src/c/` | Headers translated by build-system `addTranslateC()`. |
 | `build/` | Modular Zig build graph. |
 | `shaders/` | Slang shader modules and entries. |
@@ -386,20 +296,16 @@ fragment-side curve integration pressure.
 
 | Area | Current design |
 | --- | --- |
-| Coverage | Analytic outline coverage is preserved until the fragment shader. |
-| Culling | Task/mesh stages perform conservative work reduction. |
-| Core scope | The core is backend-neutral and window-system-free. |
-| Host scope | Applications provide GPU contexts, queues, swapchains, and frame completion. |
-| Glyph resources | Cached glyph blobs live in one backend-owned glyph-pool buffer. |
-| Blob references | `GlyphBlobRef` values are byte offsets instead of descriptor slots. |
-| GPU ABI | GPU structs are generated from Slang reflection. |
-| Reflection guardrails | `tools/layout_gen.zig` rejects conflicting reflected layouts and emits generated layout tests. |
-| C headers | C declarations are translated through build-system `addTranslateC()` modules. |
+| Core boundary | Core is backend-neutral and window-system-free. |
+| Host boundary | Applications own graphics/device/window lifetimes. |
+| Glyph resources | Cached glyph blobs live in a backend-owned byte pool. |
+| Blob references | `GlyphBlobRef` values are byte offsets. |
+| GPU ABI | Layouts are generated from Slang reflection. |
+| C bindings | C declarations are translated by the build graph, not by source-level `@cImport`. |
 
-`RendererCore` is the shared spine: it loads fonts, shapes runs, encodes missing
-glyphs, maintains cache metadata, writes backend-specific `GlyphInstance`
-records, and defers resource retirement through frame tokens. Backend renderers
-provide only the upload/retire behavior and the GPU submission path.
+`RendererCore` is the shared spine behind both backends: it loads fonts, shapes
+runs, encodes missing glyphs, maintains cache metadata, writes backend-specific
+glyph instances, and coordinates deferred resource retirement.
 
 ## Dependency Summary
 
@@ -411,22 +317,21 @@ provide only the upload/retire behavior and the GPU submission path.
 | Vulkan Headers | pinned Git dependency | Yes |
 | Wayland client/protocols | system Linux demo dependency | No |
 
-Generated local build outputs use the usual Zig paths: `zig-out/`,
-`.zig-cache/`, and `zig-pkg/`. They are not source artifacts and should not be
-committed.
+Generated local outputs use the usual Zig paths: `zig-out/`, `.zig-cache/`, and
+`zig-pkg/`. They are not source artifacts and should not be committed.
 
 ## CI
 
-GitHub Actions run formatting, core tests, Vulkan tests on Ubuntu, Metal tests
-on macOS, shader-stat variants, and ReleaseFast builds. Workflow dispatch can
-override Zig and Slang versions; the default Zig version is read from
+GitHub Actions run formatting, core tests, backend tests, shader-stat variants,
+and ReleaseFast builds on supported Ubuntu and macOS runners. Workflow dispatch
+can override Zig and Slang versions; the default Zig version is read from
 `build.zig.zon`.
 
 | Job family | Coverage |
 | --- | --- |
-| Lint | `zig fmt --check build.zig src/ tools/` |
-| Test | Core, Vulkan, Metal, and shader-stat variants across supported runners. |
-| ReleaseFast | Core plus backend release builds on Ubuntu and macOS. |
+| Lint | Zig formatting checks. |
+| Test | Core, Vulkan, Metal, and shader-stat variants. |
+| ReleaseFast | Core and backend release builds where supported. |
 
 ## Credit
 
