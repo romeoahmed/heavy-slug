@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const heavy_slug = @import("heavy_slug");
-const glfw = @import("demo_glfw");
+const demo_input = @import("demo_input");
 
 pub const font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
 pub const font_size_px: u32 = 24;
@@ -77,7 +77,7 @@ pub const Scene = struct {
     drag_angle_delta: f32 = 0,
     drag_dt: f64 = 0,
 
-    pub fn update(self: *Scene, window: glfw.Window, dt: f32, now: f64, width: f32, height: f32) void {
+    pub fn update(self: *Scene, input: *demo_input.State, dt: f32, now: f64, width: f32, height: f32) void {
         if (width <= 0 or height <= 0) return;
 
         if (!self.view_initialized) {
@@ -85,11 +85,11 @@ pub const Scene = struct {
             self.view_initialized = true;
         }
 
-        const b_pressed = glfw.getKey(window, glfw.KEY_B);
+        const b_pressed = input.getKey(.b);
         if (b_pressed and !self.b_was_pressed) self.dark_mode = !self.dark_mode;
         self.b_was_pressed = b_pressed;
 
-        const r_pressed = glfw.getKey(window, glfw.KEY_R);
+        const r_pressed = input.getKey(.r);
         if (r_pressed and !self.r_was_pressed) {
             self.view = contentFit(width, height);
             self.rotation_angle = 0;
@@ -97,22 +97,22 @@ pub const Scene = struct {
         }
         self.r_was_pressed = r_pressed;
 
-        const space_pressed = glfw.getKey(window, glfw.KEY_SPACE);
+        const space_pressed = input.getKey(.space);
         if (space_pressed and !self.space_was_pressed) self.animate = !self.animate;
         self.space_was_pressed = space_pressed;
 
         const pan_speed: f32 = 400 / self.view.scale;
-        if (glfw.getKey(window, glfw.KEY_UP)) self.view.pan_y += pan_speed * dt;
-        if (glfw.getKey(window, glfw.KEY_DOWN)) self.view.pan_y -= pan_speed * dt;
-        if (glfw.getKey(window, glfw.KEY_LEFT)) self.view.pan_x += pan_speed * dt;
-        if (glfw.getKey(window, glfw.KEY_RIGHT)) self.view.pan_x -= pan_speed * dt;
+        if (input.getKey(.up)) self.view.pan_y += pan_speed * dt;
+        if (input.getKey(.down)) self.view.pan_y -= pan_speed * dt;
+        if (input.getKey(.left)) self.view.pan_x += pan_speed * dt;
+        if (input.getKey(.right)) self.view.pan_x -= pan_speed * dt;
 
-        if (glfw.getKey(window, glfw.KEY_EQUAL)) self.view.scale *= 1.0 + 2.0 * dt;
-        if (glfw.getKey(window, glfw.KEY_MINUS)) self.view.scale *= 1.0 - 2.0 * dt;
+        if (input.getKey(.equal)) self.view.scale *= 1.0 + 2.0 * dt;
+        if (input.getKey(.minus)) self.view.scale *= 1.0 - 2.0 * dt;
 
-        const scroll = glfw.consumeScrollDelta();
+        const scroll = input.consumeScrollDelta();
         if (scroll != 0) {
-            const cur = glfw.getCursorPos(window);
+            const cur = input.cursor;
             const sx: f32 = @floatCast(cur[0]);
             const sy: f32 = @floatCast(cur[1]);
             const old_scale = self.view.scale;
@@ -124,7 +124,7 @@ pub const Scene = struct {
             self.view.pan_y += (height - sy) * (inv_new - inv_old);
         }
 
-        self.updateMouse(window, now, width, height);
+        self.updateMouse(input, now, width, height);
         if (self.animate) self.rotation_angle += self.rotation_speed * dt;
     }
 
@@ -156,10 +156,10 @@ pub const Scene = struct {
         }
     }
 
-    fn updateMouse(self: *Scene, window: glfw.Window, now: f64, width: f32, height: f32) void {
-        const cursor = glfw.getCursorPos(window);
-        const left_now = glfw.getMouseButton(window, glfw.MOUSE_BUTTON_LEFT);
-        const right_now = glfw.getMouseButton(window, glfw.MOUSE_BUTTON_RIGHT);
+    fn updateMouse(self: *Scene, input: *const demo_input.State, now: f64, width: f32, height: f32) void {
+        const cursor = input.cursor;
+        const left_now = input.getMouseButton(.left);
+        const right_now = input.getMouseButton(.right);
 
         if (left_now and !self.left_down) {
             self.begin_cursor = cursor;

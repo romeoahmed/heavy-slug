@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const heavy_slug_vulkan = @import("heavy_slug_vulkan");
-const glfw = @import("demo_glfw");
+const demo_platform = @import("demo_platform");
 const demo_scene = @import("demo_scene");
 const demo_vk = @import("host.zig");
 
@@ -11,17 +11,13 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    try glfw.init();
-    defer glfw.terminate();
-    if (!glfw.vulkanSupported()) return error.VulkanNotSupported;
+    var window: demo_platform.Window = .{};
+    try window.init(allocator, demo_scene.window_width, demo_scene.window_height, "heavy-slug Vulkan demo");
+    defer window.deinit();
 
-    const window = try glfw.createWindow(demo_scene.window_width, demo_scene.window_height, "heavy-slug Vulkan demo");
-    defer glfw.destroyWindow(window);
-    glfw.setScrollCallback(window);
-
-    var host = try demo_vk.Host.init(window, allocator);
+    var host = try demo_vk.Host.init(&window, allocator);
     defer host.deinit();
-    try host.createSwapchain(window);
+    try host.createSwapchain(&window);
 
     var text_renderer = try heavy_slug_vulkan.Renderer.init(
         host.renderer_context,
@@ -35,24 +31,30 @@ pub fn main() !void {
 
     var scene: demo_scene.Scene = .{};
     var submitted_text_tokens = [_]heavy_slug_vulkan.FrameToken{0} ** demo_vk.Host.frames_in_flight;
-    var last_time = glfw.getTime();
+    var last_time = window.time();
     var stats_log_time = last_time;
 
-    while (!glfw.shouldClose(window)) {
-        glfw.pollEvents();
-        if (glfw.getKey(window, glfw.KEY_ESCAPE)) break;
+    while (!window.should_close) {
+        window.pollEvents();
+        if (window.should_close or window.input().getKey(.escape)) break;
 
-        const now = glfw.getTime();
+        const fb_size = window.framebufferSize();
+        if (fb_size[0] != host.swapchain_extent.width or fb_size[1] != host.swapchain_extent.height) {
+            try host.recreateSwapchain(&window);
+        }
+
+        const now = window.time();
         const dt: f32 = @floatCast(now - last_time);
         last_time = now;
 
         const w: f32 = @floatFromInt(host.swapchain_extent.width);
         const h: f32 = @floatFromInt(host.swapchain_extent.height);
-        scene.update(window, dt, now, w, h);
+        scene.update(window.input(), dt, now, w, h);
+        window.setDarkMode(scene.dark_mode);
         host.clear_color = scene.clearColor();
 
         const frame = try host.beginFrame() orelse {
-            try host.recreateSwapchain(window);
+            try host.recreateSwapchain(&window);
             continue;
         };
         text_renderer.markFrameComplete(submitted_text_tokens[frame.frame_index]);
@@ -71,7 +73,7 @@ pub fn main() !void {
         });
 
         if (try host.endFrame(frame)) {
-            try host.recreateSwapchain(window);
+            try host.recreateSwapchain(&window);
         }
     }
     host.demo_ddisp.deviceWaitIdle(host.device) catch {};

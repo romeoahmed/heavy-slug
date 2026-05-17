@@ -2,32 +2,21 @@
 
 const std = @import("std");
 const vk = @import("vulkan");
-const glfw = @import("demo_glfw");
+const demo_platform = @import("demo_platform");
 const heavy_slug_vulkan = @import("heavy_slug_vulkan");
 const gpu_context = heavy_slug_vulkan.context;
 const vk_chains = heavy_slug_vulkan.chains;
-
-// Manual externs avoid including vulkan.h alongside vulkan-zig types.
-extern fn glfwGetInstanceProcAddress(instance: vk.Instance, procname: [*:0]const u8) vk.PfnVoidFunction;
-extern fn glfwCreateWindowSurface(instance: vk.Instance, window: glfw.Window, allocator: ?*const anyopaque, surface: *vk.SurfaceKHR) vk.Result;
 
 const device_extensions = [_][*:0]const u8{
     "VK_KHR_swapchain",
 } ++ gpu_context.Context.required_device_extensions;
 
 fn getRequiredInstanceExtensions() []const [*:0]const u8 {
-    return glfw.getRequiredInstanceExtensions();
+    return demo_platform.getRequiredInstanceExtensions();
 }
 
 fn getInstanceProcAddress(instance: vk.Instance, name: [*:0]const u8) vk.PfnVoidFunction {
-    return glfwGetInstanceProcAddress(instance, name);
-}
-
-fn createSurface(instance: vk.Instance, window: glfw.Window) glfw.Error!vk.SurfaceKHR {
-    var surface: vk.SurfaceKHR = undefined;
-    const result = glfwCreateWindowSurface(instance, window, null, &surface);
-    if (result != .success) return error.SurfaceCreationFailed;
-    return surface;
+    return demo_platform.getInstanceProcAddress(instance, name);
 }
 
 /// Pre-instance Vulkan functions (loaded with null instance).
@@ -50,6 +39,8 @@ const DemoInstanceTable = struct {
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR: ?vk.PfnGetPhysicalDeviceSurfaceCapabilitiesKHR = null,
     vkGetPhysicalDeviceSurfaceFormatsKHR: ?vk.PfnGetPhysicalDeviceSurfaceFormatsKHR = null,
     vkGetPhysicalDeviceSurfacePresentModesKHR: ?vk.PfnGetPhysicalDeviceSurfacePresentModesKHR = null,
+    vkCreateWaylandSurfaceKHR: ?vk.PfnCreateWaylandSurfaceKHR = null,
+    vkCreateWin32SurfaceKHR: ?vk.PfnCreateWin32SurfaceKHR = null,
 };
 const DemoInstanceDispatch = vk.InstanceWrapperWithCustomDispatch(DemoInstanceTable);
 
@@ -125,9 +116,9 @@ pub const Host = struct {
 
     pub const frames_in_flight = 2;
 
-    pub fn init(window: glfw.Window, allocator: std.mem.Allocator) !Host {
+    pub fn init(window: *demo_platform.Window, allocator: std.mem.Allocator) !Host {
         const base = BaseDispatch.load(getInstanceProcAddress);
-        const glfw_exts = getRequiredInstanceExtensions();
+        const platform_exts = getRequiredInstanceExtensions();
         const app_info = vk.ApplicationInfo{
             .p_application_name = "heavy-slug demo",
             .application_version = 0,
@@ -137,14 +128,14 @@ pub const Host = struct {
         };
         const instance = try base.createInstance(&.{
             .p_application_info = &app_info,
-            .enabled_extension_count = @intCast(glfw_exts.len),
-            .pp_enabled_extension_names = @ptrCast(glfw_exts.ptr),
+            .enabled_extension_count = @intCast(platform_exts.len),
+            .pp_enabled_extension_names = @ptrCast(platform_exts.ptr),
         }, null);
 
         const demo_idisp = DemoInstanceDispatch.load(instance, getInstanceProcAddress);
         const lib_idisp = gpu_context.InstanceDispatch.load(instance, getInstanceProcAddress);
 
-        const surface = try createSurface(instance, window);
+        const surface = try window.createSurface(instance, demo_idisp);
 
         var dev_count: u32 = 0;
         _ = try demo_idisp.enumeratePhysicalDevices(instance, &dev_count, null);
@@ -280,13 +271,13 @@ pub const Host = struct {
         frame_index: u32,
     };
 
-    pub fn createSwapchain(self: *Host, window: glfw.Window) !void {
+    pub fn createSwapchain(self: *Host, window: *const demo_platform.Window) !void {
         const caps = try self.demo_idisp.getPhysicalDeviceSurfaceCapabilitiesKHR(
             self.physical_device,
             self.surface,
         );
 
-        const fb_size = glfw.getFramebufferSize(window);
+        const fb_size = window.framebufferSize();
         self.swapchain_extent = .{
             .width = std.math.clamp(fb_size[0], caps.min_image_extent.width, caps.max_image_extent.width),
             .height = std.math.clamp(fb_size[1], caps.min_image_extent.height, caps.max_image_extent.height),
@@ -535,7 +526,7 @@ pub const Host = struct {
         });
     }
 
-    pub fn recreateSwapchain(self: *Host, window: glfw.Window) !void {
+    pub fn recreateSwapchain(self: *Host, window: *const demo_platform.Window) !void {
         try self.demo_ddisp.deviceWaitIdle(self.device);
         try self.createSwapchain(window);
     }

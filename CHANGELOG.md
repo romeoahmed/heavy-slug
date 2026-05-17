@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking demo host rewrite:** demos no longer depend on GLFW. The Vulkan
+  demo now uses native Win32 on Windows and Wayland xdg-shell on Linux; the
+  Metal demo creates its Cocoa `NSWindow` and `CAMetalLayer` directly.
+- **Vulkan demo loader handling changed:** demo platform code dynamically loads
+  the system Vulkan loader at startup and uses native `VK_KHR_win32_surface` or
+  `VK_KHR_wayland_surface` creation instead of GLFW surface helpers.
+- **Windows demo dark title bar:** the Win32 host now dynamically loads
+  `dwmapi.dll` and uses `DWMWA_USE_IMMERSIVE_DARK_MODE` so the DWM title bar
+  follows the demo's light/dark toggle. The host also handles `WM_DPICHANGED`
+  with the Windows-provided suggested rectangle and leaves unmapped system
+  shortcuts to `DefWindowProcW`. Initial window sizing now uses
+  `GetDpiForWindow()` after default placement so requested demo dimensions are
+  logical pixels even on mixed-DPI monitor setups.
+- **Wayland demo modernized:** the Linux demo now requires xdg-shell,
+  `fractional-scale-v1`, and `viewporter`, keeps configure sizes in
+  surface-local logical coordinates, recreates the Vulkan swapchain at the
+  compositor-preferred pixel scale, and maps high-resolution buffers back to
+  logical surface size with `wp_viewport`.
+- **Wayland demo CSD-only decorations:** the Linux demo now always draws a
+  small client-side frame with Wayland core `wl_subsurface`/`wl_shm` and
+  delegates drag/resize to xdg-shell `move`/`resize`. Decoration buffers are
+  bounded per part and are not reused or destroyed until `wl_buffer.release`.
+- **macOS demo app chrome:** the Cocoa demo now installs a minimal application
+  menu with About, Close Window, and Quit actions, keeps the title bar native,
+  and routes Command+W/Command+Q through the same graceful-close path.
+- **Shared demo input extracted:** scene controls now read from
+  `src/demo/common/input.zig`, with platform hosts translating native key,
+  mouse, cursor, and scroll events into the common state.
 - **Slang shader modules moved to Slang 2026 rules:** shader sources now use
   explicit `#language slang 2026` and module declarations instead of legacy
   module inference, with shared shader-stat constants centralized in
@@ -32,6 +60,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outline-focused `ftmodule`/`ftoption` config headers, and HarfBuzz is built
   with the same bundled-FreeType feature macros its official Meson build would
   enable for variable coordinates and face transforms.
+
+### Removed
+
+- **GLFW dependency removed:** `glfw_src`, the translated GLFW header, and the
+  demo GLFW wrapper/build path were deleted.
+- **Wayland xdg-decoration path removed:** the Linux demo no longer generates
+  or binds `xdg-decoration-unstable-v1`; CSD is the single decoration path.
 
 ## [3.1.0] - 2026-05-17
 

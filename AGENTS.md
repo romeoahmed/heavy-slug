@@ -15,7 +15,7 @@ build, backend, or architecture changes.
 
 The library boundary is deliberate: core code must never own a GPU context,
 swapchain, window, command queue, command buffer, CAMetalLayer lifecycle, or
-GLFW object.
+window-toolkit object.
 
 ## Project Structure
 
@@ -30,6 +30,7 @@ GLFW object.
   Objective-C++ bridge.
 - `src/demo/common/` contains demo-only scene and input helpers.
 - `src/demo/vulkan/` and `src/demo/metal/` contain platform demo hosts.
+- `src/demo/platform/` contains native Win32, Wayland, and Cocoa window hosts.
 - `src/c/` contains headers translated by build-system `addTranslateC()`.
 - `build/` contains modular Zig build helpers.
 - `shaders/core/` contains shared Slang 2026 ABI, stats, PGA, h-band, and
@@ -85,19 +86,45 @@ Runtime/demo execution needs a Vulkan loader, a Vulkan 1.4 driver, core
 `pushDescriptor`, `VK_EXT_mesh_shader`, task/mesh shader features, and
 sufficient mesh limits. The Vulkan demo is supported on Windows and Linux.
 
-Linux Vulkan demo builds also need `wayland-scanner` and development libraries
-for `wayland-client`, `wayland-cursor`, `wayland-egl`, and `xkbcommon`.
+Linux Vulkan demo builds also need `wayland-scanner`, `wayland-client` and
+`xkbcommon` headers/libraries, and `wayland-protocols` with stable xdg-shell,
+stable viewporter, and staging fractional-scale-v1 XML. Use
+`-Dwayland-scanner=` or `-Dwayland-protocols-dir=` when those tools are outside
+default Linux paths.
+The Wayland host intentionally keeps only the CSD path: draw the client-side
+frame with core `wl_subsurface`/`wl_shm`, delegate drag/resize to xdg-shell
+`move`/`resize`, keep shm decoration buffers alive until `wl_buffer.release`,
+and keep their count bounded under resize pressure. Use `xkbcommon` keymaps
+from `wl_keyboard.keymap` rather than hard-coding layout-dependent keyboard
+semantics.
+For HiDPI, keep xdg-shell configure sizes and decoration geometry in
+surface-local logical coordinates. Require `fractional-scale-v1`, render
+Vulkan and CSD buffers at the compositor-preferred physical pixel extent, and
+map them back with `wp_viewport.set_destination`.
 
-Windows Vulkan demo builds use GLFW's Win32 backend and link `gdi32`, `user32`,
-and `shell32`.
+Windows Vulkan demo builds use a direct Win32 host through Zig externs and
+`std.os.windows` types, link `user32`, and dynamically load `vulkan-1.dll` at
+runtime. Keep DWM title-bar dark-mode support optional by dynamically loading
+`dwmapi.dll`; the scene's light/dark toggle should drive
+`DWMWA_USE_IMMERSIVE_DARK_MODE`. Handle `WM_DPICHANGED` with the suggested
+rectangle from Windows rather than manually guessing per-monitor scaling. For
+initial sizing, use the window's `GetDpiForWindow()` DPI after default
+placement, not `GetDpiForSystem()`, so multi-monitor DPI setups keep a
+consistent logical client size. Do not switch the demo host to WinRT/Windows
+App SDK just to appear newer; the current best fit for this low-level Vulkan
+surface demo is direct Win32 `HWND` ownership with narrow DWM integration.
 
 Metal builds are macOS-only and need an Apple SDK exposing Metal 4 APIs,
 Objective-C++ compilation support, and the `Metal`, `QuartzCore`, and
-`Foundation` frameworks. The Metal demo also uses GLFW's Cocoa backend and
-links `Cocoa`, `IOKit`, and `CoreFoundation`.
+`Foundation` frameworks. The Metal demo uses a direct Cocoa `NSWindow` and
+`CAMetalLayer` host, installs normal Cocoa app menu actions, keeps the window
+chrome native, handles Command+W/Command+Q through the same graceful-close path,
+and links `Cocoa`, `QuartzCore`, `Metal`, and `Foundation`.
 
-Keep `vulkan`, `vulkan_headers`, and `glfw_src` lazy. Do not introduce backend
-or demo dependencies into core-only builds.
+Keep `vulkan` and `vulkan_headers` lazy. Do not introduce backend, demo, or
+window-system dependencies into core-only builds. Do not add GLFW, SDL, or a
+similar window toolkit unless a documented architecture decision reverses the
+native-demo-host model.
 
 ## Coding Style And Naming
 

@@ -22,11 +22,6 @@
             .hash = "N-V-__8AAGfhdwLcch-RCImEQbiTe8n0-ZfevT6sXEEfSuKT",
             .lazy = true,
         },
-        .glfw_src = .{
-            .url = "https://github.com/glfw/glfw/releases/download/3.4/glfw-3.4.zip",
-            .hash = "N-V-__8AAGILeQBiX6fOeXM8aImETLAuofbkuBtGo_q6zsGB",
-            .lazy = true,
-        },
     },
     .paths = .{
         "build.zig",

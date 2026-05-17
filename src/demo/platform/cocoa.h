@@ -1,0 +1,63 @@
+#pragma once
+
+/* Demo-only Cocoa window and Metal host bridge. */
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+enum {
+    HS_DEMO_KEY_ESCAPE = 0,
+    HS_DEMO_KEY_SPACE = 1,
+    HS_DEMO_KEY_EQUAL = 2,
+    HS_DEMO_KEY_MINUS = 3,
+    HS_DEMO_KEY_B = 4,
+    HS_DEMO_KEY_R = 5,
+    HS_DEMO_KEY_UP = 6,
+    HS_DEMO_KEY_DOWN = 7,
+    HS_DEMO_KEY_LEFT = 8,
+    HS_DEMO_KEY_RIGHT = 9,
+    HS_DEMO_KEY_COUNT = 10,
+};
+
+enum {
+    HS_DEMO_MOUSE_LEFT = 0,
+    HS_DEMO_MOUSE_RIGHT = 1,
+    HS_DEMO_MOUSE_COUNT = 2,
+};
+
+typedef struct hs_demo_cocoa_window hs_demo_cocoa_window;
+
+typedef struct hs_demo_cocoa_snapshot {
+    bool keys[HS_DEMO_KEY_COUNT];
+    bool mouse_buttons[HS_DEMO_MOUSE_COUNT];
+    double cursor_x;
+    double cursor_y;
+    double scroll_delta;
+    uint32_t framebuffer_width;
+    uint32_t framebuffer_height;
+    bool should_close;
+} hs_demo_cocoa_snapshot;
+
+hs_demo_cocoa_window *hs_demo_cocoa_window_create(
+    int width,
+    int height,
+    const char *title,
+    char *error_buffer,
+    size_t error_buffer_len);
+
+void hs_demo_cocoa_window_destroy(hs_demo_cocoa_window *host);
+void hs_demo_cocoa_window_poll_events(hs_demo_cocoa_window *host);
+void hs_demo_cocoa_window_snapshot(hs_demo_cocoa_window *host, hs_demo_cocoa_snapshot *snapshot);
+double hs_demo_cocoa_window_time(hs_demo_cocoa_window *host);
+void *hs_demo_cocoa_window_device(hs_demo_cocoa_window *host);
+void *hs_demo_cocoa_window_command_queue(hs_demo_cocoa_window *host);
+void *hs_demo_cocoa_window_layer(hs_demo_cocoa_window *host);
+
+#ifdef __cplusplus
+}
+#endif

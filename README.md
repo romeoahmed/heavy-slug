@@ -23,7 +23,7 @@ HarfBuzz shaping -> native outlines -> cubic blobs -> mesh/task culling -> analy
 | Design promise | What it means |
 | --- | --- |
 | Analytic until the fragment shader | No CPU glyph raster atlas or SDF reconstruction step. |
-| Backend opt-in | Core builds do not fetch Vulkan, Metal, GLFW, or `slangc`. |
+| Backend opt-in | Core builds do not fetch Vulkan, Metal, window-system code, or `slangc`. |
 | Host-owned graphics lifecycle | Applications keep control of devices, queues, swapchains, and frame completion. |
 | Reflection-owned ABI | Slang reflection generates the Zig GPU structs consumed by backends. |
 
@@ -127,10 +127,10 @@ Task -> Mesh -> Fragment shaders
 
 | Layer | Owns | Does not own |
 | --- | --- | --- |
-| `heavy_slug` | Shaping, outline encoding, cache metadata, backend-neutral batches. | GPU context, GLFW, swapchain. |
+| `heavy_slug` | Shaping, outline encoding, cache metadata, backend-neutral batches. | GPU context, window, swapchain. |
 | `heavy_slug_vulkan` | Vulkan glyph pool, push frame bindings, pipeline, draw recording. | Instance, surface, swapchain, queue submission policy. |
-| `heavy_slug_metal` | Metal 4 bridge objects, argument tables, pipeline, buffers. | Cocoa/GLFW app lifecycle. |
-| Demo code | Example GLFW hosts and shared scene input. | Core library behavior. |
+| `heavy_slug_metal` | Metal 4 bridge objects, argument tables, pipeline, buffers. | Cocoa app lifecycle. |
+| Demo code | Native Win32, Wayland, and Cocoa hosts plus shared scene input. | Core library behavior. |
 
 The important boundary is ownership: `heavy_slug` prepares text work, while the
 application remains the graphics host.
@@ -142,12 +142,12 @@ workflow.
 
 | Target | Required to build | Extra for demo/runtime |
 | --- | --- | --- |
-| Core, all platforms | Zig `0.16.0`; C/C++ toolchain; first-build network access for pinned Zig packages. | No `slangc`, Vulkan, Metal, or GLFW required. |
+| Core, all platforms | Zig `0.16.0`; C/C++ toolchain; first-build network access for pinned Zig packages. | No `slangc`, Vulkan, Metal, or window-system dependencies required. |
 | Vulkan backend, Linux | Zig; `slangc` with Slang 2026 and SPIR-V 1.6 support; lazy `vulkan_headers`; lazy `vulkan-zig`. | Vulkan loader/driver; Vulkan 1.4; core `pushDescriptor`; `VK_EXT_mesh_shader`; task/mesh features; sufficient mesh limits. |
-| Vulkan demo, Linux | Vulkan backend deps; lazy GLFW source; `wayland-scanner`; `wayland-client`; `wayland-cursor`; `wayland-egl`; `xkbcommon` dev libraries. | Wayland-capable desktop/session and Vulkan runtime. |
-| Vulkan backend/demo, Windows | Zig; `slangc` with Slang 2026 and SPIR-V 1.6 support; lazy `vulkan_headers`; lazy `vulkan-zig`; lazy GLFW source. | Vulkan loader/runtime; Vulkan 1.4 driver; core `pushDescriptor`; `VK_EXT_mesh_shader`; links `gdi32`, `user32`, `shell32`. |
+| Vulkan demo, Linux | Vulkan backend deps; `wayland-scanner`; `wayland-client` and `xkbcommon` headers/libraries; `wayland-protocols` xdg-shell, viewporter, and fractional-scale XML. | Wayland-capable desktop/session; Vulkan loader/runtime loaded at startup; client-side decorations are drawn with `wl_subsurface`/`wl_shm`. |
+| Vulkan backend/demo, Windows | Zig; `slangc` with Slang 2026 and SPIR-V 1.6 support; lazy `vulkan_headers`; lazy `vulkan-zig`; Win32 `user32`. | Vulkan loader/runtime loaded at startup; DWM dark-titlebar support loaded from `dwmapi.dll`; Vulkan 1.4 driver; core `pushDescriptor`; `VK_EXT_mesh_shader`. |
 | Metal backend, macOS | Zig; `slangc` with Slang 2026 and `metallib_4_0` support; Apple SDK with Metal 4 APIs; Objective-C++ support; `Metal`, `QuartzCore`, `Foundation`. | GPU supporting `MTLGPUFamilyMetal4`; host supplies `id<MTLDevice>`, `id<MTL4CommandQueue>`, `CAMetalLayer *`. |
-| Metal demo, macOS | Metal backend deps; lazy GLFW source; Cocoa GLFW backend. | `Cocoa`, `IOKit`, `CoreFoundation`. |
+| Metal demo, macOS | Metal backend deps; native Cocoa `NSWindow` host. | `Cocoa`, `QuartzCore`, `Metal`, `Foundation`. |
 
 Important dependency facts:
 
@@ -162,8 +162,36 @@ Important dependency facts:
   reflected GPU ABI generation. The shader build uses explicit Slang 2026
   modules, warning-as-error diagnostics, restrictive capability checks, and
   source-declared `[shader(...)]` entry points.
-- `vulkan`, `vulkan_headers`, and `glfw_src` are lazy dependencies; core-only
-  builds do not fetch them.
+- `vulkan` and `vulkan_headers` are lazy dependencies; core-only builds do not
+  fetch them.
+- The Vulkan demo does not link a Vulkan import library. Its platform layer
+  loads the system Vulkan loader at startup and then uses `vkGetInstanceProcAddr`.
+- The Windows demo intentionally stays on direct Win32 rather than WinRT or
+  Windows App SDK UI layers because Vulkan WSI needs an `HWND` and the demo's
+  job is window/surface/input hosting, not application UI composition. It still
+  follows the scene's light/dark toggle for the non-client title bar through
+  `DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE)` and handles per-monitor
+  DPI changes through the normal `WM_DPICHANGED` resize path. Initial demo
+  dimensions are treated as logical pixels and converted with the window's
+  `GetDpiForWindow()` value after Windows has assigned the hidden window to a
+  monitor.
+- Linux demo builds use xdg-shell, viewporter, and fractional-scale protocol
+  sources generated by `wayland-scanner`. Override
+  `-Dwayland-scanner=` or `-Dwayland-protocols-dir=` when those tools live
+  outside the default Linux paths. Keyboard events use `xkbcommon` keymaps from
+  `wl_keyboard.keymap`, with raw evdev keycodes only as a fallback.
+- The Wayland demo requires `fractional-scale-v1` and `wp_viewporter`. It keeps
+  xdg-shell window sizes in surface-local logical coordinates, renders the
+  Vulkan swapchain and client-side decoration shm buffers at the
+  compositor-preferred fractional scale, then maps those buffers back to the
+  logical surface size with `wp_viewport`.
+- The Wayland demo always draws a small client-side frame using Wayland core
+  `wl_subsurface` and `wl_shm`, then delegates drag/resize to xdg-shell
+  `move`/`resize` requests. Decoration buffers are bounded per decoration part
+  and wait for `wl_buffer.release` before reuse or teardown.
+- The macOS demo installs a minimal Cocoa app menu with About, Close Window,
+  and Quit actions while keeping the window chrome native and leaving Metal
+  device, command queue, and `CAMetalLayer` ownership inside the demo host.
 
 ## Public Modules
 
@@ -347,7 +375,7 @@ fragment-side curve integration pressure.
 | `src/gpu/` | GPU ABI marker, mesh limits, shader stats, resource model notes. |
 | `src/backends/vulkan/` | Vulkan backend, including `bindings.zig` push-frame binding helpers. |
 | `src/backends/metal/` | Metal backend, Zig bridge context, and Objective-C++ bridge. |
-| `src/demo/` | Demo-only hosts and shared scene/input code. |
+| `src/demo/` | Demo-only Vulkan/Metal entry points, native platform hosts, and shared scene/input code. |
 | `src/c/` | Headers translated by build-system `addTranslateC()`. |
 | `build/` | Modular Zig build graph. |
 | `shaders/` | Slang shader modules and entries. |
@@ -360,7 +388,7 @@ fragment-side curve integration pressure.
 | --- | --- |
 | Coverage | Analytic outline coverage is preserved until the fragment shader. |
 | Culling | Task/mesh stages perform conservative work reduction. |
-| Core scope | The core is backend-neutral and GLFW-free. |
+| Core scope | The core is backend-neutral and window-system-free. |
 | Host scope | Applications provide GPU contexts, queues, swapchains, and frame completion. |
 | Glyph resources | Cached glyph blobs live in one backend-owned glyph-pool buffer. |
 | Blob references | `GlyphBlobRef` values are byte offsets instead of descriptor slots. |
@@ -381,7 +409,7 @@ provide only the upload/retire behavior and the GPU submission path.
 | HarfBuzz | `build.zig.zon` source archive | No |
 | `vulkan-zig` | pinned Git dependency | Yes |
 | Vulkan Headers | pinned Git dependency | Yes |
-| GLFW | pinned source archive | Yes |
+| Wayland client/protocols | system Linux demo dependency | No |
 
 Generated local build outputs use the usual Zig paths: `zig-out/`,
 `.zig-cache/`, and `zig-pkg/`. They are not source artifacts and should not be
