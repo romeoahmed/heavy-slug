@@ -49,6 +49,9 @@ implementation notes belong in commits and code review history.
 - **Font and bundled C library cleanup:** HarfBuzz/FreeType wrappers use
   Zig-style naming, report allocation failures more clearly, and build a
   slimmer outline-focused FreeType configuration.
+- **Core cache internals tightened:** glyph promotion now happens without a
+  fixed per-frame queue cap, deferred retirement compacts in one pass, and the
+  byte pool reclaims tail frees to reduce fragmentation.
 
 ### Removed
 

@@ -30,17 +30,19 @@ pub fn DeferredRetirementQueue(comptime FrameToken: type, comptime Resource: typ
 
         pub fn retireCompleted(self: *Self, completed_token: FrameToken, retiree: anytype) u32 {
             var retired: u32 = 0;
-            var i: usize = 0;
-            while (i < self.entries.items.len) {
-                const entry = self.entries.items[i];
+            var write: usize = 0;
+            var read: usize = 0;
+            while (read < self.entries.items.len) : (read += 1) {
+                const entry = self.entries.items[read];
                 if (tokenLe(entry.token, completed_token)) {
                     retiree.retire(entry.resource);
-                    _ = self.entries.orderedRemove(i);
                     retired += 1;
                 } else {
-                    i += 1;
+                    self.entries.items[write] = entry;
+                    write += 1;
                 }
             }
+            self.entries.shrinkRetainingCapacity(write);
             return retired;
         }
 
@@ -82,4 +84,30 @@ test "DeferredRetirementQueue retires only completed resources" {
     try std.testing.expectEqual(@as(u32, 30), queue.entries.items[0].resource);
     try std.testing.expectEqual(@as(u32, 2), retired);
     try std.testing.expectEqual(@as(usize, 2), retire.values.items.len);
+}
+
+test "DeferredRetirementQueue preserves pending order while compacting" {
+    const Queue = DeferredRetirementQueue(u64, u32);
+    var queue = Queue.init(std.testing.allocator);
+    defer queue.deinit();
+
+    try queue.push(5, 50);
+    try queue.push(1, 10);
+    try queue.push(4, 40);
+    try queue.push(2, 20);
+
+    const Retire = struct {
+        retired: u32 = 0,
+
+        fn retire(self: *@This(), _: u32) void {
+            self.retired += 1;
+        }
+    };
+    var retire: Retire = .{};
+
+    try std.testing.expectEqual(@as(u32, 2), queue.retireCompleted(2, &retire));
+    try std.testing.expectEqual(@as(u32, 2), retire.retired);
+    try std.testing.expectEqual(@as(usize, 2), queue.entries.items.len);
+    try std.testing.expectEqual(@as(u32, 50), queue.entries.items[0].resource);
+    try std.testing.expectEqual(@as(u32, 40), queue.entries.items[1].resource);
 }

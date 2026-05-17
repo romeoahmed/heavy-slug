@@ -68,7 +68,8 @@ pub const PoolAllocator = struct {
     /// Allocate `size` bytes, using best-fit free blocks before bump allocation.
     pub fn alloc(self: *PoolAllocator, size: u32) ?Allocation {
         if (size == 0) return null;
-        const aligned_size = alignUp(size, self.alignment);
+        const aligned_size = alignAllocationSize(size, self.alignment) orelse return null;
+        if (aligned_size > self.capacity) return null;
 
         var best_idx: ?usize = null;
         var best_waste: u32 = std.math.maxInt(u32);
@@ -98,7 +99,7 @@ pub const PoolAllocator = struct {
             return result;
         }
 
-        if (self.cursor + aligned_size > self.capacity) return null;
+        if (aligned_size > self.capacity - self.cursor) return null;
         const result = Allocation{ .offset = self.cursor, .size = size };
         self.cursor += aligned_size;
         return result;
@@ -106,52 +107,98 @@ pub const PoolAllocator = struct {
 
     /// Return an allocation and coalesce adjacent free blocks.
     pub fn free(self: *PoolAllocator, allocation: Allocation) void {
-        const aligned_size = alignUp(allocation.size, self.alignment);
-        var new_offset = allocation.offset;
-        var new_size = aligned_size;
+        if (allocation.size == 0) return;
 
-        const insert_idx = self.findInsertPoint(new_offset);
+        const aligned_size = alignAllocationSize(allocation.size, self.alignment) orelse {
+            log.warn("invalid free size {d} at offset {d}", .{ allocation.size, allocation.offset });
+            return;
+        };
+        const allocation_end = std.math.add(u32, allocation.offset, aligned_size) catch {
+            log.warn("invalid free range size {d} at offset {d}", .{ allocation.size, allocation.offset });
+            return;
+        };
+        if (allocation.offset & (self.alignment - 1) != 0 or allocation_end > self.cursor) {
+            log.warn("invalid free range size {d} at offset {d}", .{ allocation.size, allocation.offset });
+            return;
+        }
+
+        if (allocation_end == self.cursor) {
+            self.cursor = allocation.offset;
+            self.reclaimTrailingFreeBlocks();
+            return;
+        }
+
+        const insert_idx = self.findInsertPoint(allocation.offset);
 
         if (insert_idx > 0) {
             const prev = &self.free_blocks.items[insert_idx - 1];
-            if (prev.offset + prev.size == new_offset) {
-                new_offset = prev.offset;
-                new_size += prev.size;
-                _ = self.free_blocks.orderedRemove(insert_idx - 1);
-                // After removing the predecessor, its old index now holds the successor.
-                const succ_idx = insert_idx - 1;
-                if (succ_idx < self.free_blocks.items.len) {
-                    const next = &self.free_blocks.items[succ_idx];
-                    if (new_offset + new_size == next.offset) {
-                        new_size += next.size;
-                        _ = self.free_blocks.orderedRemove(succ_idx);
-                    }
-                }
-                self.free_blocks.insert(self.allocator, succ_idx, .{
-                    .offset = new_offset,
-                    .size = new_size,
-                }) catch {
-                    log.warn("free-list insert OOM: leaked {d} bytes at offset {d}", .{ new_size, new_offset });
+            const prev_end = std.math.add(u32, prev.offset, prev.size) catch {
+                log.warn("corrupt free block size {d} at offset {d}", .{ prev.size, prev.offset });
+                return;
+            };
+            if (prev_end > allocation.offset) {
+                log.warn("overlapping free range size {d} at offset {d}", .{ allocation.size, allocation.offset });
+                return;
+            }
+            if (prev_end == allocation.offset) {
+                var merged_size = std.math.add(u32, prev.size, aligned_size) catch {
+                    log.warn("free block size overflow at offset {d}", .{prev.offset});
+                    return;
                 };
+                if (insert_idx < self.free_blocks.items.len) {
+                    const merged_end = std.math.add(u32, prev.offset, merged_size) catch {
+                        log.warn("free block end overflow at offset {d}", .{prev.offset});
+                        return;
+                    };
+                    const next = self.free_blocks.items[insert_idx];
+                    if (merged_end > next.offset) {
+                        log.warn("overlapping free range size {d} at offset {d}", .{ allocation.size, allocation.offset });
+                        return;
+                    }
+                    if (merged_end == next.offset) {
+                        merged_size = std.math.add(u32, merged_size, next.size) catch {
+                            log.warn("free block size overflow at offset {d}", .{prev.offset});
+                            return;
+                        };
+                        prev.size = merged_size;
+                        _ = self.free_blocks.orderedRemove(insert_idx);
+                    } else {
+                        prev.size = merged_size;
+                    }
+                } else {
+                    prev.size = merged_size;
+                }
+                self.reclaimTrailingFreeBlocks();
                 return;
             }
         }
 
         if (insert_idx < self.free_blocks.items.len) {
             const next = &self.free_blocks.items[insert_idx];
-            if (new_offset + new_size == next.offset) {
-                next.offset = new_offset;
-                next.size += new_size;
+            if (allocation_end > next.offset) {
+                log.warn("overlapping free range size {d} at offset {d}", .{ allocation.size, allocation.offset });
+                return;
+            }
+            if (allocation_end == next.offset) {
+                const merged_size = std.math.add(u32, next.size, aligned_size) catch {
+                    log.warn("free block size overflow at offset {d}", .{allocation.offset});
+                    return;
+                };
+                next.offset = allocation.offset;
+                next.size = merged_size;
+                self.reclaimTrailingFreeBlocks();
                 return;
             }
         }
 
         self.free_blocks.insert(self.allocator, insert_idx, .{
-            .offset = new_offset,
-            .size = new_size,
+            .offset = allocation.offset,
+            .size = aligned_size,
         }) catch {
-            log.warn("free-list insert OOM: leaked {d} bytes at offset {d}", .{ new_size, new_offset });
+            log.warn("free-list insert OOM: leaked {d} bytes at offset {d}", .{ aligned_size, allocation.offset });
+            return;
         };
+        self.reclaimTrailingFreeBlocks();
     }
 
     /// Reset the pool to empty. All prior allocations become invalid.
@@ -175,9 +222,20 @@ pub const PoolAllocator = struct {
         return lo;
     }
 
-    fn alignUp(value: u32, alignment: u32) u32 {
+    fn reclaimTrailingFreeBlocks(self: *PoolAllocator) void {
+        while (self.free_blocks.items.len > 0) {
+            const last = self.free_blocks.items[self.free_blocks.items.len - 1];
+            const last_end = std.math.add(u32, last.offset, last.size) catch break;
+            if (last_end != self.cursor) break;
+            self.cursor = last.offset;
+            _ = self.free_blocks.pop();
+        }
+    }
+
+    fn alignAllocationSize(value: u32, alignment: u32) ?u32 {
         const mask = alignment - 1;
-        return (value + mask) & ~mask;
+        const rounded = std.math.add(u32, value, mask) catch return null;
+        return rounded & ~mask;
     }
 };
 
@@ -200,6 +258,13 @@ test "PoolAllocator: returns null when full" {
 
     _ = pa.alloc(20).?; // consumes 32 aligned bytes
     try std.testing.expectEqual(@as(?Allocation, null), pa.alloc(1));
+}
+
+test "PoolAllocator: oversized allocation returns null without wrapping" {
+    var pa = PoolAllocator.init(std.testing.allocator, 1024, 256);
+    defer pa.deinit();
+
+    try std.testing.expectEqual(@as(?Allocation, null), pa.alloc(std.math.maxInt(u32)));
 }
 
 test "PoolAllocator: zero-size alloc returns null" {
@@ -241,6 +306,7 @@ test "PoolAllocator: free block splitting" {
     defer pa.deinit();
 
     const a = pa.alloc(48).?; // 48 bytes aligned = 48 bytes
+    _ = pa.alloc(16); // tail guard so freeing a exercises the free-list path
     pa.free(a); // free list: {offset=0, size=48}
 
     const b = pa.alloc(16).?;
@@ -278,6 +344,7 @@ test "PoolAllocator: best-fit selects smallest suitable block" {
     const b = pa.alloc(128).?; // offset 64, aligned 128
     _ = pa.alloc(16); // offset 192, guard — prevents b and c from coalescing
     const c = pa.alloc(32).?; // offset 208, aligned 32
+    _ = pa.alloc(16); // tail guard: keeps c available for best-fit reuse
     pa.free(b); // free the 128-byte block: [{offset=64, size=128}]
     pa.free(c); // free the 32-byte block:  [{offset=64, size=128}, {offset=208, size=32}]
 
@@ -285,6 +352,40 @@ test "PoolAllocator: best-fit selects smallest suitable block" {
     try std.testing.expectEqual(c.offset, d.offset);
 
     _ = a;
+}
+
+test "PoolAllocator: freeing tail allocation rewinds cursor" {
+    var pa = PoolAllocator.init(std.testing.allocator, 256, 16);
+    defer pa.deinit();
+
+    const a = pa.alloc(16).?;
+    const b = pa.alloc(24).?;
+    pa.free(b);
+
+    try std.testing.expectEqual(@as(u32, 16), pa.cursor);
+    try std.testing.expectEqual(@as(usize, 0), pa.free_blocks.items.len);
+
+    pa.free(a);
+    try std.testing.expectEqual(@as(u32, 0), pa.cursor);
+    try std.testing.expectEqual(@as(usize, 0), pa.free_blocks.items.len);
+}
+
+test "PoolAllocator: tail rewind absorbs adjacent free blocks" {
+    var pa = PoolAllocator.init(std.testing.allocator, 256, 16);
+    defer pa.deinit();
+
+    const a = pa.alloc(16).?;
+    const b = pa.alloc(16).?;
+    const c = pa.alloc(16).?;
+
+    pa.free(a);
+    pa.free(b);
+    try std.testing.expectEqual(@as(u32, 48), pa.cursor);
+    try std.testing.expectEqual(@as(usize, 1), pa.free_blocks.items.len);
+
+    pa.free(c);
+    try std.testing.expectEqual(@as(u32, 0), pa.cursor);
+    try std.testing.expectEqual(@as(usize, 0), pa.free_blocks.items.len);
 }
 
 test "PoolAllocator: free coalesces adjacent blocks" {

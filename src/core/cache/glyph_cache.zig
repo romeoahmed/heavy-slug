@@ -22,7 +22,7 @@ pub const CacheKey = struct {
     variation_key: u64 = 0,
 };
 
-const Tier = enum { hot, cold };
+pub const CacheTier = enum { hot, cold };
 
 /// Pre-computed em-space bounding box (float, ready for GlyphInstance).
 pub const EmBox = struct {
@@ -35,7 +35,7 @@ pub const EmBox = struct {
 pub const CacheEntry = struct {
     blob_ref: GlyphBlobRef,
     pool_alloc: pool_mod.Allocation,
-    tier: Tier,
+    tier: CacheTier,
     last_frame: u32,
     consecutive_frames: u8,
     em_box: EmBox,
@@ -45,26 +45,6 @@ pub const CacheEntry = struct {
 const LRU_SENTINEL_HEAD: u32 = 0; // MRU end
 const LRU_SENTINEL_TAIL: u32 = 1; // LRU end
 const LRU_NONE: u32 = std.math.maxInt(u32);
-const MAX_PROMOTIONS_PER_FRAME: usize = 64;
-
-/// Fixed-capacity queue backed by a stack array. Used for the promotion queue.
-fn BoundedQueue(comptime T: type, comptime cap: usize) type {
-    return struct {
-        buf: [cap]T = undefined,
-        len: usize = 0,
-
-        pub fn append(self: *@This(), val: T) error{Overflow}!void {
-            if (self.len >= cap) return error.Overflow;
-            self.buf[self.len] = val;
-            self.len += 1;
-        }
-
-        pub fn constSlice(self: *const @This()) []const T {
-            return self.buf[0..self.len];
-        }
-    };
-}
-
 const LruNode = struct {
     key: CacheKey,
     prev: u32,
@@ -96,7 +76,6 @@ pub const GlyphCache = struct {
     allocator: std.mem.Allocator,
     lru_nodes: []LruNode,
     lru_free_head: u32,
-    promote_queue: BoundedQueue(CacheKey, MAX_PROMOTIONS_PER_FRAME),
 
     /// Wrapping frame age: how many frames ago was `frame` relative to `current`.
     /// Handles u32 overflow correctly via wrapping subtraction.
@@ -135,13 +114,27 @@ pub const GlyphCache = struct {
         self.lruLinkAfter(LRU_SENTINEL_HEAD, idx);
     }
 
+    fn promoteCold(self: *GlyphCache, entry: *CacheEntry) void {
+        std.debug.assert(entry.tier == .cold);
+        std.debug.assert(self.hot_count < self.hot_capacity);
+
+        self.lruUnlink(entry.lru_idx);
+        self.lruFree(entry.lru_idx);
+        entry.lru_idx = LRU_NONE;
+        entry.tier = .hot;
+        entry.consecutive_frames = 0;
+        self.hot_count += 1;
+        self.cold_count -= 1;
+    }
+
     pub fn init(
         allocator: std.mem.Allocator,
         hot_capacity: u32,
         cold_capacity: u32,
         promote_frames: u8,
     ) !GlyphCache {
-        const node_count = cold_capacity + 2; // 2 sentinels + cold_capacity user nodes
+        if (cold_capacity > std.math.maxInt(u32) - 2) return error.CacheCapacityTooLarge;
+        const node_count: usize = @as(usize, cold_capacity) + 2; // 2 sentinels + cold_capacity user nodes
         const lru_nodes = try allocator.alloc(LruNode, node_count);
 
         // Sentinels: HEAD <-> TAIL
@@ -151,11 +144,11 @@ pub const GlyphCache = struct {
         // Build free list from indices 2..node_count-1
         var free_head: u32 = LRU_NONE;
         if (cold_capacity > 0) {
-            var i: u32 = node_count - 1;
-            while (i >= 2) : (i -= 1) {
+            var i = cold_capacity + 2;
+            while (i > 2) {
+                i -= 1;
                 lru_nodes[i] = .{ .key = undefined, .prev = LRU_NONE, .next = free_head };
                 free_head = i;
-                if (i == 2) break;
             }
         }
 
@@ -170,7 +163,6 @@ pub const GlyphCache = struct {
             .promote_frames = promote_frames,
             .lru_nodes = lru_nodes,
             .lru_free_head = free_head,
-            .promote_queue = .{},
         };
     }
 
@@ -254,35 +246,18 @@ pub const GlyphCache = struct {
 
         // Move cold entry to MRU position in LRU list
         if (entry.tier == .cold) {
-            self.lruTouch(entry.lru_idx);
-            // Queue for promotion if threshold reached
-            if (entry.consecutive_frames >= self.promote_frames) {
-                self.promote_queue.append(key) catch {};
+            if (entry.consecutive_frames >= self.promote_frames and self.hot_count < self.hot_capacity) {
+                self.promoteCold(entry);
+            } else {
+                self.lruTouch(entry.lru_idx);
             }
         }
         return entry;
     }
 
-    /// Advance the frame counter. Promotes cold entries queued during lookup()
-    /// into the hot tier (if hot has capacity). O(queue_len), not O(cache_size).
+    /// Advance the frame counter. Promotion happens synchronously in lookup().
     pub fn advanceFrame(self: *GlyphCache) void {
         self.current_frame +%= 1;
-
-        // Promote queued candidates (O(queue_len), not O(cache_size))
-        for (self.promote_queue.constSlice()) |key| {
-            if (self.hot_count >= self.hot_capacity) break;
-            const entry = self.map.getPtr(key) orelse continue;
-            if (entry.tier != .cold) continue; // already promoted or evicted
-            if (entry.consecutive_frames < self.promote_frames) continue; // stale queue entry
-            self.lruUnlink(entry.lru_idx);
-            self.lruFree(entry.lru_idx);
-            entry.lru_idx = LRU_NONE;
-            entry.tier = .hot;
-            entry.consecutive_frames = 0;
-            self.hot_count += 1;
-            self.cold_count -= 1;
-        }
-        self.promote_queue.len = 0;
     }
 
     /// Evict the least-recently-used cold entry. O(1) via DLL tail pop.
@@ -395,11 +370,11 @@ test "GlyphCache: insert and lookup track tiers, counts, and full keys" {
     try std.testing.expectEqual(@as(?*CacheEntry, null), cache.lookup(.{ .font_id = 1, .glyph_id = 99 }));
 
     const hot = cache.lookup(hot_key).?;
-    try std.testing.expectEqual(Tier.hot, hot.tier);
+    try std.testing.expectEqual(CacheTier.hot, hot.tier);
     try std.testing.expectEqual(testBlobRef(0), hot.blob_ref);
 
     const default_entry = cache.lookup(default_key).?;
-    try std.testing.expectEqual(Tier.cold, default_entry.tier);
+    try std.testing.expectEqual(CacheTier.cold, default_entry.tier);
     try std.testing.expectEqual(testBlobRef(1), default_entry.blob_ref);
     try std.testing.expectEqual(@as(f32, 1), default_entry.em_box.x_max);
 
@@ -458,7 +433,7 @@ test "GlyphCache: evict prefers least recently used" {
 }
 
 test "GlyphCache: consecutive frame tracking" {
-    var cache = try GlyphCache.init(std.testing.allocator, 4, 8, 3);
+    var cache = try GlyphCache.init(std.testing.allocator, 0, 8, 3);
     defer cache.deinit();
 
     const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
@@ -482,7 +457,7 @@ test "GlyphCache: consecutive frame tracking" {
     try std.testing.expectEqual(@as(u8, 1), entry.consecutive_frames); // reset after gap
 }
 
-test "GlyphCache: cold promoted to hot after consecutive frames" {
+test "GlyphCache: cold promoted to hot when lookup reaches frame threshold" {
     var cache = try GlyphCache.init(std.testing.allocator, 4, 8, 3); // promote after 3 frames
     defer cache.deinit();
 
@@ -493,12 +468,10 @@ test "GlyphCache: cold promoted to hot after consecutive frames" {
     _ = cache.lookup(key); // consecutive = 2
 
     cache.advanceFrame(); // frame 2
-    _ = cache.lookup(key); // consecutive = 3 (>= promote_frames)
-
-    cache.advanceFrame(); // frame 3: promotion happens here
+    _ = cache.lookup(key); // consecutive = 3, promotion happens immediately
 
     const entry = cache.lookup(key).?;
-    try std.testing.expectEqual(Tier.hot, entry.tier);
+    try std.testing.expectEqual(CacheTier.hot, entry.tier);
     try std.testing.expectEqual(@as(u32, 1), cache.hot_count);
     try std.testing.expectEqual(@as(u32, 0), cache.cold_count);
 }
@@ -517,10 +490,10 @@ test "GlyphCache: promotion skipped when hot tier full" {
     _ = cache.lookup(cold_key);
     cache.advanceFrame();
     _ = cache.lookup(cold_key);
-    cache.advanceFrame(); // would promote, but hot is full
+    cache.advanceFrame(); // threshold was reached, but hot is full
 
     const entry = cache.lookup(cold_key).?;
-    try std.testing.expectEqual(Tier.cold, entry.tier); // stays cold
+    try std.testing.expectEqual(CacheTier.cold, entry.tier); // stays cold
     try std.testing.expectEqual(@as(u32, 1), cache.hot_count);
     try std.testing.expectEqual(@as(u32, 1), cache.cold_count);
 }
@@ -658,30 +631,33 @@ test "GlyphCache: promoted entry not returned by evictLru" {
 
     cache.advanceFrame();
     _ = cache.lookup(key_a);
-    cache.advanceFrame(); // promotes key_a to hot
+    cache.advanceFrame();
 
     const evicted = cache.evictLru().?;
     try std.testing.expectEqual(key_b, evicted.key);
     try std.testing.expectEqual(@as(?EvictedEntry, null), cache.evictLru());
 }
 
-test "GlyphCache: promotion queue populated during lookup" {
-    var cache_inst = try GlyphCache.init(std.testing.allocator, 4, 8, 2);
+test "GlyphCache: promotion is not capped by a fixed per-frame queue" {
+    var cache_inst = try GlyphCache.init(std.testing.allocator, 80, 80, 2);
     defer cache_inst.deinit();
 
     const dummy_box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
-    const key = CacheKey{ .font_id = 1, .glyph_id = 65 };
-    try cache_inst.insertCold(key, testBlobRef(0), .{ .offset = 0, .size = 64 }, dummy_box);
+    var glyph_id: u32 = 0;
+    while (glyph_id < 80) : (glyph_id += 1) {
+        const key = CacheKey{ .font_id = 1, .glyph_id = glyph_id };
+        try cache_inst.insertCold(key, testBlobRef(glyph_id), .{ .offset = glyph_id * 64, .size = 64 }, dummy_box);
+    }
 
     cache_inst.advanceFrame();
-    _ = cache_inst.lookup(key);
+    glyph_id = 0;
+    while (glyph_id < 80) : (glyph_id += 1) {
+        _ = cache_inst.lookup(.{ .font_id = 1, .glyph_id = glyph_id });
+    }
 
-    try std.testing.expectEqual(@as(usize, 1), cache_inst.promote_queue.len);
-    try std.testing.expectEqual(key, cache_inst.promote_queue.constSlice()[0]);
-
-    cache_inst.advanceFrame();
-    try std.testing.expectEqual(@as(usize, 0), cache_inst.promote_queue.len);
-    try std.testing.expectEqual(Tier.hot, cache_inst.lookup(key).?.tier);
+    try std.testing.expectEqual(@as(u32, 80), cache_inst.hot_count);
+    try std.testing.expectEqual(@as(u32, 0), cache_inst.cold_count);
+    try std.testing.expectEqual(CacheTier.hot, cache_inst.lookup(.{ .font_id = 1, .glyph_id = 79 }).?.tier);
 }
 
 test "GlyphCache: same-frame lookups skip LRU touch" {
