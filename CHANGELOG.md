@@ -12,6 +12,11 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **CI rewritten:** GitHub Actions now use one test matrix across Ubuntu,
+  macOS, and `windows-2025-vs2026`, add native demo build tests through
+  `-Ddemo=true`, and use dedicated PowerShell 7 setup scripts for Windows.
+- **Slang CI setup updated:** the POSIX setup script now accepts current Slang
+  `.zip` release assets and Linux glibc-suffixed asset names.
 - **Documentation refreshed:** `README.md`, `AGENTS.md`, and `CHANGELOG.md`
   now describe the current native-demo-host architecture at a higher level and
   remove stale or overly specific platform implementation notes.
@@ -44,6 +49,8 @@ implementation notes belong in commits and code review history.
 
 ### Removed
 
+- **ReleaseFast CI job removed:** release-mode build verification is no longer
+  a separate GitHub Actions job.
 - **GLFW dependency removed:** the `glfw_src` package, translated GLFW header,
   and demo GLFW wrapper/build path were deleted.
 - **Wayland xdg-decoration path removed:** the Linux demo now keeps CSD as the

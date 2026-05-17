@@ -5,7 +5,7 @@
 #   SLANG_VERSION       — latest | explicit version/tag (default: latest)
 #   SLANG_PLATFORM      — release asset platform (default: inferred from runner)
 #   SLANG_ASSET_PATTERN — optional release asset regex override
-#   SLANG_DOWNLOAD_URL  — optional pre-resolved tarball URL
+#   SLANG_DOWNLOAD_URL  — optional pre-resolved archive URL
 #   SLANG_INSTALL_DIR   — extraction target (default: ~/slang)
 #   GH_TOKEN            — optional GitHub token for API requests
 #   GITHUB_PATH         — GitHub Actions PATH file
@@ -66,13 +66,12 @@ PLATFORM="${SLANG_PLATFORM:-$(infer_platform)}"
 ASSET_PATTERN="${SLANG_ASSET_PATTERN:-}"
 
 version_from_url() {
-    local base prefix suffix
+    local base
     base="${1##*/}"
-    prefix="slang-"
-    suffix="-${PLATFORM}.tar.gz"
-    if [[ "$base" == "$prefix"*"$suffix" ]]; then
-        base="${base#"$prefix"}"
-        printf '%s\n' "${base%"$suffix"}"
+    if [[ "$base" =~ ^slang-(.+)-${PLATFORM}\.(tar\.gz|zip)$ ]]; then
+        printf '%s\n' "${BASH_REMATCH[1]}"
+    elif [[ "$base" =~ ^slang-(.+)-${PLATFORM}-glibc-[0-9.]+\.zip$ ]]; then
+        printf '%s\n' "${BASH_REMATCH[1]}"
     fi
 }
 
@@ -121,9 +120,13 @@ resolve_release() {
             | .browser_download_url
         ' | head -n 1)
     else
-        asset_url=$(echo "$release_json" | jq -r --arg name "slang-${RESOLVED_VERSION}-${PLATFORM}.tar.gz" '
+        asset_url=$(echo "$release_json" | jq -r --arg version "$RESOLVED_VERSION" --arg platform "$PLATFORM" '
             .assets[]
-            | select(.name == $name)
+            | select(
+                .name == "slang-\($version)-\($platform).tar.gz" or
+                .name == "slang-\($version)-\($platform).zip" or
+                ((.name | startswith("slang-\($version)-\($platform)-glibc-")) and (.name | endswith(".zip")))
+            )
             | .browser_download_url
         ' | head -n 1)
     fi
@@ -136,7 +139,7 @@ resolve_release() {
         if [[ -n "$ASSET_PATTERN" ]]; then
             echo "::error::no Slang release asset matched '$ASSET_PATTERN' for '$RESOLVED_VERSION'"
         else
-            echo "::error::no Slang release asset named 'slang-${RESOLVED_VERSION}-${PLATFORM}.tar.gz'"
+            echo "::error::no Slang release asset found for version '$RESOLVED_VERSION' and platform '$PLATFORM'"
         fi
         echo "Available assets:"
         echo "$release_json" | jq -r '.assets[].name'
@@ -181,8 +184,48 @@ if [[ -x "$INSTALL_DIR/bin/slangc" && -f "$INSTALL_DIR/.slang-version" ]]; then
     rm -rf "$INSTALL_DIR"
 fi
 
-mkdir -p "$INSTALL_DIR"
-curl -fsSL "$DOWNLOAD_URL" | tar -xz -C "$INSTALL_DIR"
+extract_archive() {
+    local archive temp_root slangc_path bin_dir root_dir
+    archive="$1"
+    temp_root="$(mktemp -d)"
+
+    case "$archive" in
+        *.tar.gz)
+            tar -xzf "$archive" -C "$temp_root"
+            ;;
+        *.zip)
+            unzip -q "$archive" -d "$temp_root"
+            ;;
+        *)
+            echo "::error::unsupported Slang archive format: $archive"
+            exit 1
+            ;;
+    esac
+
+    slangc_path=$(find "$temp_root" -type f \( -name slangc -o -name slangc.exe \) | head -n 1)
+    if [[ -z "$slangc_path" ]]; then
+        echo "::error::slangc not found after extraction"
+        find "$temp_root" -maxdepth 3 -type f | sort
+        exit 1
+    fi
+
+    bin_dir="$(dirname "$slangc_path")"
+    if [[ "$(basename "$bin_dir")" == "bin" ]]; then
+        root_dir="$(dirname "$bin_dir")"
+    else
+        root_dir="$bin_dir"
+    fi
+
+    rm -rf "$INSTALL_DIR"
+    mkdir -p "$INSTALL_DIR"
+    cp -R "$root_dir"/. "$INSTALL_DIR"
+    rm -rf "$temp_root"
+}
+
+archive_path="${RUNNER_TEMP:-/tmp}/$(basename "$DOWNLOAD_URL")"
+curl -fsSL "$DOWNLOAD_URL" -o "$archive_path"
+extract_archive "$archive_path"
+rm -f "$archive_path"
 
 if [[ ! -x "$INSTALL_DIR/bin/slangc" ]]; then
     echo "::error::slangc not found at $INSTALL_DIR/bin/slangc after extraction"

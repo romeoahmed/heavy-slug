@@ -17,11 +17,6 @@ on:
         required: false
         default: "latest"
         type: string
-      run_release_build:
-        description: "Run ReleaseFast build jobs"
-        required: false
-        default: true
-        type: boolean
 
 permissions:
   contents: read
@@ -39,17 +34,17 @@ jobs:
 
       - name: Resolve Zig
         id: zig
-        run: .github/scripts/setup-zig.sh --resolve-only
+        run: ./.github/scripts/setup-zig.sh --resolve-only
 
       - name: Restore Zig tool cache
         id: zig-cache
         uses: actions/cache/restore@v5
         with:
-          path: ~/zig
+          path: ${{ steps.zig.outputs.install_dir }}
           key: zig-${{ runner.os }}-${{ runner.arch }}-${{ steps.zig.outputs.version }}-${{ steps.zig.outputs.target }}-lint
 
       - name: Setup Zig
-        run: .github/scripts/setup-zig.sh
+        run: ./.github/scripts/setup-zig.sh
         env:
           ZIG_VERSION: ${{ steps.zig.outputs.version }}
           ZIG_DOWNLOAD_URL: ${{ steps.zig.outputs.url }}
@@ -58,11 +53,11 @@ jobs:
         if: steps.zig-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
-          path: ~/zig
+          path: ${{ steps.zig.outputs.install_dir }}
           key: zig-${{ runner.os }}-${{ runner.arch }}-${{ steps.zig.outputs.version }}-${{ steps.zig.outputs.target }}-lint
 
       - name: Check formatting
-        run: zig fmt --check build.zig src/ tools/
+        run: zig fmt --check build.zig build/ src/ tools/
 
   test:
     name: Test (${{ matrix.name }})
@@ -72,39 +67,112 @@ jobs:
       matrix:
         include:
           - name: ubuntu core
+            os: ubuntu-latest
             cache: ubuntu-core
-            os: ubuntu-latest
+            setup_zig: ./.github/scripts/setup-zig.sh
+            setup_slang: ./.github/scripts/setup-slang.sh
             command: zig build test
+            slang: false
+            wayland: false
           - name: ubuntu vulkan
+            os: ubuntu-latest
             cache: ubuntu-vulkan
-            os: ubuntu-latest
+            setup_zig: ./.github/scripts/setup-zig.sh
+            setup_slang: ./.github/scripts/setup-slang.sh
             command: zig build test -Dvulkan=true
+            slang: true
+            wayland: false
           - name: ubuntu vulkan shader stats
-            cache: ubuntu-vulkan-shader-stats
             os: ubuntu-latest
+            cache: ubuntu-vulkan-shader-stats
+            setup_zig: ./.github/scripts/setup-zig.sh
+            setup_slang: ./.github/scripts/setup-slang.sh
             command: zig build test -Dvulkan=true -Dshader-stats=true
+            slang: true
+            wayland: false
+          - name: ubuntu vulkan demo
+            os: ubuntu-latest
+            cache: ubuntu-vulkan-demo
+            setup_zig: ./.github/scripts/setup-zig.sh
+            setup_slang: ./.github/scripts/setup-slang.sh
+            command: zig build test -Ddemo=true -Ddemo-backend=vulkan
+            slang: true
+            wayland: true
           - name: macos core
+            os: macos-26
             cache: macos-core
-            os: macos-26
+            setup_zig: ./.github/scripts/setup-zig.sh
+            setup_slang: ./.github/scripts/setup-slang.sh
             command: zig build test
+            slang: false
+            wayland: false
           - name: macos metal
+            os: macos-26
             cache: macos-metal
-            os: macos-26
+            setup_zig: ./.github/scripts/setup-zig.sh
+            setup_slang: ./.github/scripts/setup-slang.sh
             command: zig build test -Dmetal=true
+            slang: true
+            wayland: false
           - name: macos metal shader stats
-            cache: macos-metal-shader-stats
             os: macos-26
+            cache: macos-metal-shader-stats
+            setup_zig: ./.github/scripts/setup-zig.sh
+            setup_slang: ./.github/scripts/setup-slang.sh
             command: zig build test -Dmetal=true -Dshader-stats=true
+            slang: true
+            wayland: false
+          - name: macos metal demo
+            os: macos-26
+            cache: macos-metal-demo
+            setup_zig: ./.github/scripts/setup-zig.sh
+            setup_slang: ./.github/scripts/setup-slang.sh
+            command: zig build test -Ddemo=true -Ddemo-backend=metal
+            slang: true
+            wayland: false
+          - name: windows-2025-vs2026 core
+            os: windows-2025-vs2026
+            cache: windows-2025-vs2026-core
+            setup_zig: ./.github/scripts/setup-zig.ps1
+            setup_slang: ./.github/scripts/setup-slang.ps1
+            command: zig build test
+            slang: false
+            wayland: false
+          - name: windows-2025-vs2026 vulkan
+            os: windows-2025-vs2026
+            cache: windows-2025-vs2026-vulkan
+            setup_zig: ./.github/scripts/setup-zig.ps1
+            setup_slang: ./.github/scripts/setup-slang.ps1
+            command: zig build test -Dvulkan=true
+            slang: true
+            wayland: false
+          - name: windows-2025-vs2026 vulkan shader stats
+            os: windows-2025-vs2026
+            cache: windows-2025-vs2026-vulkan-shader-stats
+            setup_zig: ./.github/scripts/setup-zig.ps1
+            setup_slang: ./.github/scripts/setup-slang.ps1
+            command: zig build test -Dvulkan=true -Dshader-stats=true
+            slang: true
+            wayland: false
+          - name: windows-2025-vs2026 vulkan demo
+            os: windows-2025-vs2026
+            cache: windows-2025-vs2026-vulkan-demo
+            setup_zig: ./.github/scripts/setup-zig.ps1
+            setup_slang: ./.github/scripts/setup-slang.ps1
+            command: zig build test -Ddemo=true -Ddemo-backend=vulkan
+            slang: true
+            wayland: false
     steps:
       - uses: actions/checkout@v6
 
       - name: Resolve Zig
         id: zig
-        run: .github/scripts/setup-zig.sh --resolve-only
+        run: ${{ matrix.setup_zig }} --resolve-only
 
       - name: Resolve Slang
+        if: ${{ matrix.slang }}
         id: slang
-        run: .github/scripts/setup-slang.sh --resolve-only
+        run: ${{ matrix.setup_slang }} --resolve-only
         env:
           GH_TOKEN: ${{ github.token }}
 
@@ -112,14 +180,15 @@ jobs:
         id: zig-cache
         uses: actions/cache/restore@v5
         with:
-          path: ~/zig
+          path: ${{ steps.zig.outputs.install_dir }}
           key: zig-${{ runner.os }}-${{ runner.arch }}-${{ steps.zig.outputs.version }}-${{ steps.zig.outputs.target }}-${{ matrix.cache }}
 
       - name: Restore Slang tool cache
+        if: ${{ matrix.slang }}
         id: slang-cache
         uses: actions/cache/restore@v5
         with:
-          path: ~/slang
+          path: ${{ steps.slang.outputs.install_dir }}
           key: slang-${{ runner.os }}-${{ runner.arch }}-${{ steps.slang.outputs.version }}-${{ steps.slang.outputs.platform }}-${{ matrix.cache }}
 
       - name: Cache Zig global packages
@@ -136,14 +205,21 @@ jobs:
           key: zig-local-test-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon', 'build.zig', 'src/**', 'shaders/**', 'tools/**') }}-${{ matrix.cache }}
           restore-keys: zig-local-test-${{ runner.os }}-${{ runner.arch }}-
 
+      - name: Install Wayland demo packages
+        if: ${{ matrix.wayland }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwayland-bin libwayland-dev libxkbcommon-dev wayland-protocols
+
       - name: Setup Zig
-        run: .github/scripts/setup-zig.sh
+        run: ${{ matrix.setup_zig }}
         env:
           ZIG_VERSION: ${{ steps.zig.outputs.version }}
           ZIG_DOWNLOAD_URL: ${{ steps.zig.outputs.url }}
 
       - name: Setup Slang
-        run: .github/scripts/setup-slang.sh
+        if: ${{ matrix.slang }}
+        run: ${{ matrix.setup_slang }}
         env:
           SLANG_VERSION: ${{ steps.slang.outputs.version }}
           SLANG_DOWNLOAD_URL: ${{ steps.slang.outputs.url }}
@@ -152,120 +228,22 @@ jobs:
         if: steps.zig-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
-          path: ~/zig
+          path: ${{ steps.zig.outputs.install_dir }}
           key: zig-${{ runner.os }}-${{ runner.arch }}-${{ steps.zig.outputs.version }}-${{ steps.zig.outputs.target }}-${{ matrix.cache }}
 
       - name: Save Slang tool cache
-        if: steps.slang-cache.outputs.cache-hit != 'true'
+        if: ${{ matrix.slang && steps.slang-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v5
         with:
-          path: ~/slang
+          path: ${{ steps.slang.outputs.install_dir }}
           key: slang-${{ runner.os }}-${{ runner.arch }}-${{ steps.slang.outputs.version }}-${{ steps.slang.outputs.platform }}-${{ matrix.cache }}
 
-      - name: Verify tools
-        run: |
-          zig version
-          slangc -v
+      - name: Verify Zig
+        run: zig version
+
+      - name: Verify Slang
+        if: ${{ matrix.slang }}
+        run: slangc -v
 
       - name: Run tests
-        run: ${{ matrix.command }}
-
-  build:
-    name: ReleaseFast (${{ matrix.name }})
-    runs-on: ${{ matrix.os }}
-    needs: [lint, test]
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_release_build }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: ubuntu core
-            cache: ubuntu-core
-            os: ubuntu-latest
-            command: zig build -Doptimize=ReleaseFast
-          - name: ubuntu vulkan
-            cache: ubuntu-vulkan
-            os: ubuntu-latest
-            command: zig build -Doptimize=ReleaseFast -Dvulkan=true
-          - name: macos core
-            cache: macos-core
-            os: macos-26
-            command: zig build -Doptimize=ReleaseFast
-          - name: macos metal
-            cache: macos-metal
-            os: macos-26
-            command: zig build -Doptimize=ReleaseFast -Dmetal=true
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Resolve Zig
-        id: zig
-        run: .github/scripts/setup-zig.sh --resolve-only
-
-      - name: Resolve Slang
-        id: slang
-        run: .github/scripts/setup-slang.sh --resolve-only
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-      - name: Restore Zig tool cache
-        id: zig-cache
-        uses: actions/cache/restore@v5
-        with:
-          path: ~/zig
-          key: zig-${{ runner.os }}-${{ runner.arch }}-${{ steps.zig.outputs.version }}-${{ steps.zig.outputs.target }}-${{ matrix.cache }}-release
-
-      - name: Restore Slang tool cache
-        id: slang-cache
-        uses: actions/cache/restore@v5
-        with:
-          path: ~/slang
-          key: slang-${{ runner.os }}-${{ runner.arch }}-${{ steps.slang.outputs.version }}-${{ steps.slang.outputs.platform }}-${{ matrix.cache }}-release
-
-      - name: Cache Zig global packages
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/zig
-          key: zig-global-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}-${{ matrix.cache }}-release
-          restore-keys: zig-global-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: Cache Zig local build artifacts
-        uses: actions/cache@v5
-        with:
-          path: .zig-cache
-          key: zig-local-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon', 'build.zig', 'src/**', 'shaders/**', 'tools/**') }}-${{ matrix.cache }}
-          restore-keys: zig-local-release-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: Setup Zig
-        run: .github/scripts/setup-zig.sh
-        env:
-          ZIG_VERSION: ${{ steps.zig.outputs.version }}
-          ZIG_DOWNLOAD_URL: ${{ steps.zig.outputs.url }}
-
-      - name: Setup Slang
-        run: .github/scripts/setup-slang.sh
-        env:
-          SLANG_VERSION: ${{ steps.slang.outputs.version }}
-          SLANG_DOWNLOAD_URL: ${{ steps.slang.outputs.url }}
-
-      - name: Save Zig tool cache
-        if: steps.zig-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: ~/zig
-          key: zig-${{ runner.os }}-${{ runner.arch }}-${{ steps.zig.outputs.version }}-${{ steps.zig.outputs.target }}-${{ matrix.cache }}-release
-
-      - name: Save Slang tool cache
-        if: steps.slang-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: ~/slang
-          key: slang-${{ runner.os }}-${{ runner.arch }}-${{ steps.slang.outputs.version }}-${{ steps.slang.outputs.platform }}-${{ matrix.cache }}-release
-
-      - name: Verify tools
-        run: |
-          zig version
-          slangc -v
-
-      - name: Build release
         run: ${{ matrix.command }}

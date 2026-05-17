@@ -61,7 +61,8 @@ zig build test -Dvulkan=true
 zig build test -Dmetal=true
 zig build test -Dvulkan=true -Dshader-stats=true
 zig build test -Dmetal=true -Dshader-stats=true
-zig build -Doptimize=ReleaseFast
+zig build test -Ddemo=true -Ddemo-backend=vulkan
+zig build test -Ddemo=true -Ddemo-backend=metal
 ```
 
 </details>
@@ -323,15 +324,14 @@ Generated local outputs use the usual Zig paths: `zig-out/`, `.zig-cache/`, and
 ## CI
 
 GitHub Actions run formatting, core tests, backend tests, shader-stat variants,
-and ReleaseFast builds on supported Ubuntu and macOS runners. Workflow dispatch
-can override Zig and Slang versions; the default Zig version is read from
-`build.zig.zon`.
+and demo build tests across Ubuntu, macOS, and Windows runners. Workflow
+dispatch can override Zig and Slang versions; the default Zig version is read
+from `build.zig.zon`.
 
 | Job family | Coverage |
 | --- | --- |
 | Lint | Zig formatting checks. |
-| Test | Core, Vulkan, Metal, and shader-stat variants. |
-| ReleaseFast | Core and backend release builds where supported. |
+| Test | Core, Vulkan, Metal, shader-stat variants, and native demo hosts. |
 
 ## Credit
 

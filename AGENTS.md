@@ -52,6 +52,10 @@ window-toolkit object.
   bindings.
 - `zig build test -Dvulkan=true -Dmetal=true -Dshader-stats=true` tests both
   backend modules and shader counters where the target supports them.
+- `zig build test -Ddemo=true -Ddemo-backend=vulkan` builds and tests the
+  Windows/Linux Vulkan demo host path.
+- `zig build test -Ddemo=true -Ddemo-backend=metal` builds and tests the macOS
+  Metal demo host path.
 - `zig build spirv` compiles Slang to SPIR-V 1.6.
 - `zig build msl` compiles Slang to Metal Shading Language.
 - `zig build run -Ddemo=true -Ddemo-backend=vulkan` runs the Windows/Linux
