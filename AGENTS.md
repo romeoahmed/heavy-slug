@@ -3,18 +3,24 @@
 ## Project Identity
 
 `heavy-slug` is a Zig 0.16 GPU text rendering library for analytic,
-resolution-independent text. The renderer shapes text with HarfBuzz, captures
-native outlines, encodes cubic coverage blobs, and renders those blobs with
-task, mesh, and fragment shaders on Vulkan 1.4 and Metal 4.
+resolution-independent text. It shapes Unicode with HarfBuzz, captures native
+font outlines, regularizes them into cubic coverage blobs, and renders those
+blobs with task, mesh, and fragment shaders on Vulkan 1.4 and Metal 4.
 
-`README.md` is the canonical high-level architecture, algorithm, dependency,
-and Slug-credit document. Keep it accurate when changing public APIs, backend
-requirements, shader layout, build commands, or major algorithmic behavior.
+Treat `README.md` as the canonical public architecture document. Update it when
+you change public APIs, build commands, platform requirements, backend
+contracts, shader layout, diagnostics, algorithmic invariants, Slug credit, or
+project positioning. Update `CHANGELOG.md` for user-visible API, dependency,
+build, backend, or architecture changes.
+
+The library boundary is deliberate: core code must never own a GPU context,
+swapchain, window, command queue, command buffer, CAMetalLayer lifecycle, or
+GLFW object.
 
 ## Project Structure
 
 - `src/root.zig` exports the public `heavy_slug` core API.
-- `src/core/` contains public value types plus font, outline, blob, cache, and
+- `src/core/` owns public value types plus font, outline, blob, cache, and
   renderer-core internals.
 - `src/gpu/` contains backend-neutral GPU ABI markers, mesh limits, resource
   model notes, and shader stats types.
@@ -22,22 +28,20 @@ requirements, shader layout, build commands, or major algorithmic behavior.
 - `src/backends/vulkan/` provides the opt-in `heavy_slug_vulkan` module.
 - `src/backends/metal/` provides the opt-in `heavy_slug_metal` module and
   Objective-C++ bridge.
-- `src/demo/common/` contains demo-only scene/input helpers.
+- `src/demo/common/` contains demo-only scene and input helpers.
 - `src/demo/vulkan/` and `src/demo/metal/` contain platform demo hosts.
 - `src/c/` contains headers translated by build-system `addTranslateC()`.
 - `build/` contains modular Zig build helpers.
-- `shaders/core/` contains shared Slang 2026 ABI, stats, and analytic logic.
+- `shaders/core/` contains shared Slang 2026 ABI, stats, PGA, h-band, and
+  coverage logic.
 - `shaders/backend_vulkan/` and `shaders/backend_metal/` contain binding shims.
 - `shaders/entries/` contains `task.slang`, `mesh.slang`, and
   `fragment.slang`.
-- `tools/layout_gen.zig` generates GPU ABI structs from Slang reflection.
-
-The core library must not own a GPU context, swapchain, window, command queue,
-or GLFW object.
+- `tools/layout_gen.zig` generates Zig GPU ABI structs from Slang reflection.
 
 ## Build, Test, And Development Commands
 
-- `zig build` builds the core library.
+- `zig build` builds the core library only.
 - `zig build test` runs core and build-tool tests.
 - `zig build test -Dvulkan=true` builds and tests the Vulkan backend.
 - `zig build test -Dmetal=true` builds and tests the Metal backend on macOS.
@@ -55,6 +59,10 @@ or GLFW object.
 - `zig build -Doptimize=ReleaseFast [-Dthinlto=auto|on|off]` builds release
   mode; `auto` enables ThinLTO only where Zig 0.16 can link it.
 
+Prefer the narrowest verification that covers your change, then broaden when
+you touch shared contracts. Shader ABI, backend resource binding, and public API
+changes require backend and shader-stat variants where the target supports them.
+
 ## Platform Dependencies
 
 All platforms require Zig `0.16.0`. FreeType and HarfBuzz are pinned source
@@ -63,20 +71,21 @@ not require contributors to install system FreeType or HarfBuzz for normal
 builds.
 
 The bundled FreeType build is outline-focused for analytic text rendering. Keep
-its generated `ftmodule`/`ftoption` config in `build/c_libs.zig` aligned with
-the compiled source list, and do not reintroduce bitmap/compression/SVG helper
-dependencies without updating `README.md` and `CHANGELOG.md`.
+the generated `ftmodule`/`ftoption` config in `build/c_libs.zig` aligned with
+the compiled source list. Do not reintroduce bitmap, compression, PNG, Brotli,
+SVG, or FreeType auto-HarfBuzz helper dependencies without updating
+`README.md` and `CHANGELOG.md`.
 
 `slangc` must be on `PATH` for shader steps, backend builds, backend tests, and
 demos. It must support Slang 2026, SPIR-V 1.6, and `metallib_4_0`. Core-only
-`zig build` and `zig build test` do not require `slangc`.
+`zig build` and `zig build test` must not require `slangc`.
 
 Vulkan builds use lazy `vulkan` and `vulkan_headers` package dependencies.
-Runtime/demo execution needs a Vulkan loader, a Vulkan 1.4 driver, and
-core `pushDescriptor` plus `VK_EXT_mesh_shader` with task/mesh shader features
-and sufficient mesh limits. The Vulkan demo is supported on Windows and Linux.
+Runtime/demo execution needs a Vulkan loader, a Vulkan 1.4 driver, core
+`pushDescriptor`, `VK_EXT_mesh_shader`, task/mesh shader features, and
+sufficient mesh limits. The Vulkan demo is supported on Windows and Linux.
 
-Linux Vulkan demo builds also need `wayland-scanner` plus development libraries
+Linux Vulkan demo builds also need `wayland-scanner` and development libraries
 for `wayland-client`, `wayland-cursor`, `wayland-egl`, and `xkbcommon`.
 
 Windows Vulkan demo builds use GLFW's Win32 backend and link `gdi32`, `user32`,
@@ -105,9 +114,9 @@ Prefer semantic names tied to renderer roles:
 - per-frame glyph records: `GlyphInstance`,
 - per-frame glyph storage: `GlyphBatch`,
 - glyph-pool references: `GlyphBlobRef`,
-- shader ABI fields: `blob_ref`.
-- Vulkan per-frame resource binding helper: `FrameBindings`.
-- Vulkan pushed buffer range values: `BufferView`.
+- shader ABI fields: `blob_ref`,
+- Vulkan per-frame resource binding helper: `FrameBindings`,
+- Vulkan pushed buffer range values: `BufferView`,
 - Metal borrowed host object contract: `Host`.
 
 Use build-system `addTranslateC()` modules for C headers instead of source-level
@@ -121,13 +130,17 @@ than duplicating entry-stage names there.
 Preserve the single glyph-pool buffer model unless profiling proves a stronger
 alternative. Do not reintroduce per-glyph Vulkan descriptor slots, Vulkan
 descriptor indexing as the glyph addressing model, or `VK_EXT_descriptor_heap`
-as architectural churn. The current hot path deliberately uses byte-offset
-`GlyphBlobRef` values and Vulkan 1.4 push descriptors for per-frame bindings.
-Keep Vulkan pNext chains in `chains.zig`; use the chain structs there rather
-than open-coded feature/property chains in demos or backend init paths.
-The Vulkan shader target is SPIR-V 1.6 via Slang `spirv_1_6` plus explicit
-mesh/subgroup capability atoms. Do not describe Khronos SPIR-V 1.6 spec
-revisions as a separately targetable build setting.
+as architectural churn.
+
+The hot path deliberately uses byte-offset `GlyphBlobRef` values. Vulkan frame
+bindings use Vulkan 1.4 push descriptors, not frame-local descriptor pools,
+descriptor-set allocation, or `vkUpdateDescriptorSets`.
+
+Keep Vulkan pNext chains in `src/backends/vulkan/chains.zig`; use those chain
+structs in demos and backend init paths rather than open-coded feature/property
+chains. The Vulkan shader target is SPIR-V 1.6 via Slang `spirv_1_6` plus
+explicit mesh/subgroup capability atoms. Do not describe Khronos SPIR-V 1.6
+spec revisions as separately targetable build settings.
 
 For Metal, new command submission and resource binding work should use the
 Metal 4 API family: `MTL4CommandQueue`, `MTL4CommandAllocator`,
@@ -156,11 +169,16 @@ Use repository assets, not system font paths. When changing backend contracts,
 run the matching backend test command and the relevant shader-stat variant when
 bindings or GPU ABI fields change.
 
+For numerical coverage work, include tests that exercise the reference path,
+h-band candidate path, degenerate outlines, quantization boundaries, and
+high-zoom transforms where practical.
+
 ## Documentation Guidelines
 
-Update `CHANGELOG.md` for notable user-visible, API, build, dependency, or
-architecture changes. Keep entries under `[Unreleased]` until a release section
-is cut.
+Document boundaries and invariants, not just filenames. Future readers need to
+know why core stays GPU-free, why glyph blobs are addressed by byte offsets,
+why reflection owns the GPU ABI, and why the shader path has a conservative
+full-scan fallback.
 
 Update `README.md` when changing:
 
@@ -173,7 +191,9 @@ Update `README.md` when changing:
 - algorithmic invariants,
 - Slug credit or project positioning.
 
-Prefer documenting why a boundary exists, not only what file contains it.
+Update `CHANGELOG.md` for notable user-visible, API, build, dependency, or
+architecture changes. Keep entries under `[Unreleased]` until a release section
+is cut.
 
 ## Commit And Pull Request Guidelines
 
@@ -191,7 +211,7 @@ commands, link issues, and include screenshots or notes for rendering changes.
 
 ## Dependency And Artifact Notes
 
-Dependencies are pinned in `build.zig.zon`; update with:
+Dependencies are pinned in `build.zig.zon`; update them with:
 
 ```bash
 zig fetch --save <url>
