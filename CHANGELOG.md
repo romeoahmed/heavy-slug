@@ -46,6 +46,8 @@ implementation notes belong in commits and code review history.
 - **Shader build graph tightened:** Slang sources now use explicit Slang 2026
   modules, source-declared shader entries, stricter capability checks, and
   shared shader-stat constants.
+- **Shader diagnostics expanded:** mesh cull reasons now use the normal
+  `shader-stats` ABI and backend debug logs instead of ad hoc counters.
 - **Reflection ABI generation hardened:** `tools/layout_gen.zig` now rejects
   conflicting layouts and emits generated layout tests for reflected GPU
   structs.
@@ -58,6 +60,10 @@ implementation notes belong in commits and code review history.
 
 ### Fixed
 
+- **Extreme zoom glyph rendering fixed:** fragment coverage now uses tile-local
+  anchored coordinates, derives local coordinates and pixel footprints
+  analytically instead of from hardware derivatives, clips mesh strips in NDC,
+  and uses a scaled affine inverse to avoid overflow in extreme zoom charts.
 - **CPU transform math corrected:** composed 2D PGA motors now invert directly
   through `Motor.reverse()`, and cubic outline area uses an exact Bezier
   integral shared by blob fill-sign encoding.

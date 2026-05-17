@@ -8,6 +8,7 @@ import coverage_blob;
 import coverage_integral;
 import hband;
 import resources;
+import screen_mapping;
 import stats;
 
 struct FragmentInput
@@ -15,13 +16,19 @@ struct FragmentInput
     float4 position    : SV_Position;
     float4 color       : COLOR;
 #if HEAVY_SLUG_METAL
-    float2 texcoord    : TEXCOORD;
     nointerpolation uint blobRef : TEXCOORD1;
     nointerpolation uint flags           : TEXCOORD2;
+    nointerpolation float2 texcoordAnchor : TEXCOORD3;
+    nointerpolation float3 screenToLocalX : TEXCOORD4;
+    nointerpolation float3 screenToLocalY : TEXCOORD5;
+    nointerpolation float3 screenToLocalT : TEXCOORD6;
 #else
-    float2 texcoord    : TEXCOORD0;
     nointerpolation uint blobRef : TEXCOORD1;
     nointerpolation uint flags           : TEXCOORD2;
+    nointerpolation float2 texcoordAnchor : TEXCOORD3;
+    nointerpolation float3 screenToLocalX : TEXCOORD4;
+    nointerpolation float3 screenToLocalY : TEXCOORD5;
+    nointerpolation float3 screenToLocalT : TEXCOORD6;
 #endif
 };
 
@@ -34,6 +41,7 @@ float integrateCandidateBandRange(
     uint curveCount,
     uint bandBase,
     uint idBase,
+    float2 coordAnchor,
     uint firstBand,
     uint bandSpan,
     float2 renderCoord,
@@ -80,8 +88,8 @@ float integrateCandidateBandRange(
         if (curveIndex < curveCount)
         {
             float4 bbox = blob.readCurveBounds(curveBase, curveIndex);
-            if (curveBboxMayContribute(bbox, renderCoord, dx, dy, invDet))
-                signedArea += integrateCurvePayload(blob, curveBase, curveIndex, renderCoord, dx, dy, invDet);
+            if (curveBboxMayContribute(bbox, coordAnchor, renderCoord, dx, dy, invDet))
+                signedArea += integrateCurvePayload(blob, curveBase, curveIndex, coordAnchor, renderCoord, dx, dy, invDet);
         }
     }
     return signedArea;
@@ -94,6 +102,7 @@ float integrateCandidateBandRangeWithStats(
     uint curveCount,
     uint bandBase,
     uint idBase,
+    float2 coordAnchor,
     uint firstBand,
     uint bandSpan,
     float2 renderCoord,
@@ -147,7 +156,7 @@ float integrateCandidateBandRangeWithStats(
         {
             curveTests++;
             bool bboxRejected;
-            signedArea += integrateCurveFromBlobWithStats(blob, curveBase, curveIndex, renderCoord, dx, dy, invDet, bboxRejected);
+            signedArea += integrateCurveFromBlobWithStats(blob, curveBase, curveIndex, coordAnchor, renderCoord, dx, dy, invDet, bboxRejected);
             bboxRejects += bboxRejected ? 1u : 0u;
             integrations += bboxRejected ? 0u : 1u;
         }
@@ -156,7 +165,16 @@ float integrateCandidateBandRangeWithStats(
 }
 #endif
 
-float slugRender(BlobReader blob, float2 renderCoord, uint flags)
+ScreenToLocal screenToLocalFromInput(FragmentInput input)
+{
+    ScreenToLocal xform;
+    xform.x = input.screenToLocalX;
+    xform.y = input.screenToLocalY;
+    xform.t = input.screenToLocalT;
+    return xform;
+}
+
+float slugRender(BlobReader blob, LocalFrame frame, float2 coordAnchor, uint flags)
 {
     float4 bounds;
     uint curveCount;
@@ -188,18 +206,22 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
         return 0.0;
     }
 
-    float2 dx = ddx(renderCoord);
-    float2 dy = ddy(renderCoord);
-    float det = dx.x * dy.y - dx.y * dy.x;
-    if (abs(det) <= kCoverageEpsilon)
+    float2 renderCoord = frame.coord;
+    float2 dx = frame.dx;
+    float2 dy = frame.dy;
+    if (!isFinite2(renderCoord) || !isFinite2(dx) || !isFinite2(dy))
         return 0.0;
 
+    float det = dx.x * dy.y - dx.y * dy.x;
     float invDet = 1.0 / det;
+    if (!isfinite(invDet))
+        return 0.0;
     float detSign = det < 0.0 ? -1.0 : 1.0;
 
     float candidateMinY;
     float candidateMaxY;
-    if (!conservativeHBandRange(renderCoord, dx, invDet, bounds, candidateMinY, candidateMaxY))
+    float4 localBounds = rectBoundsRelativeTo(bounds, coordAnchor);
+    if (!conservativeHBandRange(renderCoord, dx, invDet, localBounds, candidateMinY, candidateMaxY))
     {
 #if HEAVY_SLUG_SHADER_STATS
         addShaderStat(shaderStats, kShaderStatEmptyFragments, 1);
@@ -207,8 +229,11 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
         return 0.0;
     }
 
-    int firstBand = int(floor(candidateMinY / bandHeight)) - bandMin;
-    int lastBand = int(floor(candidateMaxY / bandHeight)) - bandMin;
+    int firstBand = anchoredHBandIndex(candidateMinY, coordAnchor.y, bandHeight) - bandMin;
+    int lastBand = anchoredHBandIndex(candidateMaxY, coordAnchor.y, bandHeight) - bandMin;
+    if (lastBand < firstBand)
+        return 0.0;
+
     uint bandSpan = uint(lastBand - firstBand + 1);
 
     float signedArea = 0.0;
@@ -227,6 +252,7 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
             curveCount,
             bandBase,
             idBase,
+            coordAnchor,
             uint(firstBand),
             bandSpan,
             renderCoord,
@@ -246,6 +272,7 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
             curveCount,
             bandBase,
             idBase,
+            coordAnchor,
             uint(firstBand),
             bandSpan,
             renderCoord,
@@ -260,11 +287,11 @@ float slugRender(BlobReader blob, float2 renderCoord, uint flags)
         addShaderStat(shaderStats, kShaderStatFullScanFragments, 1);
         addShaderStat(shaderStats, kShaderStatFullScanCurveTests, curveCount);
         uint bboxRejects;
-        signedArea = integrateFullScanWithStats(blob, curveBase, curveCount, renderCoord, dx, dy, invDet, bboxRejects, integrations);
+        signedArea = integrateFullScanWithStats(blob, curveBase, curveCount, coordAnchor, renderCoord, dx, dy, invDet, bboxRejects, integrations);
         addShaderStat(shaderStats, kShaderStatFullScanCurveBboxRejects, bboxRejects);
         addShaderStat(shaderStats, kShaderStatFullScanCurveIntegrations, integrations);
 #else
-        signedArea = integrateFullScan(blob, curveBase, curveCount, renderCoord, dx, dy, invDet);
+        signedArea = integrateFullScan(blob, curveBase, curveCount, coordAnchor, renderCoord, dx, dy, invDet);
 #endif
     }
 
@@ -289,6 +316,7 @@ float4 fragmentMain(FragmentInput input) : SV_Target
     blob.buf = glyphPool;
     blob.base = input.blobRef;
 
-    float coverage = slugRender(blob, input.texcoord, input.flags);
+    ScreenToLocal xform = screenToLocalFromInput(input);
+    float coverage = slugRender(blob, localFrameFromPixel(xform, input.position.xy), input.texcoordAnchor, input.flags);
     return input.color * coverage;
 }

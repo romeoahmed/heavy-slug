@@ -3,13 +3,13 @@ module mesh;
 
 // Mesh shader: emit one tightened h-band strip per visible glyph meshlet.
 
-import pga;
 import abi;
 import coverage_blob;
+import mesh_clip;
 import resources;
+import screen_mapping;
 import stats;
 
-static const float kNoBoundsMin = 1.0e20;
 static const float kNoBoundsMax = -1.0e20;
 
 struct VertexOutput
@@ -17,33 +17,31 @@ struct VertexOutput
     float4 position    : SV_Position;
     float4 color       : COLOR;
 #if HEAVY_SLUG_METAL
-    float2 texcoord    : TEXCOORD;
     nointerpolation uint blobRef : TEXCOORD_1;
     nointerpolation uint flags           : TEXCOORD_2;
+    nointerpolation float2 texcoordAnchor : TEXCOORD_3;
+    nointerpolation float3 screenToLocalX : TEXCOORD_4;
+    nointerpolation float3 screenToLocalY : TEXCOORD_5;
+    nointerpolation float3 screenToLocalT : TEXCOORD_6;
 #else
-    float2 texcoord    : TEXCOORD0;
     nointerpolation uint blobRef : TEXCOORD1;
     nointerpolation uint flags           : TEXCOORD2;
+    nointerpolation float2 texcoordAnchor : TEXCOORD3;
+    nointerpolation float3 screenToLocalX : TEXCOORD4;
+    nointerpolation float3 screenToLocalY : TEXCOORD5;
+    nointerpolation float3 screenToLocalT : TEXCOORD6;
 #endif
 };
 
-// Quad corner order: BL, BR, TR, TL (CCW triangles: 0-1-2, 0-2-3).
-static const float2 kCornerOffsets[4] = {
-    float2(0.0, 0.0),  // BL
-    float2(1.0, 0.0),  // BR
-    float2(1.0, 1.0),  // TR
-    float2(0.0, 1.0),  // TL
-};
-
-static const uint3 kTriIndices[2] = {
-    uint3(0, 1, 2),
-    uint3(0, 2, 3),
-};
-
-groupshared float s_threadMinX[kMeshThreadCount];
 groupshared float s_threadMaxX[kMeshThreadCount];
 groupshared uint s_threadCandidateCounts[kMeshThreadCount];
-groupshared float4 s_rect;
+groupshared float2 s_anchor;
+groupshared float2 s_clipVertices[kMeshOutputVertices];
+groupshared float3 s_screenToLocalX;
+groupshared float3 s_screenToLocalY;
+groupshared float3 s_screenToLocalT;
+groupshared uint s_vertexCount;
+groupshared uint s_primitiveCount;
 groupshared uint s_emit;
 
 BlobReader blobReader(uint blobRef)
@@ -75,7 +73,7 @@ float2 emPerPixel(GlyphInstance glyph)
     return (1.0 / ppe) / ms;
 }
 
-void scanSliceXBounds(
+void scanSliceRightBound(
     BlobReader blob,
     uint curveBase,
     uint curveCount,
@@ -85,7 +83,6 @@ void scanSliceXBounds(
     uint bandEnd,
     uint gtid)
 {
-    float localMinX = kNoBoundsMin;
     float localMaxX = kNoBoundsMax;
     uint localCandidates = 0;
 
@@ -102,13 +99,11 @@ void scanSliceXBounds(
             if (curveIndex < curveCount)
             {
                 float4 bbox = blob.readCurveBounds(curveBase, curveIndex);
-                localMinX = min(localMinX, bbox.x);
                 localMaxX = max(localMaxX, bbox.y);
             }
         }
     }
 
-    s_threadMinX[gtid] = localMinX;
     s_threadMaxX[gtid] = localMaxX;
     s_threadCandidateCounts[gtid] = localCandidates;
 }
@@ -163,10 +158,9 @@ void meshMain(
     hasSlice = hasSlice && bandEnd > bandStart;
 
     if (hasSlice)
-        scanSliceXBounds(blob, curveBase, curveCount, bandBase, idBase, bandStart, bandEnd, gtid);
+        scanSliceRightBound(blob, curveBase, curveCount, bandBase, idBase, bandStart, bandEnd, gtid);
     else
     {
-        s_threadMinX[gtid] = kNoBoundsMin;
         s_threadMaxX[gtid] = kNoBoundsMax;
         s_threadCandidateCounts[gtid] = 0;
     }
@@ -175,12 +169,10 @@ void meshMain(
 
     if (gtid == 0)
     {
-        float minX = kNoBoundsMin;
         float maxX = kNoBoundsMax;
         uint candidateCount = 0;
         for (uint i = 0; i < kMeshThreadCount; i++)
         {
-            minX = min(minX, s_threadMinX[i]);
             maxX = max(maxX, s_threadMaxX[i]);
             candidateCount += s_threadCandidateCounts[i];
         }
@@ -194,44 +186,93 @@ void meshMain(
         if (bandEnd == bandCount)
             yMax += dilate.y;
 
-        float2 rectMin = float2(max(glyph.em_x_min, minX) - dilate.x, yMin);
+        // The fragment integral resolves interior coverage from right-side
+        // contour crossings.  A slice with only a right boundary can still
+        // cover every pixel to its left, so the mesh strip must use the
+        // glyph's global left bound rather than the leftmost candidate curve.
+        float2 rectMin = float2(glyph.em_x_min - dilate.x, yMin);
         float2 rectMax = float2(min(glyph.em_x_max, maxX) + dilate.x, yMax);
 
-        bool emit = candidateCount != 0 && rectMax.x > rectMin.x && rectMax.y > rectMin.y;
-        s_rect = float4(rectMin, rectMax);
+        uint cullReason = kMeshCullNone;
+        if (candidateCount == 0)
+            cullReason = kMeshCullEmptySlice;
+        else if (!isFinite2(rectMin) ||
+                 !isFinite2(rectMax) ||
+                 rectMax.x <= rectMin.x ||
+                 rectMax.y <= rectMin.y)
+        {
+            cullReason = kMeshCullInvalidStrip;
+        }
+
+        bool emit = cullReason == kMeshCullNone;
+        float2 anchor = (rectMin + rectMax) * 0.5;
+        ScreenToLocal localTransform;
+        LocalToClip glyphToClip = localToClipForGlyph(glyph, pc.projection);
+        AnchoredLocalToClip anchoredFrame;
+        float2 clipped[kMeshOutputVertices];
+        uint clippedCount = 0;
+        for (uint i = 0; i < kMeshOutputVertices; i++)
+            clipped[i] = float2(0.0, 0.0);
+        clearScreenToLocal(localTransform);
+        if (emit)
+        {
+            float4 rect = float4(rectMin, rectMax);
+            emit = anchorForRectAtNdc(glyphToClip, rect, float2(0.0, 0.0), anchoredFrame);
+            if (!emit)
+                cullReason = kMeshCullAnchorFailed;
+            anchor = anchoredFrame.anchor;
+            if (emit)
+            {
+                emit = clipRectToNdc(anchoredFrame, rect, clipped, clippedCount);
+                if (!emit)
+                    cullReason = kMeshCullClipEmpty;
+            }
+        }
+        if (emit)
+        {
+            emit = screenToLocalTransform(anchoredFrame, pc.viewport_size, localTransform);
+            if (!emit)
+                cullReason = kMeshCullTransformFailed;
+        }
+
+        s_anchor = anchor;
+        s_screenToLocalX = localTransform.x;
+        s_screenToLocalY = localTransform.y;
+        s_screenToLocalT = localTransform.t;
+        s_vertexCount = emit ? clippedCount : 0u;
+        s_primitiveCount = emit ? clippedCount - 2u : 0u;
+        for (uint i = 0; i < kMeshOutputVertices; i++)
+            s_clipVertices[i] = i < clippedCount ? clipped[i] : float2(0.0, 0.0);
         s_emit = emit ? 1u : 0u;
 
 #if HEAVY_SLUG_SHADER_STATS
-        addShaderStat(shaderStats, emit ? kShaderStatMeshTilesEmitted : kShaderStatMeshTilesCulled, 1);
+        addMeshTileStat(shaderStats, emit, cullReason);
 #endif
     }
 
     GroupMemoryBarrierWithGroupSync();
-    SetMeshOutputCounts(
-        s_emit != 0 ? kMeshOutputVertices : 0,
-        s_emit != 0 ? kMeshOutputPrimitives : 0);
+    SetMeshOutputCounts(s_vertexCount, s_primitiveCount);
     if (s_emit == 0)
         return;
 
-    if (gtid < 4)
+    if (gtid < s_vertexCount)
     {
-        Motor motor = { glyph.motor };
-        float2 corner = kCornerOffsets[gtid];
-        float2 emPos = lerp(s_rect.xy, s_rect.zw, corner);
-        float2 worldPos = motor.apply(emPos);
-        float4 clipPos = mul(pc.projection, float4(worldPos, 0.0, 1.0));
+        float2 anchor = s_anchor;
 
         VertexOutput v;
-        v.position = clipPos;
+        v.position = float4(s_clipVertices[gtid], 0.0, 1.0);
         v.color = glyph.color;
-        v.texcoord = emPos;
         v.blobRef = glyph.blob_ref;
         v.flags = glyph.flags;
+        v.texcoordAnchor = anchor;
+        v.screenToLocalX = s_screenToLocalX;
+        v.screenToLocalY = s_screenToLocalY;
+        v.screenToLocalT = s_screenToLocalT;
         verts[gtid] = v;
     }
 
-    if (gtid < 2)
+    if (gtid < s_primitiveCount)
     {
-        tris[gtid] = kTriIndices[gtid];
+        tris[gtid] = uint3(0, gtid + 1u, gtid + 2u);
     }
 }

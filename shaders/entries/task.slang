@@ -3,9 +3,9 @@ module task;
 
 // Task shader: frustum-cull glyphs and compact visible h-band meshlets.
 
-import pga;
 import abi;
 import resources;
+import screen_mapping;
 import stats;
 
 static const float kTargetMeshletExtentPixels = 96.0;
@@ -16,44 +16,14 @@ groupshared uint s_survivorCount;
 groupshared uint s_meshletCount;
 #endif
 
-// Divide by w so the cull works for both orthographic and perspective projections.
-bool isVisible(float4 c0, float4 c1, float4 c2, float4 c3)
-{
-    float2 ndc0 = c0.xy / c0.w;
-    float2 ndc1 = c1.xy / c1.w;
-    float2 ndc2 = c2.xy / c2.w;
-    float2 ndc3 = c3.xy / c3.w;
-
-    float2 ndcMin = min(min(ndc0, ndc1), min(ndc2, ndc3));
-    float2 ndcMax = max(max(ndc0, ndc1), max(ndc2, ndc3));
-
-    if (ndcMax.x < -1.0 || ndcMin.x > 1.0) return false;
-    if (ndcMax.y < -1.0 || ndcMin.y > 1.0) return false;
-
-    return true;
-}
-
 uint packSliceInfo(uint sliceIndex, uint sliceCount)
 {
     return (sliceCount << 16) | sliceIndex;
 }
 
-float2 visiblePixelExtent(float4 c0, float4 c1, float4 c2, float4 c3)
+uint subdivisionCount(float2 visibleExtent)
 {
-    float2 ndc0 = c0.xy / c0.w;
-    float2 ndc1 = c1.xy / c1.w;
-    float2 ndc2 = c2.xy / c2.w;
-    float2 ndc3 = c3.xy / c3.w;
-
-    float2 ndcMin = max(min(min(ndc0, ndc1), min(ndc2, ndc3)), float2(-1.0, -1.0));
-    float2 ndcMax = min(max(max(ndc0, ndc1), max(ndc2, ndc3)), float2(1.0, 1.0));
-    return max(ndcMax - ndcMin, float2(0.0, 0.0)) * (pc.viewport_size * 0.5);
-}
-
-uint subdivisionCount(float4 c0, float4 c1, float4 c2, float4 c3)
-{
-    float2 extent = visiblePixelExtent(c0, c1, c2, c3);
-    float maxExtent = max(extent.x, extent.y);
+    float maxExtent = max(visibleExtent.x, visibleExtent.y);
     uint count = uint(ceil(maxExtent / kTargetMeshletExtentPixels));
     if (maxExtent >= 16.0)
         count = max(count, 4u);
@@ -87,19 +57,15 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
     if (localIndex < pc.glyph_count)
     {
         glyph = glyphs[glyphIndex];
-        Motor motor = { glyph.motor };
-        MotorAffine affine = motor.affine();
 
         float2 emMin = float2(glyph.em_x_min, glyph.em_y_min);
         float2 emMax = float2(glyph.em_x_max, glyph.em_y_max);
+        float4 rect = float4(emMin, emMax);
+        LocalToClip h = localToClipForGlyph(glyph, pc.projection);
+        float2 visibleExtent = visiblePixelExtentNdc(h, rect, pc.viewport_size);
 
-        float4 c0 = mul(pc.projection, float4(affine.apply(emMin), 0, 1));
-        float4 c1 = mul(pc.projection, float4(affine.apply(float2(emMax.x, emMin.y)), 0, 1));
-        float4 c2 = mul(pc.projection, float4(affine.apply(emMax), 0, 1));
-        float4 c3 = mul(pc.projection, float4(affine.apply(float2(emMin.x, emMax.y)), 0, 1));
-
-        alive = isVisible(c0, c1, c2, c3);
-        slices = alive ? subdivisionCount(c0, c1, c2, c3) : 0;
+        alive = max(visibleExtent.x, visibleExtent.y) > 0.0;
+        slices = alive ? subdivisionCount(visibleExtent) : 0;
     }
 
 #if HEAVY_SLUG_METAL

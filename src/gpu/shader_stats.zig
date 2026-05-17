@@ -3,7 +3,7 @@
 const std = @import("std");
 
 /// Number of u32 counters exposed by the shader ABI.
-pub const counter_count: usize = 19;
+pub const counter_count: usize = 24;
 
 /// Counter order must match `shaders/core/stats.slang`.
 pub const CounterIndex = enum(u32) {
@@ -26,6 +26,27 @@ pub const CounterIndex = enum(u32) {
     coverage_zero_fragments = 16,
     mesh_tiles_emitted = 17,
     mesh_tiles_culled = 18,
+    mesh_cull_empty_slices = 19,
+    mesh_cull_invalid_strips = 20,
+    mesh_cull_anchor_failures = 21,
+    mesh_cull_clip_empty = 22,
+    mesh_cull_transform_failures = 23,
+};
+
+pub const MeshCullBreakdown = struct {
+    empty_slices: u32 = 0,
+    invalid_strips: u32 = 0,
+    anchor_failures: u32 = 0,
+    clip_empty: u32 = 0,
+    transform_failures: u32 = 0,
+
+    pub fn total(self: MeshCullBreakdown) u32 {
+        return self.empty_slices +
+            self.invalid_strips +
+            self.anchor_failures +
+            self.clip_empty +
+            self.transform_failures;
+    }
 };
 
 /// Snapshot copied from the shader counter buffer.
@@ -49,6 +70,11 @@ pub const Snapshot = extern struct {
     coverage_zero_fragments: u32 = 0,
     mesh_tiles_emitted: u32 = 0,
     mesh_tiles_culled: u32 = 0,
+    mesh_cull_empty_slices: u32 = 0,
+    mesh_cull_invalid_strips: u32 = 0,
+    mesh_cull_anchor_failures: u32 = 0,
+    mesh_cull_clip_empty: u32 = 0,
+    mesh_cull_transform_failures: u32 = 0,
 
     pub fn reset(self: *Snapshot) void {
         self.* = .{};
@@ -75,6 +101,11 @@ pub const Snapshot = extern struct {
             .coverage_zero_fragments = counters[@intFromEnum(CounterIndex.coverage_zero_fragments)],
             .mesh_tiles_emitted = counters[@intFromEnum(CounterIndex.mesh_tiles_emitted)],
             .mesh_tiles_culled = counters[@intFromEnum(CounterIndex.mesh_tiles_culled)],
+            .mesh_cull_empty_slices = counters[@intFromEnum(CounterIndex.mesh_cull_empty_slices)],
+            .mesh_cull_invalid_strips = counters[@intFromEnum(CounterIndex.mesh_cull_invalid_strips)],
+            .mesh_cull_anchor_failures = counters[@intFromEnum(CounterIndex.mesh_cull_anchor_failures)],
+            .mesh_cull_clip_empty = counters[@intFromEnum(CounterIndex.mesh_cull_clip_empty)],
+            .mesh_cull_transform_failures = counters[@intFromEnum(CounterIndex.mesh_cull_transform_failures)],
         };
     }
 
@@ -96,6 +127,16 @@ pub const Snapshot = extern struct {
         return self.candidate_curve_integrations + self.full_scan_curve_integrations;
     }
 
+    pub fn meshCullBreakdown(self: Snapshot) MeshCullBreakdown {
+        return .{
+            .empty_slices = self.mesh_cull_empty_slices,
+            .invalid_strips = self.mesh_cull_invalid_strips,
+            .anchor_failures = self.mesh_cull_anchor_failures,
+            .clip_empty = self.mesh_cull_clip_empty,
+            .transform_failures = self.mesh_cull_transform_failures,
+        };
+    }
+
     pub fn analysis(self: Snapshot) Analysis {
         return .{
             .task_cull_per_mille = perMille(self.task_glyphs_culled, self.task_glyphs_tested),
@@ -107,6 +148,7 @@ pub const Snapshot = extern struct {
             .fragments_per_mesh_tile_milli = perMille(self.fragment_invocations, self.mesh_tiles_emitted),
             .curve_tests_per_fragment_milli = perMille(self.totalCurveTests(), self.fragment_invocations),
             .curve_integrations_per_fragment_milli = perMille(self.totalCurveIntegrations(), self.fragment_invocations),
+            .mesh_cull_accounted_per_mille = perMille(self.meshCullBreakdown().total(), self.mesh_tiles_culled),
         };
     }
 };
@@ -127,6 +169,7 @@ pub const Analysis = struct {
     fragments_per_mesh_tile_milli: u32 = 0,
     curve_tests_per_fragment_milli: u32 = 0,
     curve_integrations_per_fragment_milli: u32 = 0,
+    mesh_cull_accounted_per_mille: u32 = 0,
 };
 
 fn perMille(numerator: u32, denominator: u32) u32 {
@@ -136,7 +179,7 @@ fn perMille(numerator: u32, denominator: u32) u32 {
 
 test "shader stats counter ABI is a packed u32 array" {
     try std.testing.expectEqual(@as(usize, counter_count * @sizeOf(u32)), @sizeOf(Snapshot));
-    try std.testing.expectEqual(@as(u32, 18), @intFromEnum(CounterIndex.mesh_tiles_culled));
+    try std.testing.expectEqual(@as(u32, 23), @intFromEnum(CounterIndex.mesh_cull_transform_failures));
 }
 
 test "shader stats snapshot maps task and mesh counters" {
@@ -154,6 +197,11 @@ test "shader stats snapshot maps task and mesh counters" {
     counters[@intFromEnum(CounterIndex.coverage_zero_fragments)] = 30;
     counters[@intFromEnum(CounterIndex.mesh_tiles_emitted)] = 44;
     counters[@intFromEnum(CounterIndex.mesh_tiles_culled)] = 16;
+    counters[@intFromEnum(CounterIndex.mesh_cull_empty_slices)] = 1;
+    counters[@intFromEnum(CounterIndex.mesh_cull_invalid_strips)] = 2;
+    counters[@intFromEnum(CounterIndex.mesh_cull_anchor_failures)] = 3;
+    counters[@intFromEnum(CounterIndex.mesh_cull_clip_empty)] = 4;
+    counters[@intFromEnum(CounterIndex.mesh_cull_transform_failures)] = 5;
 
     const snapshot = Snapshot.fromCounters(&counters);
     try std.testing.expectEqual(@as(u32, 3), snapshot.task_workgroups);
@@ -169,6 +217,13 @@ test "shader stats snapshot maps task and mesh counters" {
     try std.testing.expectEqual(@as(u32, 30), snapshot.coverage_zero_fragments);
     try std.testing.expectEqual(@as(u32, 44), snapshot.mesh_tiles_emitted);
     try std.testing.expectEqual(@as(u32, 16), snapshot.mesh_tiles_culled);
+    const mesh_cull = snapshot.meshCullBreakdown();
+    try std.testing.expectEqual(@as(u32, 1), mesh_cull.empty_slices);
+    try std.testing.expectEqual(@as(u32, 2), mesh_cull.invalid_strips);
+    try std.testing.expectEqual(@as(u32, 3), mesh_cull.anchor_failures);
+    try std.testing.expectEqual(@as(u32, 4), mesh_cull.clip_empty);
+    try std.testing.expectEqual(@as(u32, 5), mesh_cull.transform_failures);
+    try std.testing.expectEqual(@as(u32, 15), mesh_cull.total());
 }
 
 test "shader stats bytes helpers clear and decode counters" {
@@ -195,6 +250,10 @@ test "shader stats analysis derives bottleneck ratios" {
         .task_glyphs_visible = 20,
         .task_glyphs_culled = 20,
         .mesh_tiles_emitted = 25,
+        .mesh_tiles_culled = 10,
+        .mesh_cull_empty_slices = 2,
+        .mesh_cull_invalid_strips = 3,
+        .mesh_cull_clip_empty = 5,
         .candidate_curve_bbox_rejects = 150,
         .full_scan_curve_bbox_rejects = 30,
         .candidate_curve_integrations = 50,
@@ -217,4 +276,5 @@ test "shader stats analysis derives bottleneck ratios" {
     try std.testing.expectEqual(@as(u32, 4000), analysis_result.fragments_per_mesh_tile_milli);
     try std.testing.expectEqual(@as(u32, 3000), analysis_result.curve_tests_per_fragment_milli);
     try std.testing.expectEqual(@as(u32, 1200), analysis_result.curve_integrations_per_fragment_milli);
+    try std.testing.expectEqual(@as(u32, 1000), analysis_result.mesh_cull_accounted_per_mille);
 }

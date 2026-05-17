@@ -29,8 +29,8 @@ public static const uint kTaskGroupSize = 32;
 public static const uint kMeshThreadCount = 32;
 public static const uint kMaxSubdivisionsPerGlyph = 16;
 public static const uint kTaskMaxMeshlets = kTaskGroupSize * kMaxSubdivisionsPerGlyph;
-public static const uint kMeshOutputVertices = 4;
-public static const uint kMeshOutputPrimitives = 2;
+public static const uint kMeshOutputVertices = 8;
+public static const uint kMeshOutputPrimitives = 6;
 
 public struct TaskPayload
 {

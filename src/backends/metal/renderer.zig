@@ -38,8 +38,9 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
     pub fn log(self: *const @This()) void {
         if (backend_options.shader_stats) {
             const shader_analysis = self.shader.analysis();
+            const mesh_cull = self.shader.meshCullBreakdown();
             std.log.scoped(.renderer).debug(
-                "metal stats: wait_ns={d} task_visible={d}/{d} mesh_tiles={d}/{d} tile_culled={d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
+                "metal stats: wait_ns={d} task_visible={d}/{d} mesh_tiles={d}/{d} tile_culled={d} mesh_cull=empty:{d},invalid:{d},anchor:{d},clip:{d},xform:{d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
                 .{
                     self.frame_slot_wait_ns,
                     self.shader.task_glyphs_visible,
@@ -47,6 +48,11 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
                     self.shader.mesh_tiles_emitted,
                     self.shader.mesh_workgroups,
                     self.shader.mesh_tiles_culled,
+                    mesh_cull.empty_slices,
+                    mesh_cull.invalid_strips,
+                    mesh_cull.anchor_failures,
+                    mesh_cull.clip_empty,
+                    mesh_cull.transform_failures,
                     self.shader.fragment_invocations,
                     shader_analysis.fragments_per_visible_glyph_milli,
                     shader_analysis.fragments_per_mesh_tile_milli,

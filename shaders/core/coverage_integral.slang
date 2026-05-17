@@ -349,7 +349,19 @@ float2 toPixelLocal(float2 p, float2 center, float2 dx, float2 dy, float invDet)
     );
 }
 
-public bool curveBboxMayContribute(float4 bbox, float2 center, float2 dx, float2 dy, float invDet)
+// Blob header bounds are packed as [min_x, min_y, max_x, max_y].
+public float4 rectBoundsRelativeTo(float4 bounds, float2 anchor)
+{
+    return bounds - float4(anchor.x, anchor.y, anchor.x, anchor.y);
+}
+
+// Per-curve bounds are packed as [min_x, max_x, min_y, max_y].
+float4 curveBoundsRelativeTo(float4 bbox, float2 anchor)
+{
+    return bbox - float4(anchor.x, anchor.x, anchor.y, anchor.y);
+}
+
+bool localCurveBboxMayContribute(float4 bbox, float2 center, float2 dx, float2 dy, float invDet)
 {
     float2 bboxMin = float2(bbox.x, bbox.z);
     float2 bboxMax = float2(bbox.y, bbox.w);
@@ -375,6 +387,17 @@ public bool curveBboxMayContribute(float4 bbox, float2 center, float2 dx, float2
     return true;
 }
 
+public bool curveBboxMayContribute(
+    float4 bbox,
+    float2 anchor,
+    float2 center,
+    float2 dx,
+    float2 dy,
+    float invDet)
+{
+    return localCurveBboxMayContribute(curveBoundsRelativeTo(bbox, anchor), center, dx, dy, invDet);
+}
+
 public float resolveCoverage(float signedArea, float fillSign, float detSign, uint flags)
 {
     float windingCoverage = signedArea;
@@ -398,6 +421,7 @@ public float integrateCurvePayload(
     BlobReader blob,
     uint curveBase,
     uint curveIndex,
+    float2 anchor,
     float2 renderCoord,
     float2 dx,
     float2 dy,
@@ -406,10 +430,10 @@ public float integrateCurvePayload(
     float2 p0g, p1g, p2g, p3g;
     blob.readCurvePoints(curveBase, curveIndex, p0g, p1g, p2g, p3g);
     Cubic curve;
-    curve.p0 = toPixelLocal(p0g, renderCoord, dx, dy, invDet);
-    curve.p1 = toPixelLocal(p1g, renderCoord, dx, dy, invDet);
-    curve.p2 = toPixelLocal(p2g, renderCoord, dx, dy, invDet);
-    curve.p3 = toPixelLocal(p3g, renderCoord, dx, dy, invDet);
+    curve.p0 = toPixelLocal(p0g - anchor, renderCoord, dx, dy, invDet);
+    curve.p1 = toPixelLocal(p1g - anchor, renderCoord, dx, dy, invDet);
+    curve.p2 = toPixelLocal(p2g - anchor, renderCoord, dx, dy, invDet);
+    curve.p3 = toPixelLocal(p3g - anchor, renderCoord, dx, dy, invDet);
 
     return integrateCurve(curve);
 }
@@ -418,6 +442,7 @@ public float integrateFullScan(
     BlobReader blob,
     uint curveBase,
     uint curveCount,
+    float2 anchor,
     float2 renderCoord,
     float2 dx,
     float2 dy,
@@ -427,8 +452,8 @@ public float integrateFullScan(
     for (uint ci = 0; ci < curveCount; ci++)
     {
         float4 bbox = blob.readCurveBounds(curveBase, ci);
-        if (curveBboxMayContribute(bbox, renderCoord, dx, dy, invDet))
-            signedArea += integrateCurvePayload(blob, curveBase, ci, renderCoord, dx, dy, invDet);
+        if (curveBboxMayContribute(bbox, anchor, renderCoord, dx, dy, invDet))
+            signedArea += integrateCurvePayload(blob, curveBase, ci, anchor, renderCoord, dx, dy, invDet);
     }
     return signedArea;
 }
@@ -438,6 +463,7 @@ public float integrateCurveFromBlobWithStats(
     BlobReader blob,
     uint curveBase,
     uint curveIndex,
+    float2 anchor,
     float2 renderCoord,
     float2 dx,
     float2 dy,
@@ -445,20 +471,21 @@ public float integrateCurveFromBlobWithStats(
     out bool bboxRejected)
 {
     float4 bbox = blob.readCurveBounds(curveBase, curveIndex);
-    if (!curveBboxMayContribute(bbox, renderCoord, dx, dy, invDet))
+    if (!curveBboxMayContribute(bbox, anchor, renderCoord, dx, dy, invDet))
     {
         bboxRejected = true;
         return 0.0;
     }
 
     bboxRejected = false;
-    return integrateCurvePayload(blob, curveBase, curveIndex, renderCoord, dx, dy, invDet);
+    return integrateCurvePayload(blob, curveBase, curveIndex, anchor, renderCoord, dx, dy, invDet);
 }
 
 public float integrateFullScanWithStats(
     BlobReader blob,
     uint curveBase,
     uint curveCount,
+    float2 anchor,
     float2 renderCoord,
     float2 dx,
     float2 dy,
@@ -472,7 +499,7 @@ public float integrateFullScanWithStats(
     for (uint ci = 0; ci < curveCount; ci++)
     {
         bool bboxRejected;
-        signedArea += integrateCurveFromBlobWithStats(blob, curveBase, ci, renderCoord, dx, dy, invDet, bboxRejected);
+        signedArea += integrateCurveFromBlobWithStats(blob, curveBase, ci, anchor, renderCoord, dx, dy, invDet, bboxRejected);
         bboxRejects += bboxRejected ? 1u : 0u;
         integrations += bboxRejected ? 0u : 1u;
     }

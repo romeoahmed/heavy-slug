@@ -1,7 +1,7 @@
 #language slang 2026
 module stats;
 
-public static const uint kShaderStatCounterCount = 19;
+public static const uint kShaderStatCounterCount = 24;
 
 public static const uint kShaderStatFragmentInvocations = 0;
 public static const uint kShaderStatCandidatePathFragments = 1;
@@ -22,8 +22,41 @@ public static const uint kShaderStatBboxEmptyFragments = 15;
 public static const uint kShaderStatCoverageZeroFragments = 16;
 public static const uint kShaderStatMeshTilesEmitted = 17;
 public static const uint kShaderStatMeshTilesCulled = 18;
+public static const uint kShaderStatMeshCullEmptySlices = 19;
+public static const uint kShaderStatMeshCullInvalidStrips = 20;
+public static const uint kShaderStatMeshCullAnchorFailures = 21;
+public static const uint kShaderStatMeshCullClipEmpty = 22;
+public static const uint kShaderStatMeshCullTransformFailures = 23;
+
+public static const uint kMeshCullNone = 0;
+public static const uint kMeshCullEmptySlice = 1;
+public static const uint kMeshCullInvalidStrip = 2;
+public static const uint kMeshCullAnchorFailed = 3;
+public static const uint kMeshCullClipEmpty = 4;
+public static const uint kMeshCullTransformFailed = 5;
 
 public void addShaderStat(RWStructuredBuffer<uint> counters, uint index, uint value)
 {
     InterlockedAdd(counters[index], value);
+}
+
+public void addMeshTileStat(RWStructuredBuffer<uint> counters, bool emitted, uint cullReason)
+{
+    if (emitted)
+    {
+        addShaderStat(counters, kShaderStatMeshTilesEmitted, 1);
+        return;
+    }
+
+    addShaderStat(counters, kShaderStatMeshTilesCulled, 1);
+    if (cullReason == kMeshCullEmptySlice)
+        addShaderStat(counters, kShaderStatMeshCullEmptySlices, 1);
+    else if (cullReason == kMeshCullInvalidStrip)
+        addShaderStat(counters, kShaderStatMeshCullInvalidStrips, 1);
+    else if (cullReason == kMeshCullAnchorFailed)
+        addShaderStat(counters, kShaderStatMeshCullAnchorFailures, 1);
+    else if (cullReason == kMeshCullClipEmpty)
+        addShaderStat(counters, kShaderStatMeshCullClipEmpty, 1);
+    else if (cullReason == kMeshCullTransformFailed)
+        addShaderStat(counters, kShaderStatMeshCullTransformFailures, 1);
 }
