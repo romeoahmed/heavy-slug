@@ -12,6 +12,12 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Metal 4 backend tightened:** the Objective-C++ bridge now validates host
+  device/queue/layer consistency up front, labels Metal 4 command resources,
+  uses per-command residency for GPU-address argument table bindings, and keeps
+  bridge geometry constants testable against the shared mesh ABI. The Metal
+  backend intentionally keeps a mesh render pipeline state rather than adding
+  dynamic libraries as a Shader Object analogue.
 - **Breaking Vulkan shader-object backend:** the Vulkan renderer now requires
   `VK_EXT_shader_object`, creates linked task/mesh/fragment shader objects, and
   sets the required graphics state dynamically instead of creating a monolithic

@@ -22,6 +22,13 @@ pub const ResourceIndices = extern struct {
     shader_stats: u32,
 };
 
+pub const GeometryLimits = extern struct {
+    task_threadgroup_size: u32,
+    mesh_threadgroup_size: u32,
+    task_max_meshlets: u32,
+    task_payload_bytes: u32,
+};
+
 extern fn hs_metal_context_create(
     host: Host,
     task_source: [*]const u8,
@@ -64,6 +71,7 @@ extern fn hs_metal_context_draw(
     error_buffer_len: usize,
 ) c_int;
 extern fn hs_metal_get_resource_indices() ResourceIndices;
+extern fn hs_metal_get_geometry_limits() GeometryLimits;
 
 pub const Error = error{
     MetalInitFailed,
@@ -77,6 +85,7 @@ pub const Context = struct {
 
     pub fn init(host: Host) !Context {
         var error_buf: [2048]u8 = undefined;
+        @memset(&error_buf, 0);
         const handle = hs_metal_context_create(
             host,
             msl_shaders.task.ptr,
@@ -180,9 +189,14 @@ pub fn resourceIndices() ResourceIndices {
     return hs_metal_get_resource_indices();
 }
 
+pub fn geometryLimits() GeometryLimits {
+    return hs_metal_get_geometry_limits();
+}
+
 test "Metal context public API compiles" {
     _ = Context;
     _ = Host;
     _ = Buffer;
+    _ = GeometryLimits;
     _ = @TypeOf(Context.init);
 }

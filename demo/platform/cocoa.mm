@@ -267,9 +267,18 @@ hs_demo_cocoa_window *hs_demo_cocoa_window_create(
             return nullptr;
         }
 
-        id<MTL4CommandQueue> command_queue = [device newMTL4CommandQueue];
+        if (![device supportsFamily:MTLGPUFamilyMetal4]) {
+            write_error(error_buffer, error_buffer_len, @"heavy-slug Metal demo requires a Metal 4 family GPU");
+            return nullptr;
+        }
+
+        MTL4CommandQueueDescriptor *queue_desc = [MTL4CommandQueueDescriptor new];
+        queue_desc.label = @"heavy-slug demo command queue";
+        NSError *queue_error = nil;
+        id<MTL4CommandQueue> command_queue = [device newMTL4CommandQueueWithDescriptor:queue_desc
+                                                                                  error:&queue_error];
         if (!command_queue) {
-            write_error(error_buffer, error_buffer_len, @"newMTL4CommandQueue returned nil");
+            write_error(error_buffer, error_buffer_len, queue_error.localizedDescription);
             return nullptr;
         }
 

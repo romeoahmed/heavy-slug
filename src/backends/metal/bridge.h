@@ -15,11 +15,14 @@ typedef struct hs_metal_context hs_metal_context;
 typedef struct hs_metal_buffer hs_metal_buffer;
 
 typedef struct hs_metal_host_objects {
-    /* Borrowed id<MTLDevice>; must outlive the context. */
+    /* Borrowed id<MTLDevice>; must outlive the context. Must support Metal 4. */
     void *device;
     /* Borrowed id<MTL4CommandQueue>; must belong to device. */
     void *command_queue;
-    /* Borrowed CAMetalLayer*; must outlive the context. */
+    /*
+     * Borrowed CAMetalLayer*; must outlive the context. Its device must match
+     * device, and its pixelFormat is baked into the Metal render pipeline.
+     */
     void *layer;
 } hs_metal_host_objects;
 
@@ -29,6 +32,13 @@ typedef struct hs_metal_resource_indices {
     uint32_t frame_params;
     uint32_t shader_stats;
 } hs_metal_resource_indices;
+
+typedef struct hs_metal_geometry_limits {
+    uint32_t task_threadgroup_size;
+    uint32_t mesh_threadgroup_size;
+    uint32_t task_max_meshlets;
+    uint32_t task_payload_bytes;
+} hs_metal_geometry_limits;
 
 /*
  * Keep these indices in lockstep with shaders/backend_metal/resources.slang
@@ -50,6 +60,7 @@ enum {
 };
 
 hs_metal_resource_indices hs_metal_get_resource_indices(void);
+hs_metal_geometry_limits hs_metal_get_geometry_limits(void);
 
 /*
  * Ownership model:

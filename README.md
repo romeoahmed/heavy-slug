@@ -225,7 +225,7 @@ TextRun
 | Backend | Resource model | Host responsibility |
 | --- | --- | --- |
 | Vulkan | One glyph blob buffer, one per-frame glyph instance buffer, shader objects, optional stats buffer. | Provide Vulkan objects, command buffers, render targets, and completed frame tokens. |
-| Metal | Bridge-owned buffers and Metal 4 pipeline resources. | Provide borrowed Metal device, command queue, layer, and app lifecycle. |
+| Metal | Bridge-owned buffers, Metal 4 mesh pipeline state, argument tables, and per-command residency. | Provide borrowed Metal 4 device, command queue, layer, and app lifecycle. |
 
 Frame lifetime is explicit. Backends return `FrameToken` values on submit, and
 cached GPU storage is retired only after the host reports completed work.
@@ -234,7 +234,9 @@ The Vulkan backend intentionally uses byte-offset `GlyphBlobRef` values rather
 than per-glyph descriptor slots and binds task, mesh, and fragment stages as
 linked `VK_EXT_shader_object` shader objects. The Metal backend follows the
 Metal 4 command and argument-table path exposed through the Objective-C++
-bridge.
+bridge; it keeps a mesh `MTLRenderPipelineState` because Metal dynamic
+libraries and pipeline dynamic linking do not replace the render pipeline state
+model for this renderer.
 
 ## Shader Layout
 

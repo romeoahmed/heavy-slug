@@ -246,6 +246,7 @@ pub const Renderer = struct {
         self.active_frame = (self.active_frame + 1) % frames_in_flight;
         self.stats.reset();
         var error_buf: [2048]u8 = undefined;
+        @memset(&error_buf, 0);
         const wait_start = monotonicNs();
         metal.waitFrameSlot(self.context, self.active_frame, &error_buf) catch {
             std.log.err("Metal frame slot wait failed: {s}", .{std.mem.sliceTo(&error_buf, 0)});
@@ -330,6 +331,7 @@ pub const Renderer = struct {
 
         const workgroup_count = mesh_limits.taskWorkgroupCount(glyph_count);
         var error_buf: [2048]u8 = undefined;
+        @memset(&error_buf, 0);
         metal.draw(self.context, .{
             .viewport = viewport,
             .clear_color = clear_color,
@@ -423,4 +425,12 @@ test "Metal bridge resource indices match generated Slang MSL" {
     try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "[[user(TEXCOORD_5)]]") != null);
     try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "[[user(TEXCOORD_6)]]") == null);
     try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "user(TEXCOORD__1)") == null);
+}
+
+test "Metal bridge geometry limits match shared mesh ABI" {
+    const limits = metal.geometryLimits();
+    try std.testing.expectEqual(mesh_limits.task_group_size, limits.task_threadgroup_size);
+    try std.testing.expectEqual(mesh_limits.mesh_thread_count, limits.mesh_threadgroup_size);
+    try std.testing.expectEqual(mesh_limits.task_max_meshlets, limits.task_max_meshlets);
+    try std.testing.expectEqual(mesh_limits.task_payload_bytes, limits.task_payload_bytes);
 }
