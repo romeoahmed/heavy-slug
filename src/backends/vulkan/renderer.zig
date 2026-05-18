@@ -42,13 +42,14 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
             const shader_analysis = self.shader.analysis();
             const mesh_cull = self.shader.meshCullBreakdown();
             std.log.scoped(.renderer).debug(
-                "vulkan stats: binding_writes={d} binding_pushes={d} frame_busy={d} cpu_visible={d}/{d} mesh_tiles={d}/{d} tile_culled={d} mesh_cull=empty:{d},invalid:{d},zero_area:{d},clip:{d},nonfinite:{d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
+                "vulkan stats: binding_writes={d} binding_pushes={d} frame_busy={d} cpu_glyphs={d} cpu_meshlets={d} draw_chunks={d} mesh_tiles={d}/{d} tile_culled={d} mesh_cull=empty:{d},invalid:{d},zero_area:{d},clip:{d},nonfinite:{d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} meshlets_per_glyph_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
                 .{
                     self.binding_writes,
                     self.binding_pushes,
                     self.frame_resources_in_use,
-                    self.shader.task_glyphs_visible,
-                    self.shader.task_glyphs_tested,
+                    self.shader.cpu_glyphs_submitted,
+                    self.shader.cpu_meshlets_submitted,
+                    self.shader.draw_chunks,
                     self.shader.mesh_tiles_emitted,
                     self.shader.mesh_workgroups,
                     self.shader.mesh_tiles_culled,
@@ -58,8 +59,9 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
                     mesh_cull.clip_empty,
                     mesh_cull.non_finite,
                     self.shader.fragment_invocations,
-                    shader_analysis.fragments_per_visible_glyph_milli,
+                    shader_analysis.fragments_per_submitted_glyph_milli,
                     shader_analysis.fragments_per_mesh_tile_milli,
+                    shader_analysis.meshlets_per_glyph_milli,
                     shader_analysis.full_scan_fragment_per_mille,
                     self.shader.totalCurveIntegrations(),
                     self.shader.totalCurveTests(),
@@ -218,6 +220,13 @@ fn validateMeshDrawWorkgroups(
 
 fn maxMeshWorkgroupsPerDraw(props: vk.PhysicalDeviceMeshShaderPropertiesEXT) u32 {
     return @min(props.max_mesh_work_group_count[0], props.max_mesh_work_group_total_count);
+}
+
+fn drawChunkCount(workgroup_count: u32, max_workgroups_per_draw: u32) u32 {
+    if (workgroup_count == 0) return 0;
+    std.debug.assert(max_workgroups_per_draw > 0);
+    return (workgroup_count / max_workgroups_per_draw) +
+        @intFromBool(workgroup_count % max_workgroups_per_draw != 0);
 }
 
 /// GPU text renderer using the Slug algorithm for exact glyph coverage.
@@ -474,7 +483,16 @@ pub const Renderer = struct {
 
         const glyph_buffer = self.glyph_buffers[self.active_frame];
         const meshlet_buffer = self.meshlet_buffers[self.active_frame];
-        if (backend_options.shader_stats) seedShaderStatsBuffer(self.shader_stats_buffers[self.active_frame], glyph_count);
+        const max_workgroups_per_draw = maxMeshWorkgroupsPerDraw(self.mesh_shader_properties);
+        const draw_chunks = drawChunkCount(meshlet_count, max_workgroups_per_draw);
+        if (backend_options.shader_stats) {
+            seedShaderStatsBuffer(
+                self.shader_stats_buffers[self.active_frame],
+                glyph_count,
+                meshlet_count,
+                draw_chunks,
+            );
+        }
         const shader_stats_binding: ?bindings.BufferView = if (backend_options.shader_stats) blk: {
             const stats_buffer = self.shader_stats_buffers[self.active_frame];
             break :blk .{
@@ -510,18 +528,15 @@ pub const Renderer = struct {
 
         var meshlet_base: u32 = 0;
         while (meshlet_base < meshlet_count) {
-            const workgroup_count = @min(meshlet_count - meshlet_base, maxMeshWorkgroupsPerDraw(self.mesh_shader_properties));
+            const workgroup_count = @min(meshlet_count - meshlet_base, max_workgroups_per_draw);
             try validateMeshDrawWorkgroups(self.mesh_shader_properties, workgroup_count);
 
             const params = bindings.FrameParams{
                 .viewport_size = viewport,
                 .screen_from_framebuffer_2x2 = .{ 1, 0, 0, -1 },
                 .screen_from_framebuffer_offset = .{ 0, viewport[1] },
-                .glyph_count = glyph_count,
                 .meshlet_count = workgroup_count,
                 .meshlet_base = meshlet_base,
-                .diagnostic_flags = 0,
-                .abi_version = 3,
             };
             self.dispatch.cmdPushConstants(
                 vk_cmd,
@@ -574,9 +589,9 @@ fn resetShaderStatsBuffer(buffer: MappedBuffer) void {
     shader_stats_mod.clearBytes(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
 }
 
-fn seedShaderStatsBuffer(buffer: MappedBuffer, glyph_count: u32) void {
+fn seedShaderStatsBuffer(buffer: MappedBuffer, glyph_count: u32, meshlet_count: u32, draw_chunks: u32) void {
     const bytes: []align(@alignOf(u32)) u8 = @alignCast(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
-    shader_stats_mod.seedCpuMeshletPath(bytes, glyph_count);
+    shader_stats_mod.seedFrameSubmission(bytes, glyph_count, meshlet_count, draw_chunks);
 }
 
 fn readShaderStatsBuffer(buffer: MappedBuffer) heavy_slug.ShaderStats {
@@ -660,6 +675,9 @@ test "mesh workgroup validation follows Vulkan mesh shader draw limits" {
     props.max_mesh_work_group_total_count = 3;
     try std.testing.expectError(Error.MeshWorkgroupLimitExceeded, validateMeshDrawWorkgroups(props, 4));
     try std.testing.expectEqual(@as(u32, 3), maxMeshWorkgroupsPerDraw(props));
+    try std.testing.expectEqual(@as(u32, 0), drawChunkCount(0, 3));
+    try std.testing.expectEqual(@as(u32, 1), drawChunkCount(3, 3));
+    try std.testing.expectEqual(@as(u32, 2), drawChunkCount(4, 3));
 }
 
 test "yUpViewport matches the Metal demo clip-space convention" {

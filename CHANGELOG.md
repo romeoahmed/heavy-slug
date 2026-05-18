@@ -21,6 +21,12 @@ implementation notes belong in commits and code review history.
   requires the task shader feature or task payload limits for the default
   renderer path; mesh workgroup dispatch count now equals the CPU meshlet
   count.
+- **Mesh-only diagnostics cleaned up:** shader-stat counters and backend logs
+  now report CPU-submitted glyphs, meshlets, draw chunks, and mesh cull
+  outcomes directly instead of preserving obsolete task-shader terminology.
+- **Vulkan mesh limit validation tightened:** the Vulkan backend now validates
+  mesh workgroup y/z dimensions and mesh shared-memory capacity in addition to
+  mesh output counts before accepting a device.
 
 - **Windows demo host hardened:** the Vulkan Win32 demo now embeds a modern
   Windows manifest for Per-Monitor-V2 DPI, long-path awareness, UTF-8 process
@@ -147,6 +153,9 @@ implementation notes belong in commits and code review history.
 
 ### Removed
 
+- **Obsolete render batch helper removed:** the old single-stream
+  `core.render.GlyphBatch` helper was removed now that renderer submission
+  always carries paired glyph and meshlet streams through `FrameBatch`.
 - **ReleaseFast CI job removed:** release-mode build verification is no longer
   a separate GitHub Actions job.
 - **GLFW dependency removed:** the `glfw_src` package, translated GLFW header,

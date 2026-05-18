@@ -36,15 +36,10 @@ public struct FrameParams
     public float2   viewport_size;
     public float4   screen_from_framebuffer_2x2;
     public float2   screen_from_framebuffer_offset;
-    public uint     glyph_count;
     public uint     meshlet_count;
     public uint     meshlet_base;
-    public uint     diagnostic_flags;
-    public uint     abi_version;
 };
 
-public static const uint kHeavySlugAbiVersion = 3;
-public static const uint kTaskGroupSize = 32;
 public static const uint kMeshThreadCount = 32;
 public static const uint kMaxSubdivisionsPerGlyph = 16;
 public static const uint kMeshOutputVertices = 8;

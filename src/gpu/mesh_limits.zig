@@ -2,8 +2,8 @@
 
 const std = @import("std");
 
-pub const task_group_size: u32 = 32;
 pub const mesh_thread_count: u32 = 32;
+pub const mesh_workgroup_size = [3]u32{ mesh_thread_count, 1, 1 };
 pub const max_subdivisions_per_glyph: u32 = 16;
 
 pub const mesh_output_vertices: u32 = 8;
@@ -27,6 +27,7 @@ pub fn maxMeshletsForGlyphCapacity(glyph_capacity: u32) u32 {
 test "mesh-only limits match the Slang meshlet stream budget" {
     try std.testing.expectEqual(@as(u32, 8), mesh_output_vertices);
     try std.testing.expectEqual(@as(u32, 6), mesh_output_primitives);
+    try std.testing.expectEqual([3]u32{ 32, 1, 1 }, mesh_workgroup_size);
     try std.testing.expectEqual(@as(u32, 1), mesh_output_user_components_per_vertex);
     try std.testing.expectEqual(@as(u32, 5), mesh_output_components_per_vertex);
     try std.testing.expectEqual(@as(u32, 16), max_subdivisions_per_glyph);

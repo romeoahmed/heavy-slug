@@ -278,7 +278,7 @@ zig-out/shaders/msl/fragment.metal
 | Diagnostic source | Signals |
 | --- | --- |
 | CPU/backend debug stats | Shaping counts, cache hits/misses, precision insufficiency, uploads, retirements, pool state, backend binding work. |
-| Shader stats opt-in | Visible glyphs, emitted mesh work, explicit mesh cull reasons, candidate-path usage, fallback scans, fragment pressure. |
+| Shader stats opt-in | Submitted glyph/meshlet counts, draw chunks, emitted mesh work, explicit mesh cull reasons, candidate-path usage, fallback scans, fragment pressure. |
 
 Enable shader counters only when investigating GPU behavior:
 

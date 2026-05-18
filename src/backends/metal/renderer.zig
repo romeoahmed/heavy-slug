@@ -42,11 +42,12 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
             const shader_analysis = self.shader.analysis();
             const mesh_cull = self.shader.meshCullBreakdown();
             std.log.scoped(.renderer).debug(
-                "metal stats: wait_ns={d} cpu_visible={d}/{d} mesh_tiles={d}/{d} tile_culled={d} mesh_cull=empty:{d},invalid:{d},zero_area:{d},clip:{d},nonfinite:{d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
+                "metal stats: wait_ns={d} cpu_glyphs={d} cpu_meshlets={d} draw_chunks={d} mesh_tiles={d}/{d} tile_culled={d} mesh_cull=empty:{d},invalid:{d},zero_area:{d},clip:{d},nonfinite:{d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} meshlets_per_glyph_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
                 .{
                     self.frame_slot_wait_ns,
-                    self.shader.task_glyphs_visible,
-                    self.shader.task_glyphs_tested,
+                    self.shader.cpu_glyphs_submitted,
+                    self.shader.cpu_meshlets_submitted,
+                    self.shader.draw_chunks,
                     self.shader.mesh_tiles_emitted,
                     self.shader.mesh_workgroups,
                     self.shader.mesh_tiles_culled,
@@ -56,8 +57,9 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
                     mesh_cull.clip_empty,
                     mesh_cull.non_finite,
                     self.shader.fragment_invocations,
-                    shader_analysis.fragments_per_visible_glyph_milli,
+                    shader_analysis.fragments_per_submitted_glyph_milli,
                     shader_analysis.fragments_per_mesh_tile_milli,
+                    shader_analysis.meshlets_per_glyph_milli,
                     shader_analysis.full_scan_fragment_per_mille,
                     self.shader.totalCurveIntegrations(),
                     self.shader.totalCurveTests(),
@@ -88,18 +90,22 @@ const FrameBatch = heavy_slug.core.render.FrameBatch(GlyphInstance, GlyphMeshlet
 const ShaderStatsBuffer = if (backend_options.shader_stats) metal.Buffer else void;
 const metal_mesh_threadgroups_per_draw: u32 = 1024;
 
+fn drawChunkCount(meshlet_count: u32) u32 {
+    return (meshlet_count / metal_mesh_threadgroups_per_draw) +
+        @intFromBool(meshlet_count % metal_mesh_threadgroups_per_draw != 0);
+}
+
 fn frameParamChunkCount(max_glyphs_per_frame: u32) u32 {
-    const max_meshlets = mesh_limits.maxMeshletsForGlyphCapacity(max_glyphs_per_frame);
-    return (max_meshlets / metal_mesh_threadgroups_per_draw) + @intFromBool(max_meshlets % metal_mesh_threadgroups_per_draw != 0);
+    return drawChunkCount(mesh_limits.maxMeshletsForGlyphCapacity(max_glyphs_per_frame));
 }
 
 fn resetShaderStatsBuffer(buffer: metal.Buffer) void {
     shader_stats_mod.clearBytes(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
 }
 
-fn seedShaderStatsBuffer(buffer: metal.Buffer, glyph_count: u32) void {
+fn seedShaderStatsBuffer(buffer: metal.Buffer, glyph_count: u32, meshlet_count: u32, draw_chunks: u32) void {
     const bytes: []align(@alignOf(u32)) u8 = @alignCast(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
-    shader_stats_mod.seedCpuMeshletPath(bytes, glyph_count);
+    shader_stats_mod.seedFrameSubmission(bytes, glyph_count, meshlet_count, draw_chunks);
 }
 
 fn readShaderStatsBuffer(buffer: metal.Buffer) heavy_slug.ShaderStats {
@@ -120,7 +126,7 @@ fn viewportToU32(view: core_types.FrameView2D) ?[2]u32 {
     };
 }
 
-fn writeFrameParams(buffer: metal.Buffer, viewport: [2]u32, glyph_count: u32, meshlet_count: u32) void {
+fn writeFrameParams(buffer: metal.Buffer, viewport: [2]u32, meshlet_count: u32) void {
     var meshlet_base: u32 = 0;
     var chunk_index: usize = 0;
     while (meshlet_base < meshlet_count) : (chunk_index += 1) {
@@ -129,11 +135,8 @@ fn writeFrameParams(buffer: metal.Buffer, viewport: [2]u32, glyph_count: u32, me
             .viewport_size = .{ @floatFromInt(viewport[0]), @floatFromInt(viewport[1]) },
             .screen_from_framebuffer_2x2 = .{ 1, 0, 0, -1 },
             .screen_from_framebuffer_offset = .{ 0, @floatFromInt(viewport[1]) },
-            .glyph_count = glyph_count,
             .meshlet_count = chunk_count,
             .meshlet_base = meshlet_base,
-            .diagnostic_flags = 0,
-            .abi_version = 3,
         };
         const offset = chunk_index * @sizeOf(FrameParams);
         @memcpy(buffer.mapped[offset..][0..@sizeOf(FrameParams)], std.mem.asBytes(&params));
@@ -359,13 +362,16 @@ pub const Renderer = struct {
         const viewport = viewportToU32(view) orelse return Error.InvalidFrameView;
         const clear_color = target.clear_color;
         const frame_slot = &self.frame_slots[self.active_frame];
-        if (backend_options.shader_stats) seedShaderStatsBuffer(frame_slot.shader_stats, glyph_count);
+        const draw_chunks = drawChunkCount(meshlet_count);
+        if (backend_options.shader_stats) {
+            seedShaderStatsBuffer(frame_slot.shader_stats, glyph_count, meshlet_count, draw_chunks);
+        }
         const shader_stats_buffer: ?metal.Buffer = if (backend_options.shader_stats)
             frame_slot.shader_stats
         else
             null;
 
-        writeFrameParams(frame_slot.frame_params, viewport, glyph_count, meshlet_count);
+        writeFrameParams(frame_slot.frame_params, viewport, meshlet_count);
 
         const workgroup_count = meshlet_count;
         var error_buf: [2048]u8 = undefined;
@@ -427,6 +433,9 @@ test "Metal renderer public API compiles" {
 }
 
 test "Metal frame params are chunked by mesh threadgroup draw limit" {
+    try std.testing.expectEqual(@as(u32, 0), drawChunkCount(0));
+    try std.testing.expectEqual(@as(u32, 1), drawChunkCount(1));
+    try std.testing.expectEqual(@as(u32, 2), drawChunkCount(metal_mesh_threadgroups_per_draw + 1));
     try std.testing.expectEqual(@as(u32, 0), frameParamChunkCount(0));
     try std.testing.expectEqual(@as(u32, 1), frameParamChunkCount(1));
     try std.testing.expectEqual(@as(u32, 2), frameParamChunkCount((metal_mesh_threadgroups_per_draw / mesh_limits.max_subdivisions_per_glyph) + 1));

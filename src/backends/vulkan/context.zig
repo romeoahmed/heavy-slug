@@ -35,10 +35,13 @@ pub fn validateMeshShaderLimits(props: vk.PhysicalDeviceMeshShaderPropertiesEXT)
     if (props.max_mesh_work_group_total_count == 0 or
         props.max_mesh_work_group_count[0] == 0 or
         props.max_mesh_work_group_invocations < mesh_limits.mesh_thread_count or
-        props.max_mesh_work_group_size[0] < mesh_limits.mesh_thread_count or
+        props.max_mesh_work_group_size[0] < mesh_limits.mesh_workgroup_size[0] or
+        props.max_mesh_work_group_size[1] < mesh_limits.mesh_workgroup_size[1] or
+        props.max_mesh_work_group_size[2] < mesh_limits.mesh_workgroup_size[2] or
         props.max_mesh_output_vertices < mesh_limits.mesh_output_vertices or
         props.max_mesh_output_primitives < mesh_limits.mesh_output_primitives or
         props.max_mesh_output_components < mesh_limits.mesh_output_components_per_vertex or
+        props.max_mesh_shared_memory_size < mesh_limits.mesh_shared_bytes or
         props.max_mesh_payload_and_shared_memory_size < mesh_limits.mesh_payload_and_shared_bytes)
     {
         return FeatureError.MeshShaderLimitsNotSupported;
@@ -306,7 +309,8 @@ fn supportedMeshProps() vk.PhysicalDeviceMeshShaderPropertiesEXT {
     props.max_mesh_work_group_total_count = mesh_limits.maxMeshletsForGlyphCapacity(16_384);
     props.max_mesh_work_group_count = .{ mesh_limits.maxMeshletsForGlyphCapacity(16_384), 1, 1 };
     props.max_mesh_work_group_invocations = mesh_limits.mesh_thread_count;
-    props.max_mesh_work_group_size = .{ mesh_limits.mesh_thread_count, 1, 1 };
+    props.max_mesh_work_group_size = mesh_limits.mesh_workgroup_size;
+    props.max_mesh_shared_memory_size = mesh_limits.mesh_shared_bytes;
     props.max_mesh_output_vertices = mesh_limits.mesh_output_vertices;
     props.max_mesh_output_primitives = mesh_limits.mesh_output_primitives;
     props.max_mesh_output_components = mesh_limits.mesh_output_components_per_vertex;
@@ -347,6 +351,20 @@ test "validateDeviceProperties requires Vulkan 1.4 and mesh shader budgets" {
     try std.testing.expectError(
         FeatureError.MeshShaderLimitsNotSupported,
         validateDeviceProperties(vk.API_VERSION_1_4.toU32(), low_output_components, supportedVulkan14Props()),
+    );
+
+    var low_workgroup_y = supportedMeshProps();
+    low_workgroup_y.max_mesh_work_group_size[1] = 0;
+    try std.testing.expectError(
+        FeatureError.MeshShaderLimitsNotSupported,
+        validateDeviceProperties(vk.API_VERSION_1_4.toU32(), low_workgroup_y, supportedVulkan14Props()),
+    );
+
+    var low_shared = supportedMeshProps();
+    low_shared.max_mesh_shared_memory_size = mesh_limits.mesh_shared_bytes - 1;
+    try std.testing.expectError(
+        FeatureError.MeshShaderLimitsNotSupported,
+        validateDeviceProperties(vk.API_VERSION_1_4.toU32(), low_shared, supportedVulkan14Props()),
     );
 }
 

@@ -13,10 +13,10 @@ pub const CounterIndex = enum(u32) {
     candidate_curve_tests = 3,
     full_scan_curve_tests = 4,
     empty_fragments = 5,
-    task_workgroups = 6,
-    task_glyphs_tested = 7,
-    task_glyphs_visible = 8,
-    task_glyphs_culled = 9,
+    cpu_glyphs_submitted = 6,
+    cpu_meshlets_submitted = 7,
+    draw_chunks = 8,
+    frame_submissions = 9,
     mesh_workgroups = 10,
     candidate_curve_bbox_rejects = 11,
     full_scan_curve_bbox_rejects = 12,
@@ -57,10 +57,10 @@ pub const Snapshot = extern struct {
     candidate_curve_tests: u32 = 0,
     full_scan_curve_tests: u32 = 0,
     empty_fragments: u32 = 0,
-    task_workgroups: u32 = 0,
-    task_glyphs_tested: u32 = 0,
-    task_glyphs_visible: u32 = 0,
-    task_glyphs_culled: u32 = 0,
+    cpu_glyphs_submitted: u32 = 0,
+    cpu_meshlets_submitted: u32 = 0,
+    draw_chunks: u32 = 0,
+    frame_submissions: u32 = 0,
     mesh_workgroups: u32 = 0,
     candidate_curve_bbox_rejects: u32 = 0,
     full_scan_curve_bbox_rejects: u32 = 0,
@@ -88,10 +88,10 @@ pub const Snapshot = extern struct {
             .candidate_curve_tests = counters[@intFromEnum(CounterIndex.candidate_curve_tests)],
             .full_scan_curve_tests = counters[@intFromEnum(CounterIndex.full_scan_curve_tests)],
             .empty_fragments = counters[@intFromEnum(CounterIndex.empty_fragments)],
-            .task_workgroups = counters[@intFromEnum(CounterIndex.task_workgroups)],
-            .task_glyphs_tested = counters[@intFromEnum(CounterIndex.task_glyphs_tested)],
-            .task_glyphs_visible = counters[@intFromEnum(CounterIndex.task_glyphs_visible)],
-            .task_glyphs_culled = counters[@intFromEnum(CounterIndex.task_glyphs_culled)],
+            .cpu_glyphs_submitted = counters[@intFromEnum(CounterIndex.cpu_glyphs_submitted)],
+            .cpu_meshlets_submitted = counters[@intFromEnum(CounterIndex.cpu_meshlets_submitted)],
+            .draw_chunks = counters[@intFromEnum(CounterIndex.draw_chunks)],
+            .frame_submissions = counters[@intFromEnum(CounterIndex.frame_submissions)],
             .mesh_workgroups = counters[@intFromEnum(CounterIndex.mesh_workgroups)],
             .candidate_curve_bbox_rejects = counters[@intFromEnum(CounterIndex.candidate_curve_bbox_rejects)],
             .full_scan_curve_bbox_rejects = counters[@intFromEnum(CounterIndex.full_scan_curve_bbox_rejects)],
@@ -139,13 +139,13 @@ pub const Snapshot = extern struct {
 
     pub fn analysis(self: Snapshot) Analysis {
         return .{
-            .task_cull_per_mille = perMille(self.task_glyphs_culled, self.task_glyphs_tested),
             .full_scan_fragment_per_mille = perMille(self.full_scan_fragments, self.fragment_invocations),
             .bbox_reject_per_mille = perMille(self.totalCurveBboxRejects(), self.totalCurveTests()),
             .bbox_empty_fragment_per_mille = perMille(self.bbox_empty_fragments, self.fragment_invocations),
             .coverage_zero_fragment_per_mille = perMille(self.coverage_zero_fragments, self.fragment_invocations),
-            .fragments_per_visible_glyph_milli = perMille(self.fragment_invocations, self.task_glyphs_visible),
+            .fragments_per_submitted_glyph_milli = perMille(self.fragment_invocations, self.cpu_glyphs_submitted),
             .fragments_per_mesh_tile_milli = perMille(self.fragment_invocations, self.mesh_tiles_emitted),
+            .meshlets_per_glyph_milli = perMille(self.cpu_meshlets_submitted, self.cpu_glyphs_submitted),
             .curve_tests_per_fragment_milli = perMille(self.totalCurveTests(), self.fragment_invocations),
             .curve_integrations_per_fragment_milli = perMille(self.totalCurveIntegrations(), self.fragment_invocations),
             .mesh_cull_accounted_per_mille = perMille(self.meshCullBreakdown().total(), self.mesh_tiles_culled),
@@ -158,23 +158,29 @@ pub fn clearBytes(bytes: []u8) void {
     @memset(bytes[0..@sizeOf(Snapshot)], 0);
 }
 
-pub fn seedCpuMeshletPath(bytes: []align(@alignOf(u32)) u8, glyph_count: u32) void {
+pub fn seedFrameSubmission(
+    bytes: []align(@alignOf(u32)) u8,
+    glyph_count: u32,
+    meshlet_count: u32,
+    draw_chunks: u32,
+) void {
     std.debug.assert(bytes.len >= @sizeOf(Snapshot));
     const counters: *[counter_count]u32 = @ptrCast(bytes.ptr);
-    counters[@intFromEnum(CounterIndex.task_glyphs_tested)] = glyph_count;
-    counters[@intFromEnum(CounterIndex.task_glyphs_visible)] = glyph_count;
-    counters[@intFromEnum(CounterIndex.task_glyphs_culled)] = 0;
+    counters[@intFromEnum(CounterIndex.cpu_glyphs_submitted)] = glyph_count;
+    counters[@intFromEnum(CounterIndex.cpu_meshlets_submitted)] = meshlet_count;
+    counters[@intFromEnum(CounterIndex.draw_chunks)] = draw_chunks;
+    counters[@intFromEnum(CounterIndex.frame_submissions)] = 1;
 }
 
 /// Integer ratios scaled by 1000 for stable debug logging.
 pub const Analysis = struct {
-    task_cull_per_mille: u32 = 0,
     full_scan_fragment_per_mille: u32 = 0,
     bbox_reject_per_mille: u32 = 0,
     bbox_empty_fragment_per_mille: u32 = 0,
     coverage_zero_fragment_per_mille: u32 = 0,
-    fragments_per_visible_glyph_milli: u32 = 0,
+    fragments_per_submitted_glyph_milli: u32 = 0,
     fragments_per_mesh_tile_milli: u32 = 0,
+    meshlets_per_glyph_milli: u32 = 0,
     curve_tests_per_fragment_milli: u32 = 0,
     curve_integrations_per_fragment_milli: u32 = 0,
     mesh_cull_accounted_per_mille: u32 = 0,
@@ -190,12 +196,12 @@ test "shader stats counter ABI is a packed u32 array" {
     try std.testing.expectEqual(@as(u32, 23), @intFromEnum(CounterIndex.mesh_cull_non_finite));
 }
 
-test "shader stats snapshot maps task and mesh counters" {
+test "shader stats snapshot maps CPU submission and mesh counters" {
     var counters = [_]u32{0} ** counter_count;
-    counters[@intFromEnum(CounterIndex.task_workgroups)] = 3;
-    counters[@intFromEnum(CounterIndex.task_glyphs_tested)] = 96;
-    counters[@intFromEnum(CounterIndex.task_glyphs_visible)] = 60;
-    counters[@intFromEnum(CounterIndex.task_glyphs_culled)] = 36;
+    counters[@intFromEnum(CounterIndex.cpu_glyphs_submitted)] = 60;
+    counters[@intFromEnum(CounterIndex.cpu_meshlets_submitted)] = 96;
+    counters[@intFromEnum(CounterIndex.draw_chunks)] = 3;
+    counters[@intFromEnum(CounterIndex.frame_submissions)] = 1;
     counters[@intFromEnum(CounterIndex.mesh_workgroups)] = 60;
     counters[@intFromEnum(CounterIndex.candidate_curve_bbox_rejects)] = 400;
     counters[@intFromEnum(CounterIndex.full_scan_curve_bbox_rejects)] = 12;
@@ -212,10 +218,10 @@ test "shader stats snapshot maps task and mesh counters" {
     counters[@intFromEnum(CounterIndex.mesh_cull_non_finite)] = 5;
 
     const snapshot = Snapshot.fromCounters(&counters);
-    try std.testing.expectEqual(@as(u32, 3), snapshot.task_workgroups);
-    try std.testing.expectEqual(@as(u32, 96), snapshot.task_glyphs_tested);
-    try std.testing.expectEqual(@as(u32, 60), snapshot.task_glyphs_visible);
-    try std.testing.expectEqual(@as(u32, 36), snapshot.task_glyphs_culled);
+    try std.testing.expectEqual(@as(u32, 60), snapshot.cpu_glyphs_submitted);
+    try std.testing.expectEqual(@as(u32, 96), snapshot.cpu_meshlets_submitted);
+    try std.testing.expectEqual(@as(u32, 3), snapshot.draw_chunks);
+    try std.testing.expectEqual(@as(u32, 1), snapshot.frame_submissions);
     try std.testing.expectEqual(@as(u32, 60), snapshot.mesh_workgroups);
     try std.testing.expectEqual(@as(u32, 400), snapshot.candidate_curve_bbox_rejects);
     try std.testing.expectEqual(@as(u32, 12), snapshot.full_scan_curve_bbox_rejects);
@@ -248,15 +254,16 @@ test "shader stats bytes helpers clear and decode counters" {
     try std.testing.expectEqual(@as(u32, 3), snapshot.mesh_tiles_emitted);
 }
 
-test "shader stats seed CPU meshlet path visible glyph counters" {
+test "shader stats seed frame submission counters" {
     var bytes: [@sizeOf(Snapshot)]u8 align(@alignOf(u32)) = undefined;
     clearBytes(&bytes);
-    seedCpuMeshletPath(&bytes, 42);
+    seedFrameSubmission(&bytes, 42, 99, 2);
 
     const snapshot = Snapshot.fromBytes(&bytes);
-    try std.testing.expectEqual(@as(u32, 42), snapshot.task_glyphs_tested);
-    try std.testing.expectEqual(@as(u32, 42), snapshot.task_glyphs_visible);
-    try std.testing.expectEqual(@as(u32, 0), snapshot.task_glyphs_culled);
+    try std.testing.expectEqual(@as(u32, 42), snapshot.cpu_glyphs_submitted);
+    try std.testing.expectEqual(@as(u32, 99), snapshot.cpu_meshlets_submitted);
+    try std.testing.expectEqual(@as(u32, 2), snapshot.draw_chunks);
+    try std.testing.expectEqual(@as(u32, 1), snapshot.frame_submissions);
 }
 
 test "shader stats analysis derives bottleneck ratios" {
@@ -265,9 +272,8 @@ test "shader stats analysis derives bottleneck ratios" {
         .full_scan_fragments = 25,
         .candidate_curve_tests = 200,
         .full_scan_curve_tests = 100,
-        .task_glyphs_tested = 80,
-        .task_glyphs_visible = 20,
-        .task_glyphs_culled = 20,
+        .cpu_glyphs_submitted = 20,
+        .cpu_meshlets_submitted = 40,
         .mesh_tiles_emitted = 25,
         .mesh_tiles_culled = 10,
         .mesh_cull_empty_slices = 2,
@@ -286,13 +292,13 @@ test "shader stats analysis derives bottleneck ratios" {
     try std.testing.expectEqual(@as(u32, 120), snapshot.totalCurveIntegrations());
 
     const analysis_result = snapshot.analysis();
-    try std.testing.expectEqual(@as(u32, 250), analysis_result.task_cull_per_mille);
     try std.testing.expectEqual(@as(u32, 250), analysis_result.full_scan_fragment_per_mille);
     try std.testing.expectEqual(@as(u32, 600), analysis_result.bbox_reject_per_mille);
     try std.testing.expectEqual(@as(u32, 100), analysis_result.bbox_empty_fragment_per_mille);
     try std.testing.expectEqual(@as(u32, 150), analysis_result.coverage_zero_fragment_per_mille);
-    try std.testing.expectEqual(@as(u32, 5000), analysis_result.fragments_per_visible_glyph_milli);
+    try std.testing.expectEqual(@as(u32, 5000), analysis_result.fragments_per_submitted_glyph_milli);
     try std.testing.expectEqual(@as(u32, 4000), analysis_result.fragments_per_mesh_tile_milli);
+    try std.testing.expectEqual(@as(u32, 2000), analysis_result.meshlets_per_glyph_milli);
     try std.testing.expectEqual(@as(u32, 3000), analysis_result.curve_tests_per_fragment_milli);
     try std.testing.expectEqual(@as(u32, 1200), analysis_result.curve_integrations_per_fragment_milli);
     try std.testing.expectEqual(@as(u32, 1000), analysis_result.mesh_cull_accounted_per_mille);

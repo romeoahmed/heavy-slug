@@ -17,23 +17,22 @@ pub const GlyphMeshlet = gpu_structs.GlyphMeshlet;
 /// Generated from slangc reflection of shaders/core/abi.slang.
 pub const FrameParams = gpu_structs.FrameParams;
 
-test "GlyphInstance v2 has chart fields with stable leading offsets" {
+test "GlyphInstance has chart fields with stable leading offsets" {
     try std.testing.expectEqual(@as(usize, 0), @offsetOf(GlyphInstance, "color"));
     try std.testing.expectEqual(@as(usize, 16), @offsetOf(GlyphInstance, "blob_ref"));
     try std.testing.expect(@sizeOf(GlyphInstance) <= 128);
 }
 
-test "GlyphMeshlet v3 carries CPU-authored strip bounds" {
+test "GlyphMeshlet carries CPU-authored strip bounds" {
     try std.testing.expectEqual(@as(usize, 0), @offsetOf(GlyphMeshlet, "glyph_index"));
     try std.testing.expect(@offsetOf(GlyphMeshlet, "rect_min_q") > @offsetOf(GlyphMeshlet, "glyph_index"));
     try std.testing.expect(@sizeOf(GlyphMeshlet) <= 96);
 }
 
-test "FrameParams v3 carries draw parameters and framebuffer conversion" {
+test "FrameParams carries mesh draw parameters and framebuffer conversion" {
     try std.testing.expect(@sizeOf(FrameParams) <= 128);
     try std.testing.expectEqual(@as(usize, 0), @offsetOf(FrameParams, "viewport_size"));
     try std.testing.expectEqual(@as(usize, 16), @offsetOf(FrameParams, "screen_from_framebuffer_2x2"));
-    try std.testing.expect(@offsetOf(FrameParams, "meshlet_count") > @offsetOf(FrameParams, "glyph_count"));
     try std.testing.expect(@offsetOf(FrameParams, "meshlet_base") > @offsetOf(FrameParams, "meshlet_count"));
 }
 
