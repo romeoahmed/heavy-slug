@@ -12,6 +12,11 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Windows demo host hardened:** the Vulkan Win32 demo now embeds a modern
+  Windows manifest for Per-Monitor-V2 DPI, long-path awareness, UTF-8 process
+  code page, and Segment Heap, attaches window state during `WM_NCCREATE`,
+  rounds DPI client sizing consistently, and clears captured input on focus or
+  mode cancellation.
 - **Wayland demo GNOME 50 cleanup:** the Linux Vulkan host now binds
   GNOME 50/Mutter-compatible Wayland core versions plus the latest generated
   xdg-shell, viewporter, fractional-scale, and cursor-shape objects used by the
