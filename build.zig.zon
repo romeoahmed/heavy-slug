@@ -22,6 +22,11 @@
             .hash = "N-V-__8AAGfhdwLcch-RCImEQbiTe8n0-ZfevT6sXEEfSuKT",
             .lazy = true,
         },
+        .wayland_protocols_src = .{
+            .url = "https://gitlab.freedesktop.org/wayland/wayland-protocols/-/archive/1.48/wayland-protocols-1.48.tar.gz",
+            .hash = "N-V-__8AAMCWEADA0AS-1LfBEtixZLJAb_XQKQpgSmR2uxAO",
+            .lazy = true,
+        },
     },
     .paths = .{
         "build.zig",

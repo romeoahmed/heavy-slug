@@ -135,7 +135,7 @@ Task -> Mesh -> Fragment shaders
 | Shaders and backends | `slangc` with Slang 2026 support. | Backend-specific GPU runtime. |
 | Vulkan backend | Lazy `vulkan-zig` and Vulkan Headers packages. | Vulkan 1.4, `VK_EXT_mesh_shader`, `VK_EXT_shader_object`, dynamic rendering, push descriptors. |
 | Windows Vulkan demo | Native Win32 host; links `user32`; embeds a Per-Monitor-V2/long-path/Segment-Heap manifest; loads the Vulkan loader at runtime. | Vulkan-capable Windows 11 system. |
-| Linux Vulkan demo | `wayland-scanner`, `wayland-client`, `xkbcommon`, current Wayland client headers, and xdg-shell/viewporter/fractional-scale/cursor-shape protocol XML. | GNOME 50/Mutter 50.x-compatible Wayland session and Vulkan loader/driver. |
+| Linux Vulkan demo | `wayland-scanner`, `wayland-client`, `xkbcommon`, current Wayland client headers, and pinned `wayland-protocols` 1.48 XML fetched by Zig. | GNOME 50/Mutter 50.x-compatible Wayland session and Vulkan loader/driver. |
 | Metal backend/demo | macOS, Apple SDK with Metal 4 APIs, Objective-C++ C++23 support, `Metal`, `QuartzCore`, `Foundation`, and `Cocoa` for the demo. | Metal 4 capable device and native Cocoa host. |
 
 Important dependency facts:
@@ -153,8 +153,10 @@ Important dependency facts:
 - The demo hosts are deliberately native: Win32 on Windows, Wayland on Linux,
   and Cocoa on macOS. GLFW/SDL-style toolkit dependencies are not part of the
   current build model.
-- Linux demo builds can override tool locations with `-Dwayland-scanner=` and
-  `-Dwayland-protocols-dir=`.
+- Linux demo builds can override the protocol scanner with
+  `-Dwayland-scanner=`. Protocol XML is generated from the lazy
+  `wayland_protocols_src` Zig dependency, not from the system
+  `wayland-protocols` package.
 
 ## Public Modules
 
@@ -326,7 +328,8 @@ glyph instances, and coordinates deferred resource retirement.
 | HarfBuzz | `build.zig.zon` source archive | No |
 | `vulkan-zig` | pinned Git dependency | Yes |
 | Vulkan Headers | pinned Git dependency | Yes |
-| Wayland client/protocols | system Linux demo dependency | No |
+| Wayland client libraries | system Linux demo dependency | No |
+| Wayland protocol XML | pinned `wayland-protocols` 1.48 source archive | Yes |
 
 Generated local outputs use the usual Zig paths: `zig-out/`, `.zig-cache/`, and
 `zig-pkg/`. They are not source artifacts and should not be committed.

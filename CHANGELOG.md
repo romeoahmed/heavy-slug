@@ -108,6 +108,10 @@ implementation notes belong in commits and code review history.
 
 ### Fixed
 
+- **Wayland demo protocol generation fixed:** the Linux Vulkan demo now uses a
+  lazy pinned `wayland-protocols` 1.48 source dependency for generated protocol
+  XML, generates the stable tablet-v2 stub required by cursor-shape-v1, and no
+  longer depends on the system `wayland-protocols` XML version.
 - **Extreme zoom glyph rendering fixed:** CPU f64 charts, meshlet-local anchors,
   integer h-band lookup, and saturated integer-relative shader decoding now
   avoid absolute-coordinate cancellation and unstable far-curve drops. Mesh

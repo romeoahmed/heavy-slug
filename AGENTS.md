@@ -88,8 +88,10 @@ features, dynamic rendering, and sufficient mesh limits. Keep Vulkan pNext
 chains in `src/backends/vulkan/chains.zig`.
 
 Linux Vulkan demo builds also need `wayland-scanner`, `wayland-client`,
-`xkbcommon`, and `wayland-protocols` XML for xdg-shell, viewporter, and
-fractional-scale-v1. The demo host uses the modern Wayland path with
+`xkbcommon`, and the lazy `wayland_protocols_src` dependency pinned in
+`build.zig.zon` for xdg-shell, viewporter, fractional-scale-v1,
+cursor-shape-v1, and stable tablet-v2 XML. The demo host uses the modern
+Wayland path with
 client-side decorations; preserve logical surface sizing, fractional-scale
 buffer sizing, xkbcommon keymaps, and xdg-shell move/resize delegation.
 
