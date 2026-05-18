@@ -3,7 +3,7 @@ const vk = @import("vulkan");
 const heavy_slug = @import("heavy_slug");
 const gpu_context = @import("context.zig");
 const bindings = @import("bindings.zig");
-const pipeline_mod = @import("pipeline.zig");
+const shader_program_mod = @import("shader_program.zig");
 const backend_options = @import("heavy_slug_backend_options");
 const render = heavy_slug.core.render.renderer_core;
 const core_types = heavy_slug.core.types;
@@ -233,7 +233,7 @@ pub const Renderer = struct {
 
     core: render.RendererCore,
     frame_bindings: bindings.FrameBindings,
-    pipeline: pipeline_mod.Pipeline,
+    shader_program: shader_program_mod.ShaderProgram,
 
     // Host-visible storage buffers.
     pool_buffer: MappedBuffer,
@@ -252,7 +252,6 @@ pub const Renderer = struct {
 
     pub fn init(
         ctx: gpu_context.Context,
-        color_format: vk.Format,
         allocator: std.mem.Allocator,
         options: RendererOptions,
     ) !Renderer {
@@ -267,12 +266,11 @@ pub const Renderer = struct {
         var frame_bindings = try bindings.FrameBindings.init(ctx);
         errdefer frame_bindings.deinit();
 
-        var pipeline = try pipeline_mod.Pipeline.init(
+        var shader_program = try shader_program_mod.ShaderProgram.init(
             ctx,
             frame_bindings.layout,
-            color_format,
         );
-        errdefer pipeline.deinit();
+        errdefer shader_program.deinit();
 
         var core = try render.RendererCore.init(allocator, options);
         errdefer core.deinit();
@@ -329,7 +327,7 @@ pub const Renderer = struct {
             .mesh_shader_properties = ctx.mesh_shader_properties,
             .core = core,
             .frame_bindings = frame_bindings,
-            .pipeline = pipeline,
+            .shader_program = shader_program,
             .pool_buffer = pool_buf,
             .glyph_buffers = glyph_buffers,
             .shader_stats_buffers = shader_stats_buffers,
@@ -442,7 +440,7 @@ pub const Renderer = struct {
         const viewport = viewportToF32(view) orelse return Error.InvalidFrameView;
 
         const vk_viewport = yUpViewport(viewport);
-        self.dispatch.cmdSetViewport(vk_cmd, 0, &.{vk_viewport});
+        self.dispatch.cmdSetViewportWithCount(vk_cmd, &.{vk_viewport});
 
         const vk_scissor = vk.Rect2D{
             .offset = .{ .x = 0, .y = 0 },
@@ -451,9 +449,9 @@ pub const Renderer = struct {
                 .height = @intFromFloat(@round(viewport[1])),
             },
         };
-        self.dispatch.cmdSetScissor(vk_cmd, 0, &.{vk_scissor});
+        self.dispatch.cmdSetScissorWithCount(vk_cmd, &.{vk_scissor});
 
-        self.dispatch.cmdBindPipeline(vk_cmd, .graphics, self.pipeline.pipeline);
+        self.shader_program.bind(vk_cmd);
 
         const glyph_buffer = self.glyph_buffers[self.active_frame];
         const shader_stats_binding: ?bindings.BufferView = if (backend_options.shader_stats) blk: {
@@ -466,7 +464,7 @@ pub const Renderer = struct {
         } else null;
         const push_stats = self.frame_bindings.pushFrameBuffers(
             vk_cmd,
-            self.pipeline.pipeline_layout,
+            self.shader_program.pipeline_layout,
             .{
                 .buffer = self.pool_buffer.buffer,
                 .offset = 0,
@@ -492,7 +490,7 @@ pub const Renderer = struct {
         };
         self.dispatch.cmdPushConstants(
             vk_cmd,
-            self.pipeline.pipeline_layout,
+            self.shader_program.pipeline_layout,
             .{ .task_bit_ext = true, .mesh_bit_ext = true, .fragment_bit = true },
             0,
             @sizeOf(bindings.FrameParams),
@@ -524,7 +522,7 @@ pub const Renderer = struct {
         destroyMappedBuffer(self.pool_buffer, self.device, self.dispatch);
 
         self.core.deinit();
-        self.pipeline.deinit();
+        self.shader_program.deinit();
         self.frame_bindings.deinit();
 
         self.* = undefined;

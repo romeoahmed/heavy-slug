@@ -12,6 +12,12 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Breaking Vulkan shader-object backend:** the Vulkan renderer now requires
+  `VK_EXT_shader_object`, creates linked task/mesh/fragment shader objects, and
+  sets the required graphics state dynamically instead of creating a monolithic
+  graphics pipeline. `heavy_slug_vulkan.Renderer.init` no longer takes a
+  swapchain color format because attachment formats are not baked into shader
+  object creation.
 - **CI rewritten:** GitHub Actions now use one test matrix across Ubuntu,
   macOS, and `windows-2025-vs2026`, add native demo build tests through
   `-Ddemo=true`, and use dedicated PowerShell 7 setup scripts for Windows.

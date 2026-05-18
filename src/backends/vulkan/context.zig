@@ -11,6 +11,7 @@ const required_push_descriptors: u32 = 3;
 /// Device extensions that callers must enable on the VkDevice.
 const required_extensions = [_][*:0]const u8{
     "VK_EXT_mesh_shader",
+    "VK_EXT_shader_object",
 };
 
 /// Instance commands needed for device capability queries.
@@ -56,6 +57,12 @@ pub fn validatePushDescriptorSupport(props: vk.PhysicalDeviceVulkan14Properties)
     }
 }
 
+pub fn validateShaderObjectSupport(features: vk.PhysicalDeviceShaderObjectFeaturesEXT) FeatureError!void {
+    if (features.shader_object == .false) {
+        return FeatureError.ShaderObjectNotSupported;
+    }
+}
+
 pub fn validateDeviceProperties(
     api_version: u32,
     mesh_props: vk.PhysicalDeviceMeshShaderPropertiesEXT,
@@ -81,6 +88,7 @@ pub const Context = struct {
     api_version: u32,
     memory_properties: vk.PhysicalDeviceMemoryProperties,
     mesh_shader_properties: vk.PhysicalDeviceMeshShaderPropertiesEXT,
+    shader_object_properties: vk.PhysicalDeviceShaderObjectPropertiesEXT,
     vulkan14_properties: vk.PhysicalDeviceVulkan14Properties,
 
     /// Required device extensions. Enable all of these in VkDeviceCreateInfo.
@@ -139,6 +147,7 @@ pub const Context = struct {
         if (queried_features.mesh_shader.task_shader == .false or queried_features.mesh_shader.mesh_shader == .false) {
             return FeatureError.MeshShaderNotSupported;
         }
+        try validateShaderObjectSupport(queried_features.shader_object);
         if (queried_features.vulkan14.push_descriptor == .false) {
             return FeatureError.PushDescriptorNotSupported;
         }
@@ -169,6 +178,7 @@ pub const Context = struct {
             .api_version = queried_properties.root.properties.api_version,
             .memory_properties = mem_props,
             .mesh_shader_properties = queried_properties.mesh_shader,
+            .shader_object_properties = queried_properties.shader_object,
             .vulkan14_properties = queried_properties.vulkan14,
         };
     }
@@ -181,10 +191,8 @@ const HeavySlugDispatch = struct {
     vkDestroyDescriptorSetLayout: ?vk.PfnDestroyDescriptorSetLayout = null,
     vkCreatePipelineLayout: ?vk.PfnCreatePipelineLayout = null,
     vkDestroyPipelineLayout: ?vk.PfnDestroyPipelineLayout = null,
-    vkCreateGraphicsPipelines: ?vk.PfnCreateGraphicsPipelines = null,
-    vkDestroyPipeline: ?vk.PfnDestroyPipeline = null,
-    vkCreateShaderModule: ?vk.PfnCreateShaderModule = null,
-    vkDestroyShaderModule: ?vk.PfnDestroyShaderModule = null,
+    vkCreateShadersEXT: ?vk.PfnCreateShadersEXT = null,
+    vkDestroyShaderEXT: ?vk.PfnDestroyShaderEXT = null,
     vkCreateBuffer: ?vk.PfnCreateBuffer = null,
     vkDestroyBuffer: ?vk.PfnDestroyBuffer = null,
     vkAllocateMemory: ?vk.PfnAllocateMemory = null,
@@ -192,7 +200,7 @@ const HeavySlugDispatch = struct {
     vkBindBufferMemory: ?vk.PfnBindBufferMemory = null,
     vkMapMemory: ?vk.PfnMapMemory = null,
     vkUnmapMemory: ?vk.PfnUnmapMemory = null,
-    vkCmdBindPipeline: ?vk.PfnCmdBindPipeline = null,
+    vkCmdBindShadersEXT: ?vk.PfnCmdBindShadersEXT = null,
     vkCmdPushDescriptorSet: ?vk.PfnCmdPushDescriptorSet = null,
     vkCmdPushConstants: ?vk.PfnCmdPushConstants = null,
     vkCmdDrawMeshTasksEXT: ?vk.PfnCmdDrawMeshTasksEXT = null,
@@ -200,8 +208,42 @@ const HeavySlugDispatch = struct {
     vkDeviceWaitIdle: ?vk.PfnDeviceWaitIdle = null,
     vkGetDeviceProcAddr: ?vk.PfnGetDeviceProcAddr = null,
     vkGetBufferMemoryRequirements: ?vk.PfnGetBufferMemoryRequirements = null,
-    vkCmdSetViewport: ?vk.PfnCmdSetViewport = null,
-    vkCmdSetScissor: ?vk.PfnCmdSetScissor = null,
+    vkCmdSetViewportWithCount: ?vk.PfnCmdSetViewportWithCount = null,
+    vkCmdSetScissorWithCount: ?vk.PfnCmdSetScissorWithCount = null,
+    vkCmdBindVertexBuffers2: ?vk.PfnCmdBindVertexBuffers2 = null,
+    vkCmdSetVertexInputEXT: ?vk.PfnCmdSetVertexInputEXT = null,
+    vkCmdSetCullMode: ?vk.PfnCmdSetCullMode = null,
+    vkCmdSetFrontFace: ?vk.PfnCmdSetFrontFace = null,
+    vkCmdSetPrimitiveTopology: ?vk.PfnCmdSetPrimitiveTopology = null,
+    vkCmdSetPrimitiveRestartEnable: ?vk.PfnCmdSetPrimitiveRestartEnable = null,
+    vkCmdSetRasterizerDiscardEnable: ?vk.PfnCmdSetRasterizerDiscardEnable = null,
+    vkCmdSetLineWidth: ?vk.PfnCmdSetLineWidth = null,
+    vkCmdSetDepthBias: ?vk.PfnCmdSetDepthBias = null,
+    vkCmdSetDepthBiasEnable: ?vk.PfnCmdSetDepthBiasEnable = null,
+    vkCmdSetDepthTestEnable: ?vk.PfnCmdSetDepthTestEnable = null,
+    vkCmdSetDepthWriteEnable: ?vk.PfnCmdSetDepthWriteEnable = null,
+    vkCmdSetDepthCompareOp: ?vk.PfnCmdSetDepthCompareOp = null,
+    vkCmdSetDepthBoundsTestEnable: ?vk.PfnCmdSetDepthBoundsTestEnable = null,
+    vkCmdSetDepthBounds: ?vk.PfnCmdSetDepthBounds = null,
+    vkCmdSetStencilTestEnable: ?vk.PfnCmdSetStencilTestEnable = null,
+    vkCmdSetStencilCompareMask: ?vk.PfnCmdSetStencilCompareMask = null,
+    vkCmdSetStencilWriteMask: ?vk.PfnCmdSetStencilWriteMask = null,
+    vkCmdSetStencilReference: ?vk.PfnCmdSetStencilReference = null,
+    vkCmdSetStencilOp: ?vk.PfnCmdSetStencilOp = null,
+    vkCmdSetPatchControlPointsEXT: ?vk.PfnCmdSetPatchControlPointsEXT = null,
+    vkCmdSetTessellationDomainOriginEXT: ?vk.PfnCmdSetTessellationDomainOriginEXT = null,
+    vkCmdSetDepthClampEnableEXT: ?vk.PfnCmdSetDepthClampEnableEXT = null,
+    vkCmdSetPolygonModeEXT: ?vk.PfnCmdSetPolygonModeEXT = null,
+    vkCmdSetRasterizationSamplesEXT: ?vk.PfnCmdSetRasterizationSamplesEXT = null,
+    vkCmdSetSampleMaskEXT: ?vk.PfnCmdSetSampleMaskEXT = null,
+    vkCmdSetAlphaToCoverageEnableEXT: ?vk.PfnCmdSetAlphaToCoverageEnableEXT = null,
+    vkCmdSetAlphaToOneEnableEXT: ?vk.PfnCmdSetAlphaToOneEnableEXT = null,
+    vkCmdSetLogicOpEnableEXT: ?vk.PfnCmdSetLogicOpEnableEXT = null,
+    vkCmdSetLogicOpEXT: ?vk.PfnCmdSetLogicOpEXT = null,
+    vkCmdSetColorBlendEnableEXT: ?vk.PfnCmdSetColorBlendEnableEXT = null,
+    vkCmdSetColorBlendEquationEXT: ?vk.PfnCmdSetColorBlendEquationEXT = null,
+    vkCmdSetBlendConstants: ?vk.PfnCmdSetBlendConstants = null,
+    vkCmdSetColorWriteMaskEXT: ?vk.PfnCmdSetColorWriteMaskEXT = null,
 };
 
 /// vulkan-zig wrapper loaded from `HeavySlugDispatch`.
@@ -214,14 +256,19 @@ pub const FeatureError = error{
     DynamicRenderingNotSupported,
     PushDescriptorNotSupported,
     PushDescriptorLimitNotSupported,
+    ShaderObjectNotSupported,
     ExtensionNotSupported,
 };
 
 test "HeavySlugDispatch has buffer, viewport, and push descriptor commands" {
     comptime {
         std.debug.assert(@hasField(HeavySlugDispatch, "vkGetBufferMemoryRequirements"));
-        std.debug.assert(@hasField(HeavySlugDispatch, "vkCmdSetViewport"));
-        std.debug.assert(@hasField(HeavySlugDispatch, "vkCmdSetScissor"));
+        std.debug.assert(@hasField(HeavySlugDispatch, "vkCreateShadersEXT"));
+        std.debug.assert(@hasField(HeavySlugDispatch, "vkCmdBindShadersEXT"));
+        std.debug.assert(@hasField(HeavySlugDispatch, "vkCmdSetViewportWithCount"));
+        std.debug.assert(@hasField(HeavySlugDispatch, "vkCmdSetScissorWithCount"));
+        std.debug.assert(@hasField(HeavySlugDispatch, "vkCmdSetVertexInputEXT"));
+        std.debug.assert(@hasField(HeavySlugDispatch, "vkCmdSetColorBlendEquationEXT"));
         std.debug.assert(@hasField(HeavySlugDispatch, "vkCmdPushDescriptorSet"));
     }
 }
@@ -236,15 +283,18 @@ test "HeavySlugInstanceDispatch has feature query commands" {
     }
 }
 
-test "required_device_extensions includes mesh shader" {
+test "required_device_extensions include mesh shader and shader object" {
     const exts = Context.required_device_extensions;
-    try std.testing.expect(exts.len >= 1);
+    try std.testing.expect(exts.len >= 2);
     var has_mesh = false;
+    var has_shader_object = false;
     for (exts) |ext| {
         const slice = std.mem.span(ext);
         if (std.mem.eql(u8, slice, "VK_EXT_mesh_shader")) has_mesh = true;
+        if (std.mem.eql(u8, slice, "VK_EXT_shader_object")) has_shader_object = true;
     }
     try std.testing.expect(has_mesh);
+    try std.testing.expect(has_shader_object);
 }
 
 test "required_api_version is Vulkan 1.4" {
@@ -318,6 +368,13 @@ test "validateDeviceProperties requires Vulkan 1.4 and mesh shader budgets" {
         FeatureError.MeshShaderLimitsNotSupported,
         validateDeviceProperties(vk.API_VERSION_1_4.toU32(), low_output_components, supportedVulkan14Props()),
     );
+}
+
+test "validateShaderObjectSupport requires shaderObject feature" {
+    var features = chains.shaderObjectFeatures();
+    try std.testing.expectError(FeatureError.ShaderObjectNotSupported, validateShaderObjectSupport(features));
+    features.shader_object = .true;
+    try validateShaderObjectSupport(features);
 }
 
 test "validateDeviceProperties requires enough Vulkan 1.4 push descriptors" {

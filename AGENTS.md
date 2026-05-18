@@ -83,9 +83,9 @@ Metal, Wayland, Cocoa, or any window toolkit. Keep `vulkan` and
 demos. It must support Slang 2026, SPIR-V 1.6, and `metallib_4_0`.
 
 Vulkan runtime/demo execution needs a Vulkan loader, a Vulkan 1.4 driver, core
-push descriptors, `VK_EXT_mesh_shader`, task/mesh shader features, dynamic
-rendering, and sufficient mesh limits. Keep Vulkan pNext chains in
-`src/backends/vulkan/chains.zig`.
+push descriptors, `VK_EXT_mesh_shader`, `VK_EXT_shader_object`, task/mesh shader
+features, dynamic rendering, and sufficient mesh limits. Keep Vulkan pNext
+chains in `src/backends/vulkan/chains.zig`.
 
 Linux Vulkan demo builds also need `wayland-scanner`, `wayland-client`,
 `xkbcommon`, and `wayland-protocols` XML for xdg-shell, viewporter, and
@@ -141,8 +141,9 @@ descriptor indexing as the glyph addressing model, or descriptor-heap style
 architecture churn.
 
 The hot path uses byte-offset `GlyphBlobRef` values. Vulkan frame bindings use
-Vulkan 1.4 push descriptors, not frame-local descriptor pools or descriptor set
-allocation.
+Vulkan 1.4 push descriptors and linked `VK_EXT_shader_object` shader objects,
+not frame-local descriptor pools, descriptor set allocation, or monolithic
+graphics pipelines.
 
 For Metal, new command submission and resource binding work should use the
 Metal 4 API family exposed by the bridge. Avoid older command-queue,

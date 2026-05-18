@@ -21,7 +21,6 @@ pub fn main() !void {
 
     var text_renderer = try heavy_slug_vulkan.Renderer.init(
         host.renderer_context,
-        host.surface_format.format,
         allocator,
         .{},
     );

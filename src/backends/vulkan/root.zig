@@ -4,7 +4,7 @@ pub const vk = @import("vulkan");
 pub const bindings = @import("bindings.zig");
 pub const chains = @import("chains.zig");
 pub const context = @import("context.zig");
-pub const pipeline = @import("pipeline.zig");
+pub const shader_program = @import("shader_program.zig");
 pub const renderer = @import("renderer.zig");
 
 pub const Context = context.Context;
@@ -28,6 +28,6 @@ test {
     _ = bindings;
     _ = chains;
     _ = context;
-    _ = pipeline;
+    _ = shader_program;
     _ = renderer;
 }

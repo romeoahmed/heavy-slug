@@ -109,7 +109,7 @@ Application
       |
       v
 Backend module: heavy_slug_vulkan or heavy_slug_metal
-  owns GPU buffers, pipelines, and backend submission glue
+  owns GPU buffers, shader/pipeline state, and backend submission glue
       |
       v
 Core module: heavy_slug
@@ -123,7 +123,7 @@ Task -> Mesh -> Fragment shaders
 | Layer | Owns | Does not own |
 | --- | --- | --- |
 | `heavy_slug` | Fonts, shaping, outline encoding, cache metadata, backend-neutral batches. | GPU context, swapchain, command queue, window. |
-| `heavy_slug_vulkan` | Vulkan buffers, pipeline state, frame binding, draw recording. | Instance, surface, swapchain, queue policy. |
+| `heavy_slug_vulkan` | Vulkan buffers, shader objects, frame binding, draw recording. | Instance, surface, swapchain, queue policy. |
 | `heavy_slug_metal` | Metal bridge state, buffers, pipeline state, frame slots. | Cocoa app lifecycle. |
 | Demo code | Native Win32, Wayland, Cocoa hosts, and shared scene/input helpers. | Library API policy. |
 
@@ -133,7 +133,7 @@ Task -> Mesh -> Fragment shaders
 | --- | --- | --- |
 | Core | Zig `0.16.0`, C/C++ toolchain, pinned package fetch on first build. | None beyond the embedding application. |
 | Shaders and backends | `slangc` with Slang 2026 support. | Backend-specific GPU runtime. |
-| Vulkan backend | Lazy `vulkan-zig` and Vulkan Headers packages. | Vulkan 1.4, mesh shaders, dynamic rendering, push descriptors. |
+| Vulkan backend | Lazy `vulkan-zig` and Vulkan Headers packages. | Vulkan 1.4, `VK_EXT_mesh_shader`, `VK_EXT_shader_object`, dynamic rendering, push descriptors. |
 | Windows Vulkan demo | Native Win32 host; links `user32`; loads the Vulkan loader at runtime. | Vulkan-capable Windows 11 system. |
 | Linux Vulkan demo | `wayland-scanner`, `wayland-client`, `xkbcommon`, and xdg-shell/viewporter/fractional-scale protocol XML. | Modern Wayland session and Vulkan loader/driver. |
 | Metal backend/demo | macOS, Apple SDK with Metal 4 APIs, Objective-C++ support, `Metal`, `QuartzCore`, `Foundation`, and `Cocoa` for the demo. | Metal 4 capable device and native Cocoa host. |
@@ -158,7 +158,7 @@ Important dependency facts:
 | Module | Enabled by | Purpose |
 | --- | --- | --- |
 | `heavy_slug` | default | Core public types and backend-neutral renderer logic. |
-| `heavy_slug_vulkan` | `-Dvulkan=true` or Vulkan demo | Vulkan 1.4 / SPIR-V 1.6 backend. |
+| `heavy_slug_vulkan` | `-Dvulkan=true` or Vulkan demo | Vulkan 1.4 / SPIR-V 1.6 shader-object backend. |
 | `heavy_slug_metal` | `-Dmetal=true` or Metal demo | macOS Metal 4 backend. |
 
 Stable top-level core exports include `FontHandle`, `FontSource`,
@@ -224,15 +224,17 @@ TextRun
 
 | Backend | Resource model | Host responsibility |
 | --- | --- | --- |
-| Vulkan | One glyph blob buffer, one per-frame glyph instance buffer, optional stats buffer. | Provide Vulkan objects, command buffers, render targets, and completed frame tokens. |
+| Vulkan | One glyph blob buffer, one per-frame glyph instance buffer, shader objects, optional stats buffer. | Provide Vulkan objects, command buffers, render targets, and completed frame tokens. |
 | Metal | Bridge-owned buffers and Metal 4 pipeline resources. | Provide borrowed Metal device, command queue, layer, and app lifecycle. |
 
 Frame lifetime is explicit. Backends return `FrameToken` values on submit, and
 cached GPU storage is retired only after the host reports completed work.
 
 The Vulkan backend intentionally uses byte-offset `GlyphBlobRef` values rather
-than per-glyph descriptor slots. The Metal backend follows the Metal 4 command
-and argument-table path exposed through the Objective-C++ bridge.
+than per-glyph descriptor slots and binds task, mesh, and fragment stages as
+linked `VK_EXT_shader_object` shader objects. The Metal backend follows the
+Metal 4 command and argument-table path exposed through the Objective-C++
+bridge.
 
 ## Shader Layout
 
