@@ -4,8 +4,8 @@
 
 `heavy-slug` is a Zig 0.16 GPU text rendering library for analytic,
 resolution-independent text. It shapes Unicode with HarfBuzz, captures native
-font outlines with FreeType, encodes compact cubic coverage blobs, and renders
-them with task, mesh, and fragment shaders on Vulkan 1.4 and Metal 4.
+font outlines with FreeType, encodes precision-tiered cubic coverage blobs, and
+renders them with task, mesh, and fragment shaders on Vulkan 1.4 and Metal 4.
 
 `README.md` is the canonical public architecture and build document. Keep it
 accurate when changing public APIs, backend requirements, shader layout,
@@ -24,7 +24,6 @@ window-toolkit object.
   renderer-core internals.
 - `src/gpu/` contains backend-neutral GPU ABI markers, mesh limits, resource
   model notes, and shader stats types.
-- `src/math/` contains PGA motor math used by transforms.
 - `src/backends/vulkan/` provides the opt-in `heavy_slug_vulkan` module.
 - `src/backends/metal/` provides the opt-in `heavy_slug_metal` module and the
   Objective-C++ bridge.
@@ -33,8 +32,8 @@ window-toolkit object.
 - `demo/platform/` contains native Win32, Wayland, and Cocoa hosts.
 - `src/c/` contains core C headers translated by build-system `addTranslateC()`.
 - `build/` contains modular Zig build helpers.
-- `shaders/core/` contains shared Slang 2026 ABI, stats, PGA, h-band, and
-  coverage logic.
+- `shaders/core/` contains shared Slang 2026 ABI, stats, chart mapping,
+  h-band, and coverage logic.
 - `shaders/backend_vulkan/` and `shaders/backend_metal/` contain binding shims.
 - `shaders/entries/` contains `task.slang`, `mesh.slang`, and
   `fragment.slang`.

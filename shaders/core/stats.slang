@@ -24,16 +24,16 @@ public static const uint kShaderStatMeshTilesEmitted = 17;
 public static const uint kShaderStatMeshTilesCulled = 18;
 public static const uint kShaderStatMeshCullEmptySlices = 19;
 public static const uint kShaderStatMeshCullInvalidStrips = 20;
-public static const uint kShaderStatMeshCullAnchorFailures = 21;
+public static const uint kShaderStatMeshCullZeroArea = 21;
 public static const uint kShaderStatMeshCullClipEmpty = 22;
-public static const uint kShaderStatMeshCullTransformFailures = 23;
+public static const uint kShaderStatMeshCullNonFinite = 23;
 
 public static const uint kMeshCullNone = 0;
 public static const uint kMeshCullEmptySlice = 1;
 public static const uint kMeshCullInvalidStrip = 2;
-public static const uint kMeshCullAnchorFailed = 3;
+public static const uint kMeshCullZeroArea = 3;
 public static const uint kMeshCullClipEmpty = 4;
-public static const uint kMeshCullTransformFailed = 5;
+public static const uint kMeshCullNonFinite = 5;
 
 public void addShaderStat(RWStructuredBuffer<uint> counters, uint index, uint value)
 {
@@ -53,10 +53,10 @@ public void addMeshTileStat(RWStructuredBuffer<uint> counters, bool emitted, uin
         addShaderStat(counters, kShaderStatMeshCullEmptySlices, 1);
     else if (cullReason == kMeshCullInvalidStrip)
         addShaderStat(counters, kShaderStatMeshCullInvalidStrips, 1);
-    else if (cullReason == kMeshCullAnchorFailed)
-        addShaderStat(counters, kShaderStatMeshCullAnchorFailures, 1);
+    else if (cullReason == kMeshCullZeroArea)
+        addShaderStat(counters, kShaderStatMeshCullZeroArea, 1);
     else if (cullReason == kMeshCullClipEmpty)
         addShaderStat(counters, kShaderStatMeshCullClipEmpty, 1);
-    else if (cullReason == kMeshCullTransformFailed)
-        addShaderStat(counters, kShaderStatMeshCullTransformFailures, 1);
+    else if (cullReason == kMeshCullNonFinite)
+        addShaderStat(counters, kShaderStatMeshCullNonFinite, 1);
 }

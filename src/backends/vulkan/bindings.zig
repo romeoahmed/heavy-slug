@@ -8,19 +8,21 @@ const backend_options = @import("heavy_slug_backend_options");
 /// Generated from slangc reflection of shaders/core/abi.slang.
 pub const GlyphInstance = gpu_structs.GlyphInstance;
 
-/// Per-frame shader parameters. 80 bytes, within Vulkan's guaranteed
+/// Per-frame shader parameters. Kept within Vulkan's guaranteed
 /// 128-byte minimum push constant range when sent through push constants.
 /// Generated from slangc reflection of shaders/core/abi.slang.
 pub const FrameParams = gpu_structs.FrameParams;
 
-test "GlyphInstance is 64 bytes with correct field offsets" {
-    try std.testing.expectEqual(@as(usize, 64), @sizeOf(GlyphInstance));
-    try std.testing.expectEqual(@as(usize, 48), @offsetOf(GlyphInstance, "blob_ref"));
+test "GlyphInstance v2 has chart fields with stable leading offsets" {
+    try std.testing.expectEqual(@as(usize, 0), @offsetOf(GlyphInstance, "color"));
+    try std.testing.expectEqual(@as(usize, 16), @offsetOf(GlyphInstance, "blob_ref"));
+    try std.testing.expect(@sizeOf(GlyphInstance) <= 128);
 }
 
-test "FrameParams is 80 bytes with correct field offsets" {
-    try std.testing.expectEqual(@as(usize, 80), @sizeOf(FrameParams));
-    try std.testing.expectEqual(@as(usize, 72), @offsetOf(FrameParams, "glyph_count"));
+test "FrameParams v2 carries only frame-wide draw parameters" {
+    try std.testing.expect(@sizeOf(FrameParams) <= 128);
+    try std.testing.expectEqual(@as(usize, 0), @offsetOf(FrameParams, "viewport_size"));
+    try std.testing.expectEqual(@as(usize, 8), @offsetOf(FrameParams, "glyph_count"));
 }
 
 pub const PushStats = if (@import("builtin").mode == .Debug) struct {

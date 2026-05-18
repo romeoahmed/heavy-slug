@@ -24,8 +24,8 @@ pub const LoadedFont = struct {
         return plan.shape(self.font, text, props);
     }
 
-    pub fn encodeGlyph(self: *LoadedFont, glyph_id: u32) !glyph.EncodedGlyph {
-        return self.encoder.encodeGlyph(self.font, glyph_id);
+    pub fn encodeGlyph(self: *LoadedFont, glyph_id: u32, fraction_bits: u8) !glyph.EncodedGlyph {
+        return self.encoder.encodeGlyph(self.font, glyph_id, fraction_bits);
     }
 };
 
@@ -94,7 +94,7 @@ test "FontSystem shapes and encodes through explicit plan" {
     const run = try loaded.shape(plan, "A", .{});
     try std.testing.expectEqual(@as(usize, 1), run.infos.len);
 
-    const encoded = try loaded.encodeGlyph(run.infos[0].codepoint);
+    const encoded = try loaded.encodeGlyph(run.infos[0].codepoint, @import("../blob/format.zig").default_fraction_bits);
     defer encoded.deinit();
     try std.testing.expect(encoded.data.len > 0);
 }

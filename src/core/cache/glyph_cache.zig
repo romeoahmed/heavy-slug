@@ -18,6 +18,8 @@ pub const GlyphBlobRef = packed struct(u32) {
 pub const CacheKey = struct {
     font_id: u32,
     glyph_id: u32,
+    precision_bits: u8 = 0,
+    _pad: [3]u8 = .{ 0, 0, 0 },
     /// Hash of variation-axis coordinates. Zero means the font's default instance.
     variation_key: u64 = 0,
 };
@@ -32,6 +34,13 @@ pub const EmBox = struct {
     y_max: f32,
 };
 
+pub const FixedBounds = extern struct {
+    x_min: i32,
+    y_min: i32,
+    x_max: i32,
+    y_max: i32,
+};
+
 pub const CacheEntry = struct {
     blob_ref: GlyphBlobRef,
     pool_alloc: pool_mod.Allocation,
@@ -39,6 +48,8 @@ pub const CacheEntry = struct {
     last_frame: u32,
     consecutive_frames: u8,
     em_box: EmBox,
+    bounds_q: FixedBounds,
+    precision_bits: u8,
     lru_idx: u32 = LRU_NONE, // index into GlyphCache.lru_nodes; LRU_NONE for hot entries
 };
 
@@ -73,6 +84,7 @@ pub const GlyphCache = struct {
     cold_capacity: u32,
     current_frame: u32,
     promote_frames: u8,
+    frame_promotions: u32,
     allocator: std.mem.Allocator,
     lru_nodes: []LruNode,
     lru_free_head: u32,
@@ -125,6 +137,7 @@ pub const GlyphCache = struct {
         entry.consecutive_frames = 0;
         self.hot_count += 1;
         self.cold_count -= 1;
+        self.frame_promotions += 1;
     }
 
     pub fn init(
@@ -161,6 +174,7 @@ pub const GlyphCache = struct {
             .cold_capacity = cold_capacity,
             .current_frame = 0,
             .promote_frames = promote_frames,
+            .frame_promotions = 0,
             .lru_nodes = lru_nodes,
             .lru_free_head = free_head,
         };
@@ -184,6 +198,17 @@ pub const GlyphCache = struct {
         pool_alloc: pool_mod.Allocation,
         em_box: EmBox,
     ) !void {
+        return self.insertHotWithBounds(key, blob_ref, pool_alloc, em_box, fixedBoundsFromEmBox(em_box));
+    }
+
+    pub fn insertHotWithBounds(
+        self: *GlyphCache,
+        key: CacheKey,
+        blob_ref: GlyphBlobRef,
+        pool_alloc: pool_mod.Allocation,
+        em_box: EmBox,
+        bounds_q: FixedBounds,
+    ) !void {
         std.debug.assert(self.hot_count < self.hot_capacity);
         std.debug.assert(!self.map.contains(key));
         try self.map.put(key, .{
@@ -193,6 +218,8 @@ pub const GlyphCache = struct {
             .last_frame = self.current_frame,
             .consecutive_frames = 1,
             .em_box = em_box,
+            .bounds_q = bounds_q,
+            .precision_bits = key.precision_bits,
         });
         self.hot_count += 1;
     }
@@ -204,6 +231,17 @@ pub const GlyphCache = struct {
         blob_ref: GlyphBlobRef,
         pool_alloc: pool_mod.Allocation,
         em_box: EmBox,
+    ) !void {
+        return self.insertColdWithBounds(key, blob_ref, pool_alloc, em_box, fixedBoundsFromEmBox(em_box));
+    }
+
+    pub fn insertColdWithBounds(
+        self: *GlyphCache,
+        key: CacheKey,
+        blob_ref: GlyphBlobRef,
+        pool_alloc: pool_mod.Allocation,
+        em_box: EmBox,
+        bounds_q: FixedBounds,
     ) !void {
         std.debug.assert(self.cold_count < self.cold_capacity);
         std.debug.assert(!self.map.contains(key));
@@ -223,6 +261,8 @@ pub const GlyphCache = struct {
             .last_frame = self.current_frame,
             .consecutive_frames = 1,
             .em_box = em_box,
+            .bounds_q = bounds_q,
+            .precision_bits = key.precision_bits,
             .lru_idx = lru_idx,
         });
         self.cold_count += 1;
@@ -258,6 +298,7 @@ pub const GlyphCache = struct {
     /// Advance the frame counter. Promotion happens synchronously in lookup().
     pub fn advanceFrame(self: *GlyphCache) void {
         self.current_frame +%= 1;
+        self.frame_promotions = 0;
     }
 
     /// Evict the least-recently-used cold entry. O(1) via DLL tail pop.
@@ -337,6 +378,15 @@ pub const GlyphCache = struct {
         return evicted;
     }
 };
+
+fn fixedBoundsFromEmBox(em_box: EmBox) FixedBounds {
+    return .{
+        .x_min = @intFromFloat(@floor(em_box.x_min)),
+        .y_min = @intFromFloat(@floor(em_box.y_min)),
+        .x_max = @intFromFloat(@ceil(em_box.x_max)),
+        .y_max = @intFromFloat(@ceil(em_box.y_max)),
+    };
+}
 
 fn testBlobRef(value: u32) GlyphBlobRef {
     return GlyphBlobRef.from(value);
@@ -474,6 +524,7 @@ test "GlyphCache: cold promoted to hot when lookup reaches frame threshold" {
     try std.testing.expectEqual(CacheTier.hot, entry.tier);
     try std.testing.expectEqual(@as(u32, 1), cache.hot_count);
     try std.testing.expectEqual(@as(u32, 0), cache.cold_count);
+    try std.testing.expectEqual(@as(u32, 1), cache.frame_promotions);
 }
 
 test "GlyphCache: promotion skipped when hot tier full" {

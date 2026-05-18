@@ -10,7 +10,9 @@ import resources;
 import screen_mapping;
 import stats;
 
-static const float kNoBoundsMax = -1.0e20;
+static const int kNoBoundsMaxQ = -2147483647;
+static const float kI32MinFloat = -2147483648.0;
+static const float kI32MaxFloat = 2147483520.0;
 
 struct VertexOutput
 {
@@ -18,28 +20,24 @@ struct VertexOutput
     float4 color       : COLOR;
 #if HEAVY_SLUG_METAL
     nointerpolation uint blobRef : TEXCOORD_1;
-    nointerpolation uint flags           : TEXCOORD_2;
-    nointerpolation float2 texcoordAnchor : TEXCOORD_3;
-    nointerpolation float3 screenToLocalX : TEXCOORD_4;
-    nointerpolation float3 screenToLocalY : TEXCOORD_5;
-    nointerpolation float3 screenToLocalT : TEXCOORD_6;
+    nointerpolation uint flags : TEXCOORD_2;
+    nointerpolation int2 meshAnchorQ : TEXCOORD_3;
+    nointerpolation float2 screenAnchorPx : TEXCOORD_4;
+    nointerpolation float4 localFromScreen : TEXCOORD_5;
 #else
     nointerpolation uint blobRef : TEXCOORD1;
-    nointerpolation uint flags           : TEXCOORD2;
-    nointerpolation float2 texcoordAnchor : TEXCOORD3;
-    nointerpolation float3 screenToLocalX : TEXCOORD4;
-    nointerpolation float3 screenToLocalY : TEXCOORD5;
-    nointerpolation float3 screenToLocalT : TEXCOORD6;
+    nointerpolation uint flags : TEXCOORD2;
+    nointerpolation int2 meshAnchorQ : TEXCOORD3;
+    nointerpolation float2 screenAnchorPx : TEXCOORD4;
+    nointerpolation float4 localFromScreen : TEXCOORD5;
 #endif
 };
 
-groupshared float s_threadMaxX[kMeshThreadCount];
+groupshared int s_threadMaxXQ[kMeshThreadCount];
 groupshared uint s_threadCandidateCounts[kMeshThreadCount];
-groupshared float2 s_anchor;
+groupshared int2 s_meshAnchorQ;
+groupshared float2 s_screenAnchorPx;
 groupshared float2 s_clipVertices[kMeshOutputVertices];
-groupshared float3 s_screenToLocalX;
-groupshared float3 s_screenToLocalY;
-groupshared float3 s_screenToLocalT;
 groupshared uint s_vertexCount;
 groupshared uint s_primitiveCount;
 groupshared uint s_emit;
@@ -62,15 +60,46 @@ uint sliceCount(uint sliceInfo)
     return sliceInfo >> 16;
 }
 
-float2 emPerPixel(GlyphInstance glyph)
+int boundedQFromFloat(float v, bool upper)
 {
-    float2 halfDim = pc.viewport_size * 0.5;
-    float2 ppe = float2(
-        length(float2(pc.projection[0][0] * halfDim.x, pc.projection[1][0] * halfDim.y)),
-        length(float2(pc.projection[0][1] * halfDim.x, pc.projection[1][1] * halfDim.y))
-    );
-    float ms = glyph.motor.x * glyph.motor.x + glyph.motor.y * glyph.motor.y;
-    return (1.0 / ppe) / ms;
+    if (!isfinite(v))
+        return upper ? 2147483647 : -2147483647 - 1;
+    float rounded = upper ? ceil(v) : floor(v);
+    if (rounded <= kI32MinFloat)
+        return -2147483647 - 1;
+    if (rounded >= kI32MaxFloat)
+        return 2147483647;
+    return int(rounded);
+}
+
+int saturatingAddQ(int a, int b)
+{
+    if (b > 0 && a > 2147483647 - b)
+        return 2147483647;
+    if (b < 0 && a < (-2147483647 - 1) - b)
+        return -2147483647 - 1;
+    return a + b;
+}
+
+int saturatingSubQ(int a, int b)
+{
+    if (b == (-2147483647 - 1))
+        return 2147483647;
+    if (b < 0)
+        return saturatingAddQ(a, -b);
+    if (a < (-2147483647 - 1) + b)
+        return -2147483647 - 1;
+    return a - b;
+}
+
+int2 localPixelDilationQ(GlyphInstance glyph)
+{
+    float scale = exp2(float(glyph.precision_bits));
+    float2 dx = float2(glyph.local_from_screen_2x2.x, glyph.local_from_screen_2x2.y);
+    float2 dy = float2(glyph.local_from_screen_2x2.z, glyph.local_from_screen_2x2.w);
+    float2 radius = (abs(dx) + abs(dy)) * 0.5;
+    float2 q = radius * scale;
+    return int2(boundedQFromFloat(q.x, true), boundedQFromFloat(q.y, true));
 }
 
 void scanSliceRightBound(
@@ -83,7 +112,7 @@ void scanSliceRightBound(
     uint bandEnd,
     uint gtid)
 {
-    float localMaxX = kNoBoundsMax;
+    int localMaxXQ = kNoBoundsMaxQ;
     uint localCandidates = 0;
 
     for (uint bandIndex = bandStart + gtid; bandIndex < bandEnd; bandIndex += kMeshThreadCount)
@@ -98,14 +127,55 @@ void scanSliceRightBound(
             uint curveIndex = blob.readCurveId(idBase, idStart + i);
             if (curveIndex < curveCount)
             {
-                float4 bbox = blob.readCurveBounds(curveBase, curveIndex);
-                localMaxX = max(localMaxX, bbox.y);
+                int4 bbox = blob.readCurveBoundsQ(curveBase, curveIndex);
+                localMaxXQ = max(localMaxXQ, bbox.z);
             }
         }
     }
 
-    s_threadMaxX[gtid] = localMaxX;
+    s_threadMaxXQ[gtid] = localMaxXQ;
     s_threadCandidateCounts[gtid] = localCandidates;
+}
+
+int midpointQ(int lo, int hi)
+{
+    if ((lo < 0) != (hi < 0))
+        return (lo + hi) / 2;
+    return lo + (hi - lo) / 2;
+}
+
+int localScreenToQ(GlyphInstance glyph, float2 screen, uint axis, bool upper)
+{
+    float2 localDelta = mul2x2(glyph.local_from_screen_2x2, screen - glyph.screen_anchor_px);
+    int anchor = axis == 0 ? glyph.glyph_anchor_q.x : glyph.glyph_anchor_q.y;
+    // Keep the large fixed-point anchor in integer space; adding it in f32
+    // drops subpixel-scale viewport deltas once anchor exceeds 2^24.
+    float deltaQ = (axis == 0 ? localDelta.x : localDelta.y) * exp2(float(glyph.precision_bits));
+    return saturatingAddQ(anchor, boundedQFromFloat(deltaQ, upper));
+}
+
+int4 viewportLocalBoundsQ(GlyphInstance glyph)
+{
+    float2 s0 = float2(0.0, 0.0);
+    float2 s1 = float2(pc.viewport_size.x, 0.0);
+    float2 s2 = pc.viewport_size;
+    float2 s3 = float2(0.0, pc.viewport_size.y);
+
+    int minX = min(min(localScreenToQ(glyph, s0, 0, false), localScreenToQ(glyph, s1, 0, false)),
+                   min(localScreenToQ(glyph, s2, 0, false), localScreenToQ(glyph, s3, 0, false)));
+    int maxX = max(max(localScreenToQ(glyph, s0, 0, true), localScreenToQ(glyph, s1, 0, true)),
+                   max(localScreenToQ(glyph, s2, 0, true), localScreenToQ(glyph, s3, 0, true)));
+    int minY = min(min(localScreenToQ(glyph, s0, 1, false), localScreenToQ(glyph, s1, 1, false)),
+                   min(localScreenToQ(glyph, s2, 1, false), localScreenToQ(glyph, s3, 1, false)));
+    int maxY = max(max(localScreenToQ(glyph, s0, 1, true), localScreenToQ(glyph, s1, 1, true)),
+                   max(localScreenToQ(glyph, s2, 1, true), localScreenToQ(glyph, s3, 1, true)));
+    return int4(minX, minY, maxX, maxY);
+}
+
+int bandEdgeQ(int bandMin, uint bandOffset, int bandHeightQ, bool upper)
+{
+    float edge = (float(bandMin) + float(bandOffset)) * float(bandHeightQ);
+    return boundedQFromFloat(edge, upper);
 }
 
 [shader("mesh")]
@@ -130,38 +200,19 @@ void meshMain(
 
     GlyphInstance glyph = glyphs[glyphIndex];
     BlobReader blob = blobReader(glyph.blob_ref);
+    BlobHeader header = blob.readHeader();
 
-    float4 bounds;
-    uint curveCount;
-    float fillSign;
-    uint curveBase;
-    int bandMin;
-    uint bandCount;
-    float bandHeight;
-    uint bandBase;
-    uint idBase;
-    blob.readHeader(
-        bounds,
-        curveCount,
-        fillSign,
-        curveBase,
-        bandMin,
-        bandCount,
-        bandHeight,
-        bandBase,
-        idBase);
-
-    uint effectiveSlices = min(requestedSlices, max(bandCount, 1u));
-    bool hasSlice = curveCount != 0 && bandCount != 0 && requestedSlice < effectiveSlices;
-    uint bandStart = hasSlice ? (requestedSlice * bandCount) / effectiveSlices : 0;
-    uint bandEnd = hasSlice ? ((requestedSlice + 1u) * bandCount) / effectiveSlices : 0;
+    uint effectiveSlices = min(requestedSlices, max(header.bandCount, 1u));
+    bool hasSlice = header.curveCount != 0 && header.bandCount != 0 && requestedSlice < effectiveSlices;
+    uint bandStart = hasSlice ? (requestedSlice * header.bandCount) / effectiveSlices : 0;
+    uint bandEnd = hasSlice ? ((requestedSlice + 1u) * header.bandCount) / effectiveSlices : 0;
     hasSlice = hasSlice && bandEnd > bandStart;
 
     if (hasSlice)
-        scanSliceRightBound(blob, curveBase, curveCount, bandBase, idBase, bandStart, bandEnd, gtid);
+        scanSliceRightBound(blob, header.curveBaseWords, header.curveCount, header.bandBaseWords, header.idBaseWords, bandStart, bandEnd, gtid);
     else
     {
-        s_threadMaxX[gtid] = kNoBoundsMax;
+        s_threadMaxXQ[gtid] = kNoBoundsMaxQ;
         s_threadCandidateCounts[gtid] = 0;
     }
 
@@ -169,76 +220,71 @@ void meshMain(
 
     if (gtid == 0)
     {
-        float maxX = kNoBoundsMax;
+        int maxXQ = kNoBoundsMaxQ;
         uint candidateCount = 0;
         for (uint i = 0; i < kMeshThreadCount; i++)
         {
-            maxX = max(maxX, s_threadMaxX[i]);
+            maxXQ = max(maxXQ, s_threadMaxXQ[i]);
             candidateCount += s_threadCandidateCounts[i];
         }
 
-        float2 dilate = emPerPixel(glyph) * 0.5;
-        float yMin = max(glyph.em_y_min, (float(bandMin) + float(bandStart)) * bandHeight);
-        float yMax = min(glyph.em_y_max, (float(bandMin) + float(bandEnd)) * bandHeight);
+        int2 dilateQ = localPixelDilationQ(glyph);
+        int4 viewportQ = viewportLocalBoundsQ(glyph);
+        int yMinQ = max(max(glyph.local_bounds_q.y, saturatingSubQ(viewportQ.y, dilateQ.y)), bandEdgeQ(header.bandMin, bandStart, header.bandHeightQ, false));
+        int yMaxQ = min(min(glyph.local_bounds_q.w, saturatingAddQ(viewportQ.w, dilateQ.y)), bandEdgeQ(header.bandMin, bandEnd, header.bandHeightQ, true));
 
         if (bandStart == 0)
-            yMin -= dilate.y;
-        if (bandEnd == bandCount)
-            yMax += dilate.y;
+            yMinQ = saturatingSubQ(yMinQ, dilateQ.y);
+        if (bandEnd == header.bandCount)
+            yMaxQ = saturatingAddQ(yMaxQ, dilateQ.y);
 
-        // The fragment integral resolves interior coverage from right-side
-        // contour crossings.  A slice with only a right boundary can still
-        // cover every pixel to its left, so the mesh strip must use the
-        // glyph's global left bound rather than the leftmost candidate curve.
-        float2 rectMin = float2(glyph.em_x_min - dilate.x, yMin);
-        float2 rectMax = float2(min(glyph.em_x_max, maxX) + dilate.x, yMax);
+        int2 rectMinQ = int2(max(glyph.local_bounds_q.x, saturatingSubQ(viewportQ.x, dilateQ.x)), yMinQ);
+        int2 rectMaxQ = int2(min(saturatingAddQ(min(glyph.local_bounds_q.z, maxXQ), dilateQ.x), saturatingAddQ(viewportQ.z, dilateQ.x)), yMaxQ);
 
         uint cullReason = kMeshCullNone;
         if (candidateCount == 0)
             cullReason = kMeshCullEmptySlice;
-        else if (!isFinite2(rectMin) ||
-                 !isFinite2(rectMax) ||
-                 rectMax.x <= rectMin.x ||
-                 rectMax.y <= rectMin.y)
-        {
+        else if (rectMaxQ.x <= rectMinQ.x || rectMaxQ.y <= rectMinQ.y)
             cullReason = kMeshCullInvalidStrip;
-        }
 
         bool emit = cullReason == kMeshCullNone;
-        float2 anchor = (rectMin + rectMax) * 0.5;
-        ScreenToLocal localTransform;
-        LocalToClip glyphToClip = localToClipForGlyph(glyph, pc.projection);
-        AnchoredLocalToClip anchoredFrame;
+        int2 meshAnchorQ = int2(midpointQ(rectMinQ.x, rectMaxQ.x), midpointQ(rectMinQ.y, rectMaxQ.y));
+        float2 screenAnchorPx = glyphLocalQToScreen(glyph, meshAnchorQ);
         float2 clipped[kMeshOutputVertices];
         uint clippedCount = 0;
         for (uint i = 0; i < kMeshOutputVertices; i++)
             clipped[i] = float2(0.0, 0.0);
-        clearScreenToLocal(localTransform);
+
         if (emit)
         {
-            float4 rect = float4(rectMin, rectMax);
-            emit = anchorForRectAtNdc(glyphToClip, rect, float2(0.0, 0.0), anchoredFrame);
-            if (!emit)
-                cullReason = kMeshCullAnchorFailed;
-            anchor = anchoredFrame.anchor;
-            if (emit)
+            float2 p0 = screenToNdc(glyphLocalQToScreen(glyph, rectMinQ), pc.viewport_size);
+            float2 p1 = screenToNdc(glyphLocalQToScreen(glyph, int2(rectMaxQ.x, rectMinQ.y)), pc.viewport_size);
+            float2 p2 = screenToNdc(glyphLocalQToScreen(glyph, rectMaxQ), pc.viewport_size);
+            float2 p3 = screenToNdc(glyphLocalQToScreen(glyph, int2(rectMinQ.x, rectMaxQ.y)), pc.viewport_size);
+            float area2 = p0.x * p1.y - p0.y * p1.x +
+                          p1.x * p2.y - p1.y * p2.x +
+                          p2.x * p3.y - p2.y * p3.x +
+                          p3.x * p0.y - p3.y * p0.x;
+            if (!isFinite2(screenAnchorPx) || !isFinite2(p0) || !isFinite2(p1) || !isFinite2(p2) || !isFinite2(p3))
             {
-                emit = clipRectToNdc(anchoredFrame, rect, clipped, clippedCount);
+                emit = false;
+                cullReason = kMeshCullNonFinite;
+            }
+            else if (abs(area2) <= 1.0e-12)
+            {
+                emit = false;
+                cullReason = kMeshCullZeroArea;
+            }
+            else
+            {
+                emit = clipNdcQuad(p0, p1, p2, p3, clipped, clippedCount);
                 if (!emit)
                     cullReason = kMeshCullClipEmpty;
             }
         }
-        if (emit)
-        {
-            emit = screenToLocalTransform(anchoredFrame, pc.viewport_size, localTransform);
-            if (!emit)
-                cullReason = kMeshCullTransformFailed;
-        }
 
-        s_anchor = anchor;
-        s_screenToLocalX = localTransform.x;
-        s_screenToLocalY = localTransform.y;
-        s_screenToLocalT = localTransform.t;
+        s_meshAnchorQ = meshAnchorQ;
+        s_screenAnchorPx = screenAnchorPx;
         s_vertexCount = emit ? clippedCount : 0u;
         s_primitiveCount = emit ? clippedCount - 2u : 0u;
         for (uint i = 0; i < kMeshOutputVertices; i++)
@@ -257,17 +303,14 @@ void meshMain(
 
     if (gtid < s_vertexCount)
     {
-        float2 anchor = s_anchor;
-
         VertexOutput v;
         v.position = float4(s_clipVertices[gtid], 0.0, 1.0);
         v.color = glyph.color;
         v.blobRef = glyph.blob_ref;
         v.flags = glyph.flags;
-        v.texcoordAnchor = anchor;
-        v.screenToLocalX = s_screenToLocalX;
-        v.screenToLocalY = s_screenToLocalY;
-        v.screenToLocalT = s_screenToLocalT;
+        v.meshAnchorQ = s_meshAnchorQ;
+        v.screenAnchorPx = s_screenAnchorPx;
+        v.localFromScreen = glyph.local_from_screen_2x2;
         verts[gtid] = v;
     }
 

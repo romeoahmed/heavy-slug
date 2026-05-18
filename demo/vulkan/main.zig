@@ -63,13 +63,10 @@ pub fn main() !void {
             stats_log_time = now;
         }
 
-        const viewport = [2]f32{ w, h };
-        var text_frame = try text_renderer.beginFrame();
+        var text_frame = try text_renderer.beginFrame(scene.frameView(w, h));
         try scene.draw(&text_frame, font);
         submitted_text_tokens[frame.frame_index] = try text_frame.submit(.{
             .command_buffer = frame.cmd,
-            .projection = scene.projection(w, h),
-            .viewport = viewport,
         });
 
         if (try host.endFrame(frame)) {

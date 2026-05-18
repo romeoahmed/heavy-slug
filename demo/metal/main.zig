@@ -45,11 +45,9 @@ pub fn main() !void {
         const h: f32 = @floatFromInt(size[1]);
         scene.update(window.input(), dt, now, w, h);
 
-        var text_frame = try text_renderer.beginFrame();
+        var text_frame = try text_renderer.beginFrame(scene.frameView(w, h));
         try scene.draw(&text_frame, font);
         _ = try text_frame.submit(.{
-            .viewport = .{ size[0], size[1] },
-            .projection = scene.projection(w, h),
             .clear_color = scene.clearColor(),
         });
         if (heavy_slug_metal.shader_stats_enabled and now - stats_log_time >= 1.0) {

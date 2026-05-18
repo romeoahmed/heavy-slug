@@ -43,17 +43,17 @@ const lines = [_][]const u8{
     "arcu. Quisque ipsum sem, lacinia in fermentum eu, maximus in lectus.",
 };
 
-const line_height: f32 = 32;
-const margin: f32 = 40;
-const content_width: f32 = 1100;
-const content_height: f32 = @as(f32, @floatFromInt(lines.len)) * line_height + 2 * margin;
-const content_cx: f32 = content_width / 2;
-const content_cy: f32 = content_height / 2;
+const line_height: f64 = 32;
+const margin: f64 = 40;
+const content_width: f64 = 1100;
+const content_height: f64 = @as(f64, @floatFromInt(lines.len)) * line_height + 2 * margin;
+const content_cx: f64 = content_width / 2;
+const content_cy: f64 = content_height / 2;
 
 const ViewState = struct {
-    scale: f32 = 1.0,
-    pan_x: f32 = 0,
-    pan_y: f32 = 0,
+    scale: f64 = 1.0,
+    pan_x: f64 = 0,
+    pan_y: f64 = 0,
 };
 
 pub const Scene = struct {
@@ -70,18 +70,21 @@ pub const Scene = struct {
     last_cursor: [2]f64 = .{ 0, 0 },
     begin_cursor: [2]f64 = .{ 0, 0 },
 
-    rotation_angle: f32 = 0,
-    rotation_speed: f32 = 1.0,
+    rotation_angle: f64 = 0,
+    rotation_speed: f64 = 1.0,
     animate: bool = false,
     last_drag_time: f64 = 0,
-    drag_angle_delta: f32 = 0,
+    drag_angle_delta: f64 = 0,
     drag_dt: f64 = 0,
 
     pub fn update(self: *Scene, input: *demo_input.State, dt: f32, now: f64, width: f32, height: f32) void {
         if (width <= 0 or height <= 0) return;
+        const width64: f64 = width;
+        const height64: f64 = height;
+        const dt64: f64 = dt;
 
         if (!self.view_initialized) {
-            self.view = contentFit(width, height);
+            self.view = contentFit(width64, height64);
             self.view_initialized = true;
         }
 
@@ -91,7 +94,7 @@ pub const Scene = struct {
 
         const r_pressed = input.getKey(.r);
         if (r_pressed and !self.r_was_pressed) {
-            self.view = contentFit(width, height);
+            self.view = contentFit(width64, height64);
             self.rotation_angle = 0;
             self.animate = false;
         }
@@ -101,31 +104,31 @@ pub const Scene = struct {
         if (space_pressed and !self.space_was_pressed) self.animate = !self.animate;
         self.space_was_pressed = space_pressed;
 
-        const pan_speed: f32 = 400 / self.view.scale;
-        if (input.getKey(.up)) self.view.pan_y += pan_speed * dt;
-        if (input.getKey(.down)) self.view.pan_y -= pan_speed * dt;
-        if (input.getKey(.left)) self.view.pan_x += pan_speed * dt;
-        if (input.getKey(.right)) self.view.pan_x -= pan_speed * dt;
+        const pan_speed: f64 = 400 / self.view.scale;
+        if (input.getKey(.up)) self.view.pan_y += pan_speed * dt64;
+        if (input.getKey(.down)) self.view.pan_y -= pan_speed * dt64;
+        if (input.getKey(.left)) self.view.pan_x += pan_speed * dt64;
+        if (input.getKey(.right)) self.view.pan_x -= pan_speed * dt64;
 
-        if (input.getKey(.equal)) self.view.scale *= 1.0 + 2.0 * dt;
-        if (input.getKey(.minus)) self.view.scale *= 1.0 - 2.0 * dt;
+        if (input.getKey(.equal)) self.view.scale *= 1.0 + 2.0 * dt64;
+        if (input.getKey(.minus)) self.view.scale *= 1.0 - 2.0 * dt64;
 
         const scroll = input.consumeScrollDelta();
         if (scroll != 0) {
             const cur = input.cursor;
-            const sx: f32 = @floatCast(cur[0]);
-            const sy: f32 = @floatCast(cur[1]);
+            const sx: f64 = cur[0];
+            const sy: f64 = cur[1];
             const old_scale = self.view.scale;
-            const factor: f32 = @floatCast(std.math.pow(f64, 1.1, scroll));
+            const factor: f64 = std.math.pow(f64, 1.1, scroll);
             self.view.scale *= factor;
             const inv_new = 1.0 / self.view.scale;
             const inv_old = 1.0 / old_scale;
             self.view.pan_x += sx * (inv_new - inv_old);
-            self.view.pan_y += (height - sy) * (inv_new - inv_old);
+            self.view.pan_y += (height64 - sy) * (inv_new - inv_old);
         }
 
         self.updateMouse(input, now, width, height);
-        if (self.animate) self.rotation_angle += self.rotation_speed * dt;
+        if (self.animate) self.rotation_angle += self.rotation_speed * dt64;
     }
 
     pub fn clearColor(self: Scene) [4]f32 {
@@ -136,17 +139,17 @@ pub const Scene = struct {
         return if (self.dark_mode) .white else .black;
     }
 
-    pub fn projection(self: Scene, width: f32, height: f32) [4][4]f32 {
-        const vp = viewProjection(width, height, self.view);
-        return heavy_slug.Transform.rotationAbout(self.rotation_angle, content_cx, content_cy)
-            .toProjectionMatrix(vp);
+    pub fn frameView(self: Scene, width: f64, height: f64) heavy_slug.FrameView2D {
+        const view = viewTransform(self.view);
+        const rotation = heavy_slug.Affine2D64.rotationAbout(self.rotation_angle, content_cx, content_cy);
+        return heavy_slug.FrameView2D.init(width, height, heavy_slug.Affine2D64.compose(view, rotation));
     }
 
     pub fn draw(self: Scene, renderer: anytype, font: anytype) !void {
         const fg = self.textColor();
         for (lines, 0..) |line, i| {
             if (line.len == 0) continue;
-            const y = content_height - margin - @as(f32, @floatFromInt(i)) * line_height;
+            const y = content_height - margin - @as(f64, @floatFromInt(i)) * line_height;
             try renderer.drawText(.{
                 .font = font,
                 .text = line,
@@ -171,8 +174,8 @@ pub const Scene = struct {
             const dy = cursor[1] - self.last_cursor[1];
             self.updateDragState(cursor);
             if (self.dragged) {
-                self.view.pan_x += @as(f32, @floatCast(dx)) / self.view.scale;
-                self.view.pan_y -= @as(f32, @floatCast(dy)) / self.view.scale;
+                self.view.pan_x += dx / self.view.scale;
+                self.view.pan_y -= dy / self.view.scale;
             }
         }
 
@@ -194,7 +197,7 @@ pub const Scene = struct {
                 const half_h: f64 = @as(f64, height) * 0.5;
                 const prev_angle = std.math.atan2(self.last_cursor[1] - half_h, self.last_cursor[0] - half_w);
                 const curr_angle = std.math.atan2(cursor[1] - half_h, cursor[0] - half_w);
-                const delta: f32 = @floatCast(curr_angle - prev_angle);
+                const delta: f64 = curr_angle - prev_angle;
                 self.rotation_angle += delta;
                 self.drag_angle_delta = delta;
                 self.drag_dt = now - self.last_drag_time;
@@ -203,7 +206,7 @@ pub const Scene = struct {
         }
 
         if (!right_now and self.right_down and self.dragged and self.drag_dt > 0) {
-            const speed: f32 = @abs(self.drag_angle_delta) / @as(f32, @floatCast(self.drag_dt));
+            const speed: f64 = @abs(self.drag_angle_delta) / self.drag_dt;
             if (speed > 0.1) {
                 self.rotation_speed = if (self.drag_angle_delta >= 0) speed else -speed;
                 self.animate = true;
@@ -223,7 +226,7 @@ pub const Scene = struct {
     }
 };
 
-fn contentFit(width: f32, height: f32) ViewState {
+fn contentFit(width: f64, height: f64) ViewState {
     const s = 0.9 * @min(width / content_width, height / content_height);
     return .{
         .scale = s,
@@ -232,12 +235,14 @@ fn contentFit(width: f32, height: f32) ViewState {
     };
 }
 
-fn viewProjection(width: f32, height: f32, view: ViewState) [4][4]f32 {
+fn viewTransform(view: ViewState) heavy_slug.Affine2D64 {
     return .{
-        .{ 2.0 * view.scale / width, 0, 0, 0 },
-        .{ 0, 2.0 * view.scale / height, 0, 0 },
-        .{ 0, 0, 1, 0 },
-        .{ -1.0 + 2.0 * view.scale * view.pan_x / width, -1.0 + 2.0 * view.scale * view.pan_y / height, 0, 1 },
+        .xx = view.scale,
+        .xy = 0,
+        .yx = 0,
+        .yy = view.scale,
+        .tx = view.scale * view.pan_x,
+        .ty = view.scale * view.pan_y,
     };
 }
 
@@ -247,8 +252,8 @@ test "demo scene exposes shared content settings" {
     try std.testing.expect(content_height > 0);
 }
 
-test "demo scene projection keeps glyph outlines y-up" {
+test "demo scene frame view keeps glyph outlines y-up" {
     const view = contentFit(window_width, window_height);
-    const projection = viewProjection(window_width, window_height, view);
-    try std.testing.expect(projection[1][1] > 0);
+    const frame_view = (Scene{ .view = view }).frameView(window_width, window_height);
+    try std.testing.expect(frame_view.screen_from_world.yy > 0);
 }

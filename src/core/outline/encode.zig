@@ -13,6 +13,7 @@ pub const Error = error{
     HarfBuzzDrawFailed,
     GlyphTooLarge,
     GlyphOffsetOverflow,
+    PrecisionUnsupported,
     OutOfMemory,
 };
 
@@ -106,7 +107,7 @@ pub const Encoder = struct {
         regularized_spans: u32,
     };
 
-    pub fn encodeGlyph(self: *Encoder, font: hb.Font, glyph_id: u32) Error!Encoded {
+    pub fn encodeGlyph(self: *Encoder, font: hb.Font, glyph_id: u32, fraction_bits: u8) Error!Encoded {
         self.capture.clear();
         self.spans.clearRetainingCapacity();
 
@@ -139,6 +140,7 @@ pub const Encoder = struct {
             &self.spans,
             self.allocator,
             self.capture.stream.segments.items,
+            fraction_bits,
         );
         if (self.spans.items.len == 0) {
             return .{
@@ -150,7 +152,7 @@ pub const Encoder = struct {
         }
 
         return .{
-            .blob = try blob_encode.curves(self.allocator, self.spans.items),
+            .blob = try blob_encode.curves(self.allocator, self.spans.items, fraction_bits),
             .extents = extents,
             .outline_segments = @intCast(self.capture.stream.segments.items.len),
             .regularized_spans = @intCast(self.spans.items.len),

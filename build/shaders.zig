@@ -233,7 +233,6 @@ fn addSlangImportInputs(b: *std.Build, cmd: *std.Build.Step.Run, target: SlangTa
         "shaders/core/coverage_integral.slang",
         "shaders/core/hband.slang",
         "shaders/core/mesh_clip.slang",
-        "shaders/core/pga.slang",
         "shaders/core/screen_mapping.slang",
         "shaders/core/stats.slang",
     };

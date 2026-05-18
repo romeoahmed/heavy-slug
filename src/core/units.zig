@@ -1,40 +1,28 @@
-//! Unit conversions between pixels, HarfBuzz 26.6 coordinates, and blob units.
+//! Unit conversions between pixels and HarfBuzz 26.6 coordinates.
 
 const std = @import("std");
-const pga = @import("../math/pga.zig");
 
 pub const hb_subpixels_per_pixel: f32 = 64.0;
-pub const blob_units_per_pixel: f32 = 4.0;
-
-const Vec4 = @Vector(4, f32);
+pub const hb_subpixels_per_pixel_f64: f64 = 64.0;
 
 pub fn hb26p6ToPixels(value: i32) f32 {
     return @as(f32, @floatFromInt(value)) / hb_subpixels_per_pixel;
+}
+
+pub fn hb26p6ToPixelsI64(value: i64) f64 {
+    return @as(f64, @floatFromInt(value)) / hb_subpixels_per_pixel_f64;
+}
+
+pub fn hb26p6ToPixels64(value: i32) f64 {
+    return @as(f64, @floatFromInt(value)) / hb_subpixels_per_pixel_f64;
 }
 
 pub fn pixelsToHb26p6(value: f32) i32 {
     return @intFromFloat(@round(value * hb_subpixels_per_pixel));
 }
 
-pub fn pixelsToBlobUnits(value: f32) i16 {
-    return @intFromFloat(@round(value * blob_units_per_pixel));
-}
-
-pub fn blobUnitsToPixels(value: i16) f32 {
-    return @as(f32, @floatFromInt(value)) / blob_units_per_pixel;
-}
-
-pub fn motorPixelsToHb26p6(motor: pga.Motor) pga.Motor {
-    const scale: Vec4 = .{ 1.0, 1.0, hb_subpixels_per_pixel, hb_subpixels_per_pixel };
-    return .{ .m = @as(Vec4, motor.m) * scale };
-}
-
-pub fn projectionPixelsToHb26p6(projection: [4][4]f32) [4][4]f32 {
-    var result = projection;
-    const scale: Vec4 = @splat(1.0 / hb_subpixels_per_pixel);
-    result[0] = @as(Vec4, result[0]) * scale;
-    result[1] = @as(Vec4, result[1]) * scale;
-    return result;
+pub fn pixelsToHb26p6F64(value: f64) i32 {
+    return @intFromFloat(@round(value * hb_subpixels_per_pixel_f64));
 }
 
 test "26.6 conversions round trip common pixel values" {
@@ -45,21 +33,8 @@ test "26.6 conversions round trip common pixel values" {
     }
 }
 
-test "blob unit conversions use quarter-pixel grid" {
-    try std.testing.expectEqual(@as(i16, 5), pixelsToBlobUnits(1.25));
-    try std.testing.expectEqual(@as(f32, 1.25), blobUnitsToPixels(5));
-}
-
-test "projectionPixelsToHb26p6 scales only x and y columns" {
-    const projection = [4][4]f32{
-        .{ 64, 128, 192, 256 },
-        .{ -64, -128, -192, -256 },
-        .{ 1, 2, 3, 4 },
-        .{ 5, 6, 7, 8 },
-    };
-    const em = projectionPixelsToHb26p6(projection);
-    try std.testing.expectEqual(@as(f32, 1), em[0][0]);
-    try std.testing.expectEqual(@as(f32, -1), em[1][0]);
-    try std.testing.expectEqual(@as(f32, 3), em[2][2]);
-    try std.testing.expectEqual(@as(f32, 8), em[3][3]);
+test "26.6 f64 conversions preserve subpixel values" {
+    try std.testing.expectEqual(@as(i32, 80), pixelsToHb26p6F64(1.25));
+    try std.testing.expectApproxEqAbs(@as(f64, 1.25), hb26p6ToPixels64(80), 1.0 / hb_subpixels_per_pixel_f64);
+    try std.testing.expectApproxEqAbs(@as(f64, 1_000_000.25), hb26p6ToPixelsI64(64_000_016), 1.0 / hb_subpixels_per_pixel_f64);
 }

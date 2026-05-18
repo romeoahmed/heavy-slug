@@ -58,11 +58,7 @@ void taskMain(uint gtid : SV_GroupThreadID, uint gid : SV_GroupID)
     {
         glyph = glyphs[glyphIndex];
 
-        float2 emMin = float2(glyph.em_x_min, glyph.em_y_min);
-        float2 emMax = float2(glyph.em_x_max, glyph.em_y_max);
-        float4 rect = float4(emMin, emMax);
-        LocalToClip h = localToClipForGlyph(glyph, pc.projection);
-        float2 visibleExtent = visiblePixelExtentNdc(h, rect, pc.viewport_size);
+        float2 visibleExtent = visiblePixelExtent(glyph, pc.viewport_size);
 
         alive = max(visibleExtent.x, visibleExtent.y) > 0.0;
         slices = alive ? subdivisionCount(visibleExtent) : 0;

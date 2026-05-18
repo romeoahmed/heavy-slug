@@ -45,7 +45,6 @@ pub const RegularizedCubicSpan = struct {
 };
 
 const max_cubic_prepare_depth = 8;
-const blob_units_per_pixel = blob_format.units_per_pixel;
 
 pub fn lineAsCubic(p0: Point, p1: Point) RegularizedCubicSpan {
     return .{
@@ -76,6 +75,7 @@ pub fn appendRegularized(
     out: *std.ArrayList(RegularizedCubicSpan),
     allocator: std.mem.Allocator,
     outline: []const stream.Segment,
+    fraction_bits: u8,
 ) Error!void {
     var current = Point{ .x = 0, .y = 0 };
     var start = current;
@@ -85,7 +85,7 @@ pub fn appendRegularized(
         switch (segment) {
             .move_to => |p| {
                 if (open and !samePoint(current, start)) {
-                    try appendPrepared(out, allocator, lineAsCubic(current, start), 0);
+                    try appendPrepared(out, allocator, lineAsCubic(current, start), 0, fraction_bits);
                 }
                 current = p;
                 start = p;
@@ -96,7 +96,7 @@ pub fn appendRegularized(
                     start = current;
                     open = true;
                 }
-                if (!samePoint(current, p)) try appendPrepared(out, allocator, lineAsCubic(current, p), 0);
+                if (!samePoint(current, p)) try appendPrepared(out, allocator, lineAsCubic(current, p), 0, fraction_bits);
                 current = p;
             },
             .quad_to => |q| {
@@ -104,7 +104,7 @@ pub fn appendRegularized(
                     start = current;
                     open = true;
                 }
-                if (!samePoint(current, q.to)) try appendSplitCubic(out, allocator, quadAsCubic(current, q.control, q.to));
+                if (!samePoint(current, q.to)) try appendSplitCubic(out, allocator, quadAsCubic(current, q.control, q.to), fraction_bits);
                 current = q.to;
             },
             .cubic_to => |c| {
@@ -113,13 +113,13 @@ pub fn appendRegularized(
                     open = true;
                 }
                 if (!samePoint(current, c.to) or !samePoint(c.control1, c.to) or !samePoint(c.control2, c.to)) {
-                    try appendSplitCubic(out, allocator, .{ .p0 = current, .p1 = c.control1, .p2 = c.control2, .p3 = c.to });
+                    try appendSplitCubic(out, allocator, .{ .p0 = current, .p1 = c.control1, .p2 = c.control2, .p3 = c.to }, fraction_bits);
                 }
                 current = c.to;
             },
             .close => {
                 if (open and !samePoint(current, start)) {
-                    try appendPrepared(out, allocator, lineAsCubic(current, start), 0);
+                    try appendPrepared(out, allocator, lineAsCubic(current, start), 0, fraction_bits);
                 }
                 open = false;
             },
@@ -127,7 +127,7 @@ pub fn appendRegularized(
     }
 
     if (open and !samePoint(current, start)) {
-        try appendPrepared(out, allocator, lineAsCubic(current, start), 0);
+        try appendPrepared(out, allocator, lineAsCubic(current, start), 0, fraction_bits);
     }
 }
 
@@ -135,6 +135,7 @@ fn appendSplitCubic(
     out: *std.ArrayList(RegularizedCubicSpan),
     allocator: std.mem.Allocator,
     source: RegularizedCubicSpan,
+    fraction_bits: u8,
 ) Error!void {
     var roots: [8]f64 = undefined;
     var root_count: usize = 0;
@@ -149,11 +150,11 @@ fn appendSplitCubic(
         if (t <= previous_t or t >= 1.0) continue;
         const local_t = (t - previous_t) / (1.0 - previous_t);
         const split = splitCubic(curve, local_t);
-        try appendPrepared(out, allocator, split.left, 0);
+        try appendPrepared(out, allocator, split.left, 0, fraction_bits);
         curve = split.right;
         previous_t = t;
     }
-    try appendPrepared(out, allocator, curve, 0);
+    try appendPrepared(out, allocator, curve, 0, fraction_bits);
 }
 
 fn appendPrepared(
@@ -161,15 +162,16 @@ fn appendPrepared(
     allocator: std.mem.Allocator,
     curve: RegularizedCubicSpan,
     depth: u8,
+    fraction_bits: u8,
 ) Error!void {
-    if (depth >= max_cubic_prepare_depth or cubicControlPolygonMonotoneAfterQuantize(curve)) {
+    if (depth >= max_cubic_prepare_depth or cubicControlPolygonMonotoneAfterQuantize(curve, fraction_bits)) {
         try out.append(allocator, curve);
         return;
     }
 
     const split = splitCubic(curve, 0.5);
-    try appendPrepared(out, allocator, split.left, depth + 1);
-    try appendPrepared(out, allocator, split.right, depth + 1);
+    try appendPrepared(out, allocator, split.left, depth + 1, fraction_bits);
+    try appendPrepared(out, allocator, split.right, depth + 1, fraction_bits);
 }
 
 fn splitCubic(curve: RegularizedCubicSpan, t: f64) struct { left: RegularizedCubicSpan, right: RegularizedCubicSpan } {
@@ -234,24 +236,24 @@ fn appendRoot01(roots: *[8]f64, count: *usize, t: f64) void {
     }
 }
 
-fn cubicControlPolygonMonotoneAfterQuantize(curve: RegularizedCubicSpan) bool {
-    const x = quantizedAxis4(curve.p0.x, curve.p1.x, curve.p2.x, curve.p3.x) orelse return false;
-    const y = quantizedAxis4(curve.p0.y, curve.p1.y, curve.p2.y, curve.p3.y) orelse return false;
+fn cubicControlPolygonMonotoneAfterQuantize(curve: RegularizedCubicSpan, fraction_bits: u8) bool {
+    const x = quantizedAxis4(curve.p0.x, curve.p1.x, curve.p2.x, curve.p3.x, fraction_bits) orelse return false;
+    const y = quantizedAxis4(curve.p0.y, curve.p1.y, curve.p2.y, curve.p3.y, fraction_bits) orelse return false;
     return monotone4(x) and monotone4(y);
 }
 
-fn quantizedAxis4(a: f64, b: f64, c: f64, d: f64) ?[4]i32 {
+fn quantizedAxis4(a: f64, b: f64, c: f64, d: f64, fraction_bits: u8) ?[4]i32 {
     return .{
-        quantizedAxis(a) orelse return null,
-        quantizedAxis(b) orelse return null,
-        quantizedAxis(c) orelse return null,
-        quantizedAxis(d) orelse return null,
+        quantizedAxis(a, fraction_bits) orelse return null,
+        quantizedAxis(b, fraction_bits) orelse return null,
+        quantizedAxis(c, fraction_bits) orelse return null,
+        quantizedAxis(d, fraction_bits) orelse return null,
     };
 }
 
-fn quantizedAxis(v: f64) ?i32 {
-    const q = std.math.round(v * blob_units_per_pixel);
-    if (!std.math.isFinite(q) or q < std.math.minInt(i16) or q > std.math.maxInt(i16)) {
+fn quantizedAxis(v: f64, fraction_bits: u8) ?i32 {
+    const q = std.math.round(v * blob_format.scaleForFractionBits(fraction_bits));
+    if (!std.math.isFinite(q) or q < std.math.minInt(i32) or q > std.math.maxInt(i32)) {
         return null;
     }
     return @intFromFloat(q);
@@ -303,7 +305,7 @@ test "regularize raises lines and quadratics into cubic spans" {
 
     var spans: std.ArrayList(RegularizedCubicSpan) = .empty;
     defer spans.deinit(std.testing.allocator);
-    try appendRegularized(&spans, std.testing.allocator, outline.segments.items);
+    try appendRegularized(&spans, std.testing.allocator, outline.segments.items, blob_format.default_fraction_bits);
 
     try std.testing.expectEqual(@as(usize, 4), spans.items.len);
     try std.testing.expectApproxEqAbs(@as(f64, 1), spans.items[0].p1.x, 1.0e-9);
@@ -318,7 +320,7 @@ test "regularize prepares cubic spans at axis extrema" {
 
     var spans: std.ArrayList(RegularizedCubicSpan) = .empty;
     defer spans.deinit(std.testing.allocator);
-    try appendRegularized(&spans, std.testing.allocator, outline.segments.items);
+    try appendRegularized(&spans, std.testing.allocator, outline.segments.items, blob_format.default_fraction_bits);
 
     try std.testing.expect(spans.items.len > 1);
     for (spans.items) |span| {
@@ -335,9 +337,9 @@ test "regularize prepared cubic control polygons stay monotone after quantizatio
 
     var spans: std.ArrayList(RegularizedCubicSpan) = .empty;
     defer spans.deinit(std.testing.allocator);
-    try appendRegularized(&spans, std.testing.allocator, outline.segments.items);
+    try appendRegularized(&spans, std.testing.allocator, outline.segments.items, blob_format.default_fraction_bits);
 
     for (spans.items) |span| {
-        try std.testing.expect(cubicControlPolygonMonotoneAfterQuantize(span));
+        try std.testing.expect(cubicControlPolygonMonotoneAfterQuantize(span, blob_format.default_fraction_bits));
     }
 }

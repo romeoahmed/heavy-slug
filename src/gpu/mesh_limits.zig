@@ -13,10 +13,9 @@ pub const mesh_output_user_components_per_vertex: u32 =
     4 + // color
     1 + // blobRef
     1 + // flags
-    2 + // texcoordAnchor
-    3 + // screenToLocalX
-    3 + // screenToLocalY
-    3; // screenToLocalT
+    2 + // meshAnchorQ
+    2 + // screenAnchorPx
+    4; // localFromScreen
 pub const mesh_output_components_per_vertex: u32 =
     4 + // SV_Position
     mesh_output_user_components_per_vertex;
@@ -24,9 +23,9 @@ pub const mesh_output_components_per_vertex: u32 =
 pub const task_payload_bytes: u32 = task_max_meshlets * 2 * @sizeOf(u32);
 pub const mesh_shared_bytes: u32 =
     mesh_thread_count * (@sizeOf(f32) + @sizeOf(u32)) +
-    @sizeOf([4]f32) +
+    @sizeOf([2]i32) +
+    @sizeOf([2]f32) +
     mesh_output_vertices * @sizeOf([2]f32) +
-    3 * @sizeOf([4]f32) +
     2 * @sizeOf(u32) +
     @sizeOf(u32);
 pub const mesh_payload_and_shared_bytes: u32 = task_payload_bytes + mesh_shared_bytes;
@@ -41,8 +40,8 @@ test "mesh/task limits match the Slang payload budget" {
     try std.testing.expect(mesh_payload_and_shared_bytes > task_payload_bytes);
     try std.testing.expectEqual(@as(u32, 8), mesh_output_vertices);
     try std.testing.expectEqual(@as(u32, 6), mesh_output_primitives);
-    try std.testing.expectEqual(@as(u32, 17), mesh_output_user_components_per_vertex);
-    try std.testing.expectEqual(@as(u32, 21), mesh_output_components_per_vertex);
+    try std.testing.expectEqual(@as(u32, 14), mesh_output_user_components_per_vertex);
+    try std.testing.expectEqual(@as(u32, 18), mesh_output_components_per_vertex);
 }
 
 test "taskWorkgroupCount uses task group size" {

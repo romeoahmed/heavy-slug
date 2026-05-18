@@ -48,6 +48,10 @@ implementation notes belong in commits and code review history.
   shared shader-stat constants.
 - **Shader diagnostics expanded:** mesh cull reasons now use the normal
   `shader-stats` ABI and backend debug logs instead of ad hoc counters.
+- **Breaking extreme-zoom precision contract:** renderer submission now uses a
+  CPU f64 affine `FrameView2D`; backend `Target` values no longer carry f32
+  projection matrices; glyph blobs are 32-bit fixed-point and cache keys include
+  the selected precision tier.
 - **Reflection ABI generation hardened:** `tools/layout_gen.zig` now rejects
   conflicting layouts and emits generated layout tests for reflected GPU
   structs.
@@ -60,13 +64,14 @@ implementation notes belong in commits and code review history.
 
 ### Fixed
 
-- **Extreme zoom glyph rendering fixed:** fragment coverage now uses tile-local
-  anchored coordinates, derives local coordinates and pixel footprints
-  analytically instead of from hardware derivatives, clips mesh strips in NDC,
-  and uses a scaled affine inverse to avoid overflow in extreme zoom charts.
-- **CPU transform math corrected:** composed 2D PGA motors now invert directly
-  through `Motor.reverse()`, and cubic outline area uses an exact Bezier
-  integral shared by blob fill-sign encoding.
+- **Extreme zoom glyph rendering fixed:** CPU f64 charts, meshlet-local anchors,
+  integer h-band lookup, and saturated integer-relative shader decoding now
+  avoid absolute-coordinate cancellation and unstable far-curve drops. Mesh
+  viewport bounds now keep large fixed-point anchors in integer space, and
+  shader-stats zero-coverage counters account for all fragment early exits.
+- **CPU transform and fill-sign math corrected:** the public transform path is
+  now affine f64, and cubic outline area uses an exact Bezier integral shared by
+  blob fill-sign encoding.
 
 ### Removed
 
@@ -97,7 +102,7 @@ implementation notes belong in commits and code review history.
 ### Fixed
 
 - **Vulkan demo orientation:** the demo now uses a y-up dynamic viewport that
-  matches the Metal demo's projection and mouse controls.
+  matches the Metal demo's clip-space and mouse controls.
 - **Vulkan demo build stability:** feature/property chains are initialized with
   explicit payloads for Zig 0.16 bindings.
 - **Metal bridge teardown:** frame-slot synchronization is drained directly
@@ -236,7 +241,7 @@ implementation notes belong in commits and code review history.
 ### Added
 
 - Initial Slug-inspired Vulkan text renderer with FreeType, HarfBuzz, mesh
-  shaders, PGA transforms, Slang shaders, generated GPU structs, an interactive
+  shaders, 2D transforms, Slang shaders, generated GPU structs, an interactive
   demo, and tests.
 
 [Unreleased]: https://github.com/romeoahmed/heavy-slug/compare/v3.1.0...HEAD

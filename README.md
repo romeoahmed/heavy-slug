@@ -18,7 +18,7 @@ host-owned graphics lifetimes, generated GPU ABI structs, and shared Slang 2026
 shader sources.
 
 ```text
-UTF-8 text -> HarfBuzz shaping -> font outlines -> cubic blobs -> GPU culling -> analytic coverage
+UTF-8 text -> HarfBuzz shaping -> font outlines -> precision blobs -> GPU culling -> analytic coverage
 ```
 
 | Design promise | Practical effect |
@@ -27,6 +27,7 @@ UTF-8 text -> HarfBuzz shaping -> font outlines -> cubic blobs -> GPU culling ->
 | Explicit ownership | Applications keep their windows, devices, queues, and frame pacing. |
 | Opt-in backends | Core builds stay free of Vulkan, Metal, `slangc`, and window-system deps. |
 | Shared shader model | Vulkan and Metal consume the same Slang source layout. |
+| Stable zoom math | CPU f64 affine charts and tiered fixed-point blobs avoid GPU f32 cancellation. |
 
 ## Quick Start
 
@@ -55,7 +56,7 @@ zig build run -Ddemo=true -Ddemo-backend=metal
 <summary>Useful verification commands</summary>
 
 ```bash
-zig fmt --check build.zig build/ src/ tools/
+zig fmt --check build.zig build/ demo/ src/ tools/
 zig build test
 zig build test -Dvulkan=true
 zig build test -Dmetal=true
@@ -161,8 +162,8 @@ Important dependency facts:
 | `heavy_slug_metal` | `-Dmetal=true` or Metal demo | macOS Metal 4 backend. |
 
 Stable top-level core exports include `FontHandle`, `FontSource`,
-`FontOptions`, `TextRun`, `FrameToken`, `Color`, `Transform`, `Viewport`,
-`Projection`, `FillRule`, and `ShaderStats`.
+`FontOptions`, `TextRun`, `FrameToken`, `Color`, `Transform`, `Affine2D64`,
+`FrameView2D`, `PrecisionPolicy`, `Viewport`, `FillRule`, and `ShaderStats`.
 
 Backend modules expose `Context`, `Renderer`, `Frame`, `Target`,
 `RendererOptions`, `FontHandle`, `FrameToken`, `Stats`, and
@@ -182,7 +183,8 @@ const font = try renderer.loadFont(.{ .path = "assets/Inter-Regular.otf" }, .{
     .size_px = 32,
 });
 
-var frame = try renderer.beginFrame();
+const view = heavy_slug.FrameView2D.identity(width_px, height_px);
+var frame = try renderer.beginFrame(view);
 try frame.drawText(.{
     .font = font,
     .text = "Heavy Slug",
@@ -203,7 +205,7 @@ TextRun
   -> HarfBuzz shaping
   -> HarfBuzz outline draw callbacks
   -> cubic normalization and regularization
-  -> CoverageBlob cache entry
+  -> precision-tiered CoverageBlob cache entry
   -> GlyphInstance batch
   -> backend frame submission
   -> task/mesh/fragment shaders
@@ -213,7 +215,7 @@ TextRun
 | --- | --- |
 | Shaping | Unicode shaping is delegated to HarfBuzz. |
 | Outline capture | Glyphs stay as outline data; there is no CPU raster pass. |
-| Cubic encoding | Lines, quadratics, and cubics share one GPU representation. |
+| Cubic encoding | Lines, quadratics, and cubics share one tiered fixed-point GPU representation. |
 | Cache | Glyph blobs are reused through a backend-owned byte pool. |
 | GPU culling | Work is rejected only when it is conservatively safe. |
 | Fragment coverage | Coverage is integrated analytically from the encoded curves. |
@@ -236,7 +238,7 @@ and argument-table path exposed through the Objective-C++ bridge.
 
 | Path | Role |
 | --- | --- |
-| `shaders/core/` | Shared ABI, coverage, h-band, stats, and PGA logic. |
+| `shaders/core/` | Shared ABI, coverage, h-band, chart mapping, and stats logic. |
 | `shaders/backend_vulkan/` | Vulkan resource binding shim. |
 | `shaders/backend_metal/` | Metal resource binding shim. |
 | `shaders/entries/task.slang` | Task shader entry. |
@@ -266,8 +268,8 @@ zig-out/shaders/msl/fragment.metal
 
 | Diagnostic source | Signals |
 | --- | --- |
-| CPU/backend debug stats | Shaping counts, cache hits/misses, uploads, retirements, pool state, backend binding work. |
-| Shader stats opt-in | Visible glyphs, emitted mesh work, culling, candidate-path usage, fallback scans, fragment pressure. |
+| CPU/backend debug stats | Shaping counts, cache hits/misses, precision insufficiency, uploads, retirements, pool state, backend binding work. |
+| Shader stats opt-in | Visible glyphs, emitted mesh work, explicit mesh cull reasons, candidate-path usage, fallback scans, fragment pressure. |
 
 Enable shader counters only when investigating GPU behavior:
 
@@ -283,7 +285,6 @@ zig build test -Dmetal=true -Dshader-stats=true
 | `src/root.zig` | Public core module. |
 | `src/core/` | Types, fonts, outlines, blob encoding, cache, renderer core. |
 | `src/gpu/` | Backend-neutral GPU ABI markers, mesh limits, shader stats. |
-| `src/math/` | PGA motor math used by transforms. |
 | `src/backends/vulkan/` | Vulkan backend. |
 | `src/backends/metal/` | Metal backend and Objective-C++ bridge. |
 | `demo/` | Demo entry points, native platform hosts, shared scene/input code. |
@@ -299,7 +300,9 @@ zig build test -Dmetal=true -Dshader-stats=true
 | --- | --- |
 | Core boundary | Core is backend-neutral and window-system-free. |
 | Host boundary | Applications own graphics/device/window lifetimes. |
+| Frame math | Draw submission uses a CPU f64 affine `FrameView2D`; backends no longer accept f32 projection matrices. |
 | Glyph resources | Cached glyph blobs live in a backend-owned byte pool. |
+| Blob precision | Glyph blobs are 32-bit fixed-point and keyed by precision tier. |
 | Blob references | `GlyphBlobRef` values are byte offsets. |
 | GPU ABI | Layouts are generated from Slang reflection. |
 | C bindings | C declarations are translated by the build graph, not by source-level `@cImport`. |

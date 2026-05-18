@@ -32,8 +32,8 @@ pub const GlyphEncoder = struct {
         self.* = undefined;
     }
 
-    pub fn encodeGlyph(self: *GlyphEncoder, font: hb.Font, glyph_id: u32) !EncodedGlyph {
-        const encoded = try self.outline_encoder.encodeGlyph(font, glyph_id);
+    pub fn encodeGlyph(self: *GlyphEncoder, font: hb.Font, glyph_id: u32, fraction_bits: u8) !EncodedGlyph {
+        const encoded = try self.outline_encoder.encodeGlyph(font, glyph_id, fraction_bits);
         const bytes = encoded.blob.bytes();
         return .{
             .data = bytes,
@@ -68,7 +68,7 @@ test "GlyphEncoder: captures native outlines and encodes CoverageBlob" {
     var encoder = try GlyphEncoder.init(std.testing.allocator);
     defer encoder.deinit();
 
-    const encoded = try encoder.encodeGlyph(font, glyph_id);
+    const encoded = try encoder.encodeGlyph(font, glyph_id, blob_mod.default_fraction_bits);
     defer encoded.deinit();
 
     try std.testing.expect(encoded.data.len > 0);

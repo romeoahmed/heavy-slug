@@ -40,7 +40,7 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
             const shader_analysis = self.shader.analysis();
             const mesh_cull = self.shader.meshCullBreakdown();
             std.log.scoped(.renderer).debug(
-                "metal stats: wait_ns={d} task_visible={d}/{d} mesh_tiles={d}/{d} tile_culled={d} mesh_cull=empty:{d},invalid:{d},anchor:{d},clip:{d},xform:{d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
+                "metal stats: wait_ns={d} task_visible={d}/{d} mesh_tiles={d}/{d} tile_culled={d} mesh_cull=empty:{d},invalid:{d},zero_area:{d},clip:{d},nonfinite:{d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
                 .{
                     self.frame_slot_wait_ns,
                     self.shader.task_glyphs_visible,
@@ -50,9 +50,9 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
                     self.shader.mesh_tiles_culled,
                     mesh_cull.empty_slices,
                     mesh_cull.invalid_strips,
-                    mesh_cull.anchor_failures,
+                    mesh_cull.zero_area,
                     mesh_cull.clip_empty,
-                    mesh_cull.transform_failures,
+                    mesh_cull.non_finite,
                     self.shader.fragment_invocations,
                     shader_analysis.fragments_per_visible_glyph_milli,
                     shader_analysis.fragments_per_mesh_tile_milli,
@@ -79,8 +79,6 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
 pub const max_frames_in_flight = frames_in_flight;
 
 pub const Target = struct {
-    viewport: [2]u32,
-    projection: [4][4]f32,
     clear_color: [4]f32,
 };
 
@@ -94,6 +92,19 @@ fn resetShaderStatsBuffer(buffer: metal.Buffer) void {
 fn readShaderStatsBuffer(buffer: metal.Buffer) heavy_slug.ShaderStats {
     const bytes: []align(@alignOf(u32)) const u8 = @alignCast(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
     return shader_stats_mod.Snapshot.fromBytes(bytes);
+}
+
+fn viewportToU32(view: core_types.FrameView2D) ?[2]u32 {
+    if (!view.isFinite()) return null;
+    if (view.viewport_width > @as(f64, @floatFromInt(std.math.maxInt(u32))) or
+        view.viewport_height > @as(f64, @floatFromInt(std.math.maxInt(u32))))
+    {
+        return null;
+    }
+    return .{
+        @intFromFloat(@round(view.viewport_width)),
+        @intFromFloat(@round(view.viewport_height)),
+    };
 }
 
 fn monotonicNs() u64 {
@@ -123,6 +134,7 @@ const FrameSlot = struct {
 pub const Frame = struct {
     renderer: *Renderer,
     batch: GlyphBatch,
+    view: core_types.FrameView2D,
     submitted: bool = false,
 
     pub fn drawText(
@@ -130,12 +142,12 @@ pub const Frame = struct {
         run: heavy_slug.TextRun,
     ) !void {
         if (self.submitted) return error.FrameAlreadySubmitted;
-        try self.renderer.core.appendRun(self.renderer, &self.batch, run);
+        try self.renderer.core.appendRun(self.renderer, &self.batch, self.view, run);
     }
 
     pub fn submit(self: *Frame, target: Target) !render.FrameToken {
         if (self.submitted) return error.FrameAlreadySubmitted;
-        const token = try self.renderer.submitFrame(target, self.batch.count());
+        const token = try self.renderer.submitFrame(target, self.view, self.batch.count());
         self.batch.markSubmitted();
         self.submitted = true;
         return token;
@@ -263,13 +275,14 @@ pub const Renderer = struct {
         return out;
     }
 
-    pub fn beginFrame(self: *Renderer) Error!Frame {
+    pub fn beginFrame(self: *Renderer, view: core_types.FrameView2D) Error!Frame {
         try self.reserveFrameSlot();
         const glyphs: [*]AbiGlyphInstance = @ptrCast(@alignCast(self.frame_slots[self.active_frame].glyphs.mapped));
         const glyph_slice = glyphs[0..self.core.max_glyphs_per_frame];
         return .{
             .renderer = self,
             .batch = GlyphBatch.init(glyph_slice),
+            .view = view,
         };
     }
 
@@ -289,7 +302,7 @@ pub const Renderer = struct {
         return self.completed_frame;
     }
 
-    fn submitFrame(self: *Renderer, target: Target, glyph_count: u32) Error!render.FrameToken {
+    fn submitFrame(self: *Renderer, target: Target, view: core_types.FrameView2D, glyph_count: u32) Error!render.FrameToken {
         if (glyph_count == 0) {
             if (self.frame_reserved) {
                 metal.releaseFrameSlot(self.context, self.active_frame);
@@ -298,10 +311,8 @@ pub const Renderer = struct {
             return self.last_submitted_frame;
         }
 
-        const viewport = target.viewport;
-        const projection = target.projection;
+        const viewport = viewportToU32(view) orelse return Error.InvalidFrameView;
         const clear_color = target.clear_color;
-        const em_projection = render.projectionToEm(projection);
         const frame_slot = &self.frame_slots[self.active_frame];
         const shader_stats_buffer: ?metal.Buffer = if (backend_options.shader_stats)
             frame_slot.shader_stats
@@ -309,10 +320,10 @@ pub const Renderer = struct {
             null;
 
         const params = FrameParams{
-            .projection = em_projection,
             .viewport_size = .{ @floatFromInt(viewport[0]), @floatFromInt(viewport[1]) },
             .glyph_count = glyph_count,
             .glyph_base = 0,
+            .diagnostic_flags = 0,
         };
         const params_bytes = frame_slot.frame_params.mapped[0..@sizeOf(FrameParams)];
         @memcpy(params_bytes, std.mem.asBytes(&params));
@@ -383,9 +394,9 @@ test "Metal bridge resource indices match generated Slang MSL" {
     try std.testing.expect(std.mem.indexOf(u8, msl_shaders.task, "GlyphInstance_0 device* glyphs_1 [[buffer(1)]]") != null);
     try std.testing.expect(std.mem.indexOf(u8, msl_shaders.task, "[[buffer(0)]]") == null);
     const params_pattern = if (backend_options.shader_stats)
-        "FrameParams_natural_0 constant* pc_1 [[buffer(3)]]"
+        "constant* pc_1 [[buffer(3)]]"
     else
-        "FrameParams_natural_0 constant* pc_1 [[buffer(2)]]";
+        "constant* pc_1 [[buffer(2)]]";
     try std.testing.expect(std.mem.indexOf(u8, msl_shaders.task, params_pattern) != null);
     try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "GlyphInstance_0 device* glyphs_1 [[buffer(1)]]") != null);
     try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "uint32_t device* glyphPool_") != null);
@@ -406,6 +417,10 @@ test "Metal bridge resource indices match generated Slang MSL" {
         try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "shaderStats_") == null);
     }
     try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "[[user(TEXCOORD_1)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "[[user(TEXCOORD_5)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "[[user(TEXCOORD_6)]]") == null);
     try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "[[user(TEXCOORD_1)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "[[user(TEXCOORD_5)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "[[user(TEXCOORD_6)]]") == null);
     try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "user(TEXCOORD__1)") == null);
 }

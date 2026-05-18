@@ -398,14 +398,14 @@ test "parseReflection extracts GlyphInstance with field types" {
         \\          "name": "GlyphInstance",
         \\          "fields": [
         \\            {
-        \\              "name": "motor",
+        \\              "name": "color",
         \\              "type": {"kind": "vector", "elementCount": 4, "elementType": {"kind": "scalar", "scalarType": "float32"}},
         \\              "binding": {"kind": "uniform", "offset": 0, "size": 16, "elementStride": 4}
         \\            },
         \\            {
         \\              "name": "flags",
         \\              "type": {"kind": "scalar", "scalarType": "uint32"},
-        \\              "binding": {"kind": "uniform", "offset": 52, "size": 4, "elementStride": 0}
+        \\              "binding": {"kind": "uniform", "offset": 20, "size": 4, "elementStride": 0}
         \\            }
         \\          ]
         \\        }
@@ -421,20 +421,20 @@ test "parseReflection extracts GlyphInstance with field types" {
 
     try std.testing.expectEqual(@as(usize, 1), structs.len);
     try std.testing.expectEqualStrings("GlyphInstance", structs[0].name);
-    try std.testing.expectEqual(@as(u32, 56), structs[0].size);
+    try std.testing.expectEqual(@as(u32, 24), structs[0].size);
     try std.testing.expectEqual(@as(usize, 2), structs[0].fields.len);
 
-    try std.testing.expectEqualStrings("motor", structs[0].fields[0].name);
+    try std.testing.expectEqualStrings("color", structs[0].fields[0].name);
     try std.testing.expectEqual(@as(u32, 0), structs[0].fields[0].offset);
     try std.testing.expectEqual(@as(u32, 16), structs[0].fields[0].size);
     try std.testing.expectEqual(FieldType{ .vector = .{ .count = 4, .element = .float32 } }, structs[0].fields[0].field_type);
 
     try std.testing.expectEqualStrings("flags", structs[0].fields[1].name);
-    try std.testing.expectEqual(@as(u32, 52), structs[0].fields[1].offset);
+    try std.testing.expectEqual(@as(u32, 20), structs[0].fields[1].offset);
     try std.testing.expectEqual(FieldType{ .scalar = .uint32 }, structs[0].fields[1].field_type);
 }
 
-test "parseReflection extracts FrameParams with matrix type" {
+test "parseReflection extracts FrameParams frame-wide draw parameters" {
     const json =
         \\{
         \\  "parameters": [
@@ -449,18 +449,18 @@ test "parseReflection extracts FrameParams with matrix type" {
         \\            "name": "FrameParams",
         \\            "fields": [
         \\              {
-        \\                "name": "projection",
-        \\                "type": {"kind": "matrix", "rowCount": 4, "columnCount": 4, "elementType": {"kind": "scalar", "scalarType": "float32"}},
-        \\                "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
+        \\                "name": "viewport_size",
+        \\                "type": {"kind": "vector", "elementCount": 2, "elementType": {"kind": "scalar", "scalarType": "float32"}},
+        \\                "binding": {"kind": "uniform", "offset": 0, "size": 8, "elementStride": 4}
         \\              },
         \\              {
         \\                "name": "glyph_count",
         \\                "type": {"kind": "scalar", "scalarType": "uint32"},
-        \\                "binding": {"kind": "uniform", "offset": 72, "size": 4, "elementStride": 0}
+        \\                "binding": {"kind": "uniform", "offset": 8, "size": 4, "elementStride": 0}
         \\              }
         \\            ]
         \\          },
-        \\          "binding": {"kind": "uniform", "offset": 0, "size": 80, "elementStride": 0}
+        \\          "binding": {"kind": "uniform", "offset": 0, "size": 20, "elementStride": 0}
         \\        }
         \\      }
         \\    }
@@ -474,9 +474,9 @@ test "parseReflection extracts FrameParams with matrix type" {
 
     try std.testing.expectEqual(@as(usize, 1), structs.len);
     try std.testing.expectEqualStrings("FrameParams", structs[0].name);
-    try std.testing.expectEqual(@as(u32, 80), structs[0].size);
+    try std.testing.expectEqual(@as(u32, 20), structs[0].size);
 
-    try std.testing.expectEqual(FieldType{ .matrix = .{ .rows = 4, .cols = 4, .element = .float32 } }, structs[0].fields[0].field_type);
+    try std.testing.expectEqual(FieldType{ .vector = .{ .count = 2, .element = .float32 } }, structs[0].fields[0].field_type);
 }
 
 test "parseReflection extracts both structs" {
@@ -494,7 +494,7 @@ test "parseReflection extracts both structs" {
         \\          "name": "GlyphInstance",
         \\          "fields": [
         \\            {
-        \\              "name": "motor",
+        \\              "name": "color",
         \\              "type": {"kind": "vector", "elementCount": 4, "elementType": {"kind": "scalar", "scalarType": "float32"}},
         \\              "binding": {"kind": "uniform", "offset": 0, "size": 16, "elementStride": 4}
         \\            }
@@ -513,13 +513,13 @@ test "parseReflection extracts both structs" {
         \\            "name": "FrameParams",
         \\            "fields": [
         \\              {
-        \\                "name": "projection",
-        \\                "type": {"kind": "matrix", "rowCount": 4, "columnCount": 4, "elementType": {"kind": "scalar", "scalarType": "float32"}},
-        \\                "binding": {"kind": "uniform", "offset": 0, "size": 64, "elementStride": 0}
+        \\                "name": "viewport_size",
+        \\                "type": {"kind": "vector", "elementCount": 2, "elementType": {"kind": "scalar", "scalarType": "float32"}},
+        \\                "binding": {"kind": "uniform", "offset": 0, "size": 8, "elementStride": 4}
         \\              }
         \\            ]
         \\          },
-        \\          "binding": {"kind": "uniform", "offset": 0, "size": 80, "elementStride": 0}
+        \\          "binding": {"kind": "uniform", "offset": 0, "size": 20, "elementStride": 0}
         \\        }
         \\      }
         \\    }
@@ -675,17 +675,17 @@ test "parseReflection rejects overlapping fields" {
 
 test "emitZig produces extern struct definitions" {
     const fields_gc = [_]FieldLayout{
-        .{ .name = "motor", .offset = 0, .size = 16, .field_type = .{ .vector = .{ .count = 4, .element = .float32 } } },
-        .{ .name = "flags", .offset = 52, .size = 4, .field_type = .{ .scalar = .uint32 } },
-        .{ .name = "_pad", .offset = 56, .size = 8, .field_type = .{ .vector = .{ .count = 2, .element = .uint32 } } },
+        .{ .name = "color", .offset = 0, .size = 16, .field_type = .{ .vector = .{ .count = 4, .element = .float32 } } },
+        .{ .name = "blob_ref", .offset = 16, .size = 4, .field_type = .{ .scalar = .uint32 } },
+        .{ .name = "local_bounds_q", .offset = 32, .size = 16, .field_type = .{ .vector = .{ .count = 4, .element = .int32 } } },
     };
     const fields_pc = [_]FieldLayout{
-        .{ .name = "projection", .offset = 0, .size = 64, .field_type = .{ .matrix = .{ .rows = 4, .cols = 4, .element = .float32 } } },
-        .{ .name = "glyph_count", .offset = 72, .size = 4, .field_type = .{ .scalar = .uint32 } },
+        .{ .name = "viewport_size", .offset = 0, .size = 8, .field_type = .{ .vector = .{ .count = 2, .element = .float32 } } },
+        .{ .name = "glyph_count", .offset = 8, .size = 4, .field_type = .{ .scalar = .uint32 } },
     };
     const structs = [_]StructLayout{
-        .{ .name = "GlyphInstance", .size = 64, .fields = &fields_gc },
-        .{ .name = "FrameParams", .size = 80, .fields = &fields_pc },
+        .{ .name = "GlyphInstance", .size = 48, .fields = &fields_gc },
+        .{ .name = "FrameParams", .size = 20, .fields = &fields_pc },
     };
 
     var aw: std.Io.Writer.Allocating = .init(std.testing.allocator);
@@ -698,12 +698,12 @@ test "emitZig produces extern struct definitions" {
     try std.testing.expect(std.mem.find(u8, output, "const std = @import(\"std\");") != null);
 
     try std.testing.expect(std.mem.find(u8, output, "pub const GlyphInstance = extern struct {") != null);
-    try std.testing.expect(std.mem.find(u8, output, "motor: [4]f32,") != null);
-    try std.testing.expect(std.mem.find(u8, output, "flags: u32,") != null);
-    try std.testing.expect(std.mem.find(u8, output, "_pad: [2]u32 = .{0} ** 2,") != null);
+    try std.testing.expect(std.mem.find(u8, output, "color: [4]f32,") != null);
+    try std.testing.expect(std.mem.find(u8, output, "blob_ref: u32,") != null);
+    try std.testing.expect(std.mem.find(u8, output, "local_bounds_q: [4]i32,") != null);
 
     try std.testing.expect(std.mem.find(u8, output, "pub const FrameParams = extern struct {") != null);
-    try std.testing.expect(std.mem.find(u8, output, "projection: [4][4]f32,") != null);
+    try std.testing.expect(std.mem.find(u8, output, "viewport_size: [2]f32,") != null);
     try std.testing.expect(std.mem.find(u8, output, "glyph_count: u32,") != null);
     try std.testing.expect(std.mem.find(u8, output, "reflection layout matches Zig extern layout") != null);
 }

@@ -4,13 +4,13 @@ const std = @import("std");
 pub const core = @import("core/root.zig");
 pub const gpu = @import("gpu/root.zig");
 
-const pga = @import("math/pga.zig");
-
 pub const FontHandle = core.FontHandle;
 pub const Color = core.Color;
 pub const Transform = core.Transform;
+pub const Affine2D64 = core.Affine2D64;
+pub const FrameView2D = core.FrameView2D;
+pub const PrecisionPolicy = core.PrecisionPolicy;
 pub const Viewport = core.Viewport;
-pub const Projection = core.Projection;
 pub const FillRule = core.FillRule;
 pub const FontSource = core.FontSource;
 pub const FontOptions = core.FontOptions;
@@ -25,7 +25,6 @@ const font = core.font;
 
 test {
     _ = core;
-    _ = pga;
     _ = gpu;
 }
 
@@ -52,7 +51,7 @@ test "integration: shape text and encode all unique glyphs" {
         if (seen.contains(info.codepoint)) continue;
         try seen.put(info.codepoint, {});
 
-        const encoded = try loaded.encodeGlyph(info.codepoint);
+        const encoded = try loaded.encodeGlyph(info.codepoint, core.blob.format.default_fraction_bits);
         defer encoded.deinit();
 
         if (encoded.data.len > 0) {
@@ -60,7 +59,7 @@ test "integration: shape text and encode all unique glyphs" {
         }
     }
 
-    var total_advance: i32 = 0;
+    var total_advance: i64 = 0;
     for (positions) |pos| total_advance += pos.x_advance;
     try std.testing.expect(total_advance > 0);
 }

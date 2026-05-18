@@ -1,4 +1,4 @@
-//! Encode regularized cubic spans into the compact GPU coverage blob format.
+//! Encode regularized cubic spans into the GPU coverage blob format.
 
 const std = @import("std");
 const format = @import("format.zig");
@@ -11,122 +11,98 @@ const RegularizedCubicSpan = regularize.RegularizedCubicSpan;
 pub const Error = error{
     GlyphTooLarge,
     GlyphOffsetOverflow,
+    PrecisionUnsupported,
     OutOfMemory,
 };
 
-const Texel = format.Texel;
 const CoverageBlob = format.CoverageBlob;
-const header_len = format.header_len;
-const curve_texel_len = format.curve_texel_len;
-const curve_ids_per_texel = format.curve_ids_per_texel;
-const hband_height_q = format.hband_height_units;
-const blob_units_per_pixel = format.units_per_pixel;
 
 /// Quantizes cubics, writes their bounds, and builds the h-band candidate table.
-pub fn curves(allocator: std.mem.Allocator, source_curves: []const RegularizedCubicSpan) Error!CoverageBlob {
+pub fn curves(
+    allocator: std.mem.Allocator,
+    source_curves: []const RegularizedCubicSpan,
+    fraction_bits: u8,
+) Error!CoverageBlob {
     if (source_curves.len == 0) return CoverageBlob.empty(allocator);
-    if (source_curves.len > std.math.maxInt(i16)) return error.GlyphOffsetOverflow;
+    if (fraction_bits < format.min_fraction_bits or fraction_bits > format.max_fraction_bits) {
+        return error.PrecisionUnsupported;
+    }
+    if (source_curves.len > std.math.maxInt(u32)) return error.GlyphOffsetOverflow;
 
-    var min_x_f: f64 = std.math.inf(f64);
-    var min_y_f: f64 = std.math.inf(f64);
-    var max_x_f: f64 = -std.math.inf(f64);
-    var max_y_f: f64 = -std.math.inf(f64);
-
-    const quantized_curves = try allocator.alloc(RegularizedCubicSpan, source_curves.len);
+    const quantized_curves = try allocator.alloc(format.Curve, source_curves.len);
     defer allocator.free(quantized_curves);
 
+    var min_x_q: i32 = std.math.maxInt(i32);
+    var min_y_q: i32 = std.math.maxInt(i32);
+    var max_x_q: i32 = std.math.minInt(i32);
+    var max_y_q: i32 = std.math.minInt(i32);
+
     for (source_curves, 0..) |source_curve, i| {
-        const curve = try quantizedCubic(source_curve);
+        const curve = try quantizedCubic(source_curve, fraction_bits);
         quantized_curves[i] = curve;
-        min_x_f = @min(min_x_f, curve.minX());
-        min_y_f = @min(min_y_f, curve.minY());
-        max_x_f = @max(max_x_f, curve.maxX());
-        max_y_f = @max(max_y_f, curve.maxY());
+        min_x_q = @min(min_x_q, curve.bbox_min_x_q);
+        min_y_q = @min(min_y_q, curve.bbox_min_y_q);
+        max_x_q = @max(max_x_q, curve.bbox_max_x_q);
+        max_y_q = @max(max_y_q, curve.bbox_max_y_q);
     }
 
-    const min_x_q = try quantizeDown(min_x_f);
-    const min_y_q = try quantizeDown(min_y_f);
-    const max_x_q = try quantizeUp(max_x_f);
-    const max_y_q = try quantizeUp(max_y_f);
-
-    var hbands = try HBandIndex.init(allocator, quantized_curves, min_y_q, max_y_q);
+    const band_height_q = format.hbandHeightQ(fraction_bits);
+    var hbands = try HBandIndex.init(allocator, quantized_curves, min_y_q, max_y_q, band_height_q);
     defer hbands.deinit(allocator);
 
-    const curve_base: u32 = header_len;
-    const band_base = try addU32(curve_base, try mulU32(@intCast(quantized_curves.len), curve_texel_len));
-    const id_base = try addU32(band_base, hbands.band_count);
-    const id_texel_count = divCeilU32(hbands.id_count, curve_ids_per_texel);
-    const total_len = try addU32(id_base, id_texel_count);
+    const curve_base = format.header_word_len;
+    const band_base = try addMulU32(curve_base, @intCast(quantized_curves.len), format.curve_word_len);
+    const id_base = try addMulU32(band_base, hbands.band_count, format.band_word_len);
+    const total_words = try addU32(id_base, hbands.id_count);
 
-    const texels = try allocator.alloc(Texel, total_len);
-    errdefer allocator.free(texels);
-    @memset(texels, .{ .r = 0, .g = 0, .b = 0, .a = 0 });
+    const words = try allocator.alloc(u32, total_words);
+    errdefer allocator.free(words);
+    @memset(words, 0);
 
-    texels[0] = .{ .r = min_x_q, .g = min_y_q, .b = max_x_q, .a = max_y_q };
-    texels[1] = .{
-        .r = @intCast(quantized_curves.len),
-        .g = fillSignCubics(quantized_curves),
-        .b = @intCast(hbands.band_min),
-        .a = @intCast(hbands.band_count),
+    const header = format.Header{
+        .magic_version = format.magic_version,
+        .fraction_bits = fraction_bits,
+        .flags = format.flags_none,
+        .fill_sign = fillSignCubics(source_curves),
+        .curve_count = @intCast(quantized_curves.len),
+        .band_min = hbands.band_min,
+        .band_count = hbands.band_count,
+        .band_height_q = band_height_q,
+        .id_count = hbands.id_count,
+        .word_count = total_words,
+        .bounds_min_x_q = min_x_q,
+        .bounds_min_y_q = min_y_q,
+        .bounds_max_x_q = max_x_q,
+        .bounds_max_y_q = max_y_q,
+        .curve_base_words = curve_base,
+        .band_base_words = band_base,
+        .id_base_words = id_base,
     };
+    writeValue(words, 0, header);
 
-    var data_texel: u32 = curve_base;
+    var word_offset = curve_base;
     for (quantized_curves) |curve| {
-        texels[data_texel] = .{
-            .r = try quantize(curve.p0.x),
-            .g = try quantize(curve.p0.y),
-            .b = try quantize(curve.p1.x),
-            .a = try quantize(curve.p1.y),
-        };
-        data_texel += 1;
-        texels[data_texel] = .{
-            .r = try quantize(curve.p2.x),
-            .g = try quantize(curve.p2.y),
-            .b = try quantize(curve.p3.x),
-            .a = try quantize(curve.p3.y),
-        };
-        data_texel += 1;
-        texels[data_texel] = .{
-            .r = try quantizeDown(curve.minX()),
-            .g = try quantizeUp(curve.maxX()),
-            .b = try quantizeDown(curve.minY()),
-            .a = try quantizeUp(curve.maxY()),
-        };
-        data_texel += 1;
+        writeValue(words, word_offset, curve);
+        word_offset += format.curve_word_len;
     }
+    std.debug.assert(word_offset == band_base);
 
-    std.debug.assert(data_texel == band_base);
-
-    for (0..@intCast(hbands.band_count)) |band_i| {
-        const start = hbands.band_starts[band_i];
-        const count = hbands.band_counts[band_i];
-        if (start > std.math.maxInt(i16) or count > std.math.maxInt(i16)) {
-            return error.GlyphOffsetOverflow;
-        }
-        texels[data_texel] = .{
-            .r = @intCast(start),
-            .g = @intCast(count),
-            .b = 0,
-            .a = 0,
-        };
-        data_texel += 1;
+    for (0..hbands.band_count) |band_i| {
+        writeValue(words, word_offset, format.Band{
+            .id_start = hbands.band_starts[band_i],
+            .id_count = hbands.band_counts[band_i],
+        });
+        word_offset += format.band_word_len;
     }
+    std.debug.assert(word_offset == id_base);
 
-    std.debug.assert(data_texel == id_base);
-
-    for (0..@intCast(id_texel_count)) |texel_i| {
-        const id_i = texel_i * curve_ids_per_texel;
-        texels[data_texel] = .{
-            .r = idAtOrZero(hbands.ids, id_i),
-            .g = idAtOrZero(hbands.ids, id_i + 1),
-            .b = idAtOrZero(hbands.ids, id_i + 2),
-            .a = idAtOrZero(hbands.ids, id_i + 3),
-        };
-        data_texel += 1;
+    for (hbands.ids) |id| {
+        words[word_offset] = id;
+        word_offset += 1;
     }
+    std.debug.assert(word_offset == total_words);
 
-    std.debug.assert(data_texel == total_len);
-    return CoverageBlob.init(allocator, texels);
+    return CoverageBlob.init(allocator, words);
 }
 
 const HBandIndex = struct {
@@ -135,30 +111,31 @@ const HBandIndex = struct {
     id_count: u32,
     band_starts: []u32,
     band_counts: []u32,
-    ids: []i16,
+    ids: []u32,
 
     fn init(
         allocator: std.mem.Allocator,
-        curve_spans: []const RegularizedCubicSpan,
-        min_y_q: i16,
-        max_y_q: i16,
+        curve_spans: []const format.Curve,
+        min_y_q: i32,
+        max_y_q: i32,
+        band_height_q: i32,
     ) Error!HBandIndex {
-        const band_min = bandIndex(min_y_q);
-        const band_max = bandIndex(max_y_q);
-        const band_count_i32 = band_max - band_min + 1;
-        if (band_count_i32 <= 0 or band_count_i32 > std.math.maxInt(i16)) {
+        const band_min = bandIndex(min_y_q, band_height_q);
+        const band_max = bandIndex(max_y_q, band_height_q);
+        const band_count_i64 = @as(i64, band_max) - @as(i64, band_min) + 1;
+        if (band_count_i64 <= 0 or band_count_i64 > std.math.maxInt(u32)) {
             return error.GlyphOffsetOverflow;
         }
-        const band_count: u32 = @intCast(band_count_i32);
+        const band_count: u32 = @intCast(band_count_i64);
 
         const band_counts = try allocator.alloc(u32, band_count);
         errdefer allocator.free(band_counts);
         @memset(band_counts, 0);
 
         for (curve_spans) |curve| {
-            const range = try curveBandRange(curve, band_min);
+            const range = try curveBandRange(curve, band_min, band_height_q);
             for (range.lo..range.hi + 1) |band_i| {
-                band_counts[band_i] += 1;
+                band_counts[band_i] = try addU32(band_counts[band_i], 1);
             }
         }
 
@@ -170,16 +147,16 @@ const HBandIndex = struct {
             band_starts[i] = id_count;
             id_count = try addU32(id_count, count);
         }
-        if (id_count > std.math.maxInt(i16)) return error.GlyphOffsetOverflow;
 
-        const ids = try allocator.alloc(i16, id_count);
+        const ids = try allocator.alloc(u32, id_count);
         errdefer allocator.free(ids);
 
         const cursors = try allocator.dupe(u32, band_starts);
         defer allocator.free(cursors);
 
         for (curve_spans, 0..) |curve, curve_i| {
-            const range = try curveBandRange(curve, band_min);
+            if (curve_i > std.math.maxInt(u32)) return error.GlyphOffsetOverflow;
+            const range = try curveBandRange(curve, band_min, band_height_q);
             for (range.lo..range.hi + 1) |band_i| {
                 const id_i = cursors[band_i];
                 ids[id_i] = @intCast(curve_i);
@@ -205,77 +182,81 @@ const HBandIndex = struct {
     }
 };
 
-fn curveBandRange(curve: RegularizedCubicSpan, band_min: i32) Error!struct { lo: usize, hi: usize } {
-    const min_y = try quantizeDown(curve.minY());
-    const max_y = try quantizeUp(curve.maxY());
-    const lo_i32 = bandIndex(min_y) - band_min;
-    const hi_i32 = bandIndex(max_y) - band_min;
-    if (lo_i32 < 0 or hi_i32 < lo_i32) return error.GlyphOffsetOverflow;
-    return .{ .lo = @intCast(lo_i32), .hi = @intCast(hi_i32) };
+fn curveBandRange(curve: format.Curve, band_min: i32, band_height_q: i32) Error!struct { lo: usize, hi: usize } {
+    const lo_i64 = @as(i64, bandIndex(curve.bbox_min_y_q, band_height_q)) - band_min;
+    const hi_i64 = @as(i64, bandIndex(curve.bbox_max_y_q, band_height_q)) - band_min;
+    if (lo_i64 < 0 or hi_i64 < lo_i64 or hi_i64 > std.math.maxInt(u32)) {
+        return error.GlyphOffsetOverflow;
+    }
+    return .{ .lo = @intCast(lo_i64), .hi = @intCast(hi_i64) };
 }
 
-fn bandIndex(y_q: i16) i32 {
-    return @divFloor(@as(i32, y_q), @as(i32, hband_height_q));
+fn bandIndex(y_q: i32, band_height_q: i32) i32 {
+    return @divFloor(y_q, band_height_q);
 }
 
-fn divCeilU32(a: u32, b: u32) u32 {
-    return (a + b - 1) / b;
-}
-
-fn idAtOrZero(ids: []const i16, index: usize) i16 {
-    return if (index < ids.len) ids[index] else 0;
-}
-
-fn quantizedCubic(curve: RegularizedCubicSpan) Error!RegularizedCubicSpan {
+fn quantizedCubic(curve: RegularizedCubicSpan, fraction_bits: u8) Error!format.Curve {
+    const p0_x = try quantize(curve.p0.x, fraction_bits);
+    const p0_y = try quantize(curve.p0.y, fraction_bits);
+    const p1_x = try quantize(curve.p1.x, fraction_bits);
+    const p1_y = try quantize(curve.p1.y, fraction_bits);
+    const p2_x = try quantize(curve.p2.x, fraction_bits);
+    const p2_y = try quantize(curve.p2.y, fraction_bits);
+    const p3_x = try quantize(curve.p3.x, fraction_bits);
+    const p3_y = try quantize(curve.p3.y, fraction_bits);
     return .{
-        .p0 = try quantizedPoint(curve.p0),
-        .p1 = try quantizedPoint(curve.p1),
-        .p2 = try quantizedPoint(curve.p2),
-        .p3 = try quantizedPoint(curve.p3),
+        .p0_x_q = p0_x,
+        .p0_y_q = p0_y,
+        .p1_x_q = p1_x,
+        .p1_y_q = p1_y,
+        .p2_x_q = p2_x,
+        .p2_y_q = p2_y,
+        .p3_x_q = p3_x,
+        .p3_y_q = p3_y,
+        .bbox_min_x_q = try quantizeDown(curve.minX(), fraction_bits),
+        .bbox_min_y_q = try quantizeDown(curve.minY(), fraction_bits),
+        .bbox_max_x_q = try quantizeUp(curve.maxX(), fraction_bits),
+        .bbox_max_y_q = try quantizeUp(curve.maxY(), fraction_bits),
     };
 }
 
-fn quantizedPoint(point: regularize.Point) Error!regularize.Point {
-    return .{
-        .x = dequantize(try quantize(point.x)),
-        .y = dequantize(try quantize(point.y)),
-    };
+fn quantize(v: f64, fraction_bits: u8) Error!i32 {
+    return quantized(std.math.round(v * format.scaleForFractionBits(fraction_bits)));
 }
 
-fn quantize(v: f64) Error!i16 {
-    return quantized(std.math.round(v * blob_units_per_pixel));
+fn quantizeDown(v: f64, fraction_bits: u8) Error!i32 {
+    return quantized(@floor(v * format.scaleForFractionBits(fraction_bits)));
 }
 
-fn quantizeDown(v: f64) Error!i16 {
-    return quantized(@floor(v * blob_units_per_pixel));
+fn quantizeUp(v: f64, fraction_bits: u8) Error!i32 {
+    return quantized(@ceil(v * format.scaleForFractionBits(fraction_bits)));
 }
 
-fn quantizeUp(v: f64) Error!i16 {
-    return quantized(@ceil(v * blob_units_per_pixel));
-}
-
-fn quantized(v: f64) Error!i16 {
-    if (!std.math.isFinite(v) or v < std.math.minInt(i16) or v > std.math.maxInt(i16)) {
+fn quantized(v: f64) Error!i32 {
+    if (!std.math.isFinite(v) or v < std.math.minInt(i32) or v > std.math.maxInt(i32)) {
         return error.GlyphTooLarge;
     }
     return @intFromFloat(v);
 }
 
-fn dequantize(v: i16) f64 {
-    return @as(f64, @floatFromInt(v)) / blob_units_per_pixel;
-}
-
-fn fillSignCubics(curve_spans: []const RegularizedCubicSpan) i16 {
+fn fillSignCubics(curve_spans: []const RegularizedCubicSpan) i32 {
     const area = outline_area.signedArea(curve_spans);
     return if (area < 0) -1 else 1;
+}
+
+fn writeValue(words: []u32, word_offset: u32, value: anytype) void {
+    const start = @as(usize, word_offset) * @sizeOf(u32);
+    const bytes = std.mem.sliceAsBytes(words);
+    @memcpy(bytes[start..][0..@sizeOf(@TypeOf(value))], std.mem.asBytes(&value));
 }
 
 fn addU32(a: u32, b: u32) Error!u32 {
     return std.math.add(u32, a, b) catch error.GlyphOffsetOverflow;
 }
 
-fn mulU32(a: u32, b: u32) Error!u32 {
-    return std.math.mul(u32, a, b) catch error.GlyphOffsetOverflow;
+fn addMulU32(a: u32, b: u32, c: u32) Error!u32 {
+    const product = std.math.mul(u32, b, c) catch return error.GlyphOffsetOverflow;
+    return addU32(a, product);
 }
 
 test "blob encode: curves round trip through CoverageBlob decoder" {
@@ -288,19 +269,20 @@ test "blob encode: curves round trip through CoverageBlob decoder" {
         },
     };
 
-    var blob = try curves(std.testing.allocator, &source);
+    var blob = try curves(std.testing.allocator, &source, format.default_fraction_bits);
     defer blob.deinit();
 
     const view = try decode.BlobView.initCoverageBlob(blob);
     try std.testing.expectEqual(@as(u32, 1), view.header.curveCount());
-    try std.testing.expectEqual(@as(usize, format.curve_texel_len), view.curveTexels(0).len);
+    try std.testing.expectEqual(format.default_fraction_bits, @as(u8, @intCast(view.header.fraction_bits)));
+    try std.testing.expectEqual(@as(i32, 0), view.curve(0).p0_x_q);
 }
 
 test "blob encode: empty curve list produces empty blob" {
-    var blob = try curves(std.testing.allocator, &.{});
+    var blob = try curves(std.testing.allocator, &.{}, format.default_fraction_bits);
     defer blob.deinit();
 
-    try std.testing.expectEqual(@as(usize, 0), blob.texels.len);
+    try std.testing.expectEqual(@as(usize, 0), blob.words.len);
     try std.testing.expectEqual(@as(usize, 0), blob.len());
 }
 
@@ -310,28 +292,18 @@ test "blob encode: writes h-band candidate index after curves" {
         regularize.lineAsCubic(.{ .x = 1, .y = 1 }, .{ .x = 2, .y = 2 }),
     };
 
-    var blob = try curves(std.testing.allocator, &source);
+    var blob = try curves(std.testing.allocator, &source, format.default_fraction_bits);
     defer blob.deinit();
 
-    const texels = blob.texels;
-    const curve_count: usize = @intCast(texels[1].r);
-    const curve_base: usize = header_len;
-    const band_min = texels[1].b;
-    const band_count: usize = @intCast(texels[1].a);
-    const band_base = curve_base + curve_count * curve_texel_len;
-    const id_base = band_base + band_count;
+    const view = try decode.BlobView.initCoverageBlob(blob);
+    try std.testing.expectEqual(@as(i32, 0), view.header.band_min);
+    try std.testing.expectEqual(@as(u32, 1), view.header.band_count);
 
-    try std.testing.expectEqual(@as(i16, 0), band_min);
-    try std.testing.expectEqual(@as(usize, 1), band_count);
-    try std.testing.expectEqual(curve_base + source.len * curve_texel_len, band_base);
-
-    const band = texels[band_base];
-    try std.testing.expectEqual(@as(i16, 0), band.r);
-    try std.testing.expectEqual(@as(i16, 2), band.g);
-
-    const ids = texels[id_base];
-    try std.testing.expectEqual(@as(i16, 0), ids.r);
-    try std.testing.expectEqual(@as(i16, 1), ids.g);
+    const band = view.band(0);
+    try std.testing.expectEqual(@as(u32, 0), band.id_start);
+    try std.testing.expectEqual(@as(u32, 2), band.id_count);
+    try std.testing.expectEqual(@as(u32, 0), view.curveId(0));
+    try std.testing.expectEqual(@as(u32, 1), view.curveId(1));
 }
 
 test "blob encode: stores glyph fill direction in header" {
@@ -348,34 +320,38 @@ test "blob encode: stores glyph fill direction in header" {
         regularize.lineAsCubic(.{ .x = 2, .y = 0 }, .{ .x = 0, .y = 0 }),
     };
 
-    var ccw_blob = try curves(std.testing.allocator, &ccw);
+    var ccw_blob = try curves(std.testing.allocator, &ccw, format.default_fraction_bits);
     defer ccw_blob.deinit();
-    var cw_blob = try curves(std.testing.allocator, &cw);
+    var cw_blob = try curves(std.testing.allocator, &cw, format.default_fraction_bits);
     defer cw_blob.deinit();
 
-    try std.testing.expectEqual(@as(i16, 1), ccw_blob.texels[1].g);
-    try std.testing.expectEqual(@as(i16, -1), cw_blob.texels[1].g);
+    const ccw_view = try decode.BlobView.initCoverageBlob(ccw_blob);
+    const cw_view = try decode.BlobView.initCoverageBlob(cw_blob);
+    try std.testing.expectEqual(@as(i32, 1), ccw_view.header.fill_sign);
+    try std.testing.expectEqual(@as(i32, -1), cw_view.header.fill_sign);
 }
 
-test "blob encode: fill direction uses exact cubic area" {
-    const negative = [_]RegularizedCubicSpan{.{
-        .p0 = .{ .x = 0, .y = 0 },
-        .p1 = .{ .x = 0, .y = 1 },
-        .p2 = .{ .x = 1, .y = 1 },
-        .p3 = .{ .x = 1, .y = 0 },
-    }};
-    const positive = [_]RegularizedCubicSpan{.{
-        .p0 = .{ .x = 1, .y = 0 },
-        .p1 = .{ .x = 1, .y = 1 },
-        .p2 = .{ .x = 0, .y = 1 },
-        .p3 = .{ .x = 0, .y = 0 },
-    }};
+test "blob encode: rejects unsupported precision and i32 overflow" {
+    const source = [_]RegularizedCubicSpan{regularize.lineAsCubic(.{ .x = 0, .y = 0 }, .{ .x = 1, .y = 1 })};
+    try std.testing.expectError(error.PrecisionUnsupported, curves(std.testing.allocator, &source, 30));
 
-    var negative_blob = try curves(std.testing.allocator, &negative);
-    defer negative_blob.deinit();
-    var positive_blob = try curves(std.testing.allocator, &positive);
-    defer positive_blob.deinit();
+    const huge = [_]RegularizedCubicSpan{regularize.lineAsCubic(.{ .x = 0, .y = 0 }, .{ .x = 1.0e12, .y = 1 })};
+    try std.testing.expectError(error.GlyphTooLarge, curves(std.testing.allocator, &huge, format.default_fraction_bits));
+}
 
-    try std.testing.expectEqual(@as(i16, -1), negative_blob.texels[1].g);
-    try std.testing.expectEqual(@as(i16, 1), positive_blob.texels[1].g);
+test "blob encode: outward rounding covers source extrema" {
+    const source = [_]RegularizedCubicSpan{.{
+        .p0 = .{ .x = 0.1, .y = 0.1 },
+        .p1 = .{ .x = 1.2, .y = 2.3 },
+        .p2 = .{ .x = 3.4, .y = 2.5 },
+        .p3 = .{ .x = 4.6, .y = -0.2 },
+    }};
+    var blob = try curves(std.testing.allocator, &source, 12);
+    defer blob.deinit();
+    const view = try decode.BlobView.initCoverageBlob(blob);
+    const scale = format.scaleForFractionBits(12);
+    try std.testing.expect(@as(f64, @floatFromInt(view.header.bounds_min_x_q)) / scale <= 0.1);
+    try std.testing.expect(@as(f64, @floatFromInt(view.header.bounds_min_y_q)) / scale <= -0.2);
+    try std.testing.expect(@as(f64, @floatFromInt(view.header.bounds_max_x_q)) / scale >= 4.6);
+    try std.testing.expect(@as(f64, @floatFromInt(view.header.bounds_max_y_q)) / scale >= 2.5);
 }

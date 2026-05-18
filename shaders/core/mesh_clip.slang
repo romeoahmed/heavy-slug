@@ -1,9 +1,8 @@
 #language slang 2026
 module mesh_clip;
 
-// Fixed-function rasterizers are least surprising when mesh shader output is
-// already bounded to the viewport.  A convex glyph strip clipped against the
-// NDC rectangle can produce at most eight vertices.
+// Clip a convex NDC quad against the viewport. With affine screen charts the
+// mesh shader should only emit bounded W=1 positions.
 
 import abi;
 import screen_mapping;
@@ -93,9 +92,11 @@ float polygonArea2(float2 poly[kMeshOutputVertices], uint count)
     return area2;
 }
 
-public bool clipRectToNdc(
-    AnchoredLocalToClip frame,
-    float4 rect,
+public bool clipNdcQuad(
+    float2 p0,
+    float2 p1,
+    float2 p2,
+    float2 p3,
     out float2 clipped[kMeshOutputVertices],
     out uint clippedCount)
 {
@@ -107,13 +108,13 @@ public bool clipRectToNdc(
     clearPolygon(a);
     clearPolygon(b);
 
-    if (!projectAnchoredLocalToNdc(frame, rect.xy, a[0]) ||
-        !projectAnchoredLocalToNdc(frame, float2(rect.z, rect.y), a[1]) ||
-        !projectAnchoredLocalToNdc(frame, rect.zw, a[2]) ||
-        !projectAnchoredLocalToNdc(frame, float2(rect.x, rect.w), a[3]))
-    {
+    if (!isFinite2(p0) || !isFinite2(p1) || !isFinite2(p2) || !isFinite2(p3))
         return false;
-    }
+
+    a[0] = p0;
+    a[1] = p1;
+    a[2] = p2;
+    a[3] = p3;
 
     uint count = 4;
     clipAgainstPlane(a, count, kClipPlaneLeft, b, count);

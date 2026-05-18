@@ -28,24 +28,24 @@ pub const CounterIndex = enum(u32) {
     mesh_tiles_culled = 18,
     mesh_cull_empty_slices = 19,
     mesh_cull_invalid_strips = 20,
-    mesh_cull_anchor_failures = 21,
+    mesh_cull_zero_area = 21,
     mesh_cull_clip_empty = 22,
-    mesh_cull_transform_failures = 23,
+    mesh_cull_non_finite = 23,
 };
 
 pub const MeshCullBreakdown = struct {
     empty_slices: u32 = 0,
     invalid_strips: u32 = 0,
-    anchor_failures: u32 = 0,
+    zero_area: u32 = 0,
     clip_empty: u32 = 0,
-    transform_failures: u32 = 0,
+    non_finite: u32 = 0,
 
     pub fn total(self: MeshCullBreakdown) u32 {
         return self.empty_slices +
             self.invalid_strips +
-            self.anchor_failures +
+            self.zero_area +
             self.clip_empty +
-            self.transform_failures;
+            self.non_finite;
     }
 };
 
@@ -72,9 +72,9 @@ pub const Snapshot = extern struct {
     mesh_tiles_culled: u32 = 0,
     mesh_cull_empty_slices: u32 = 0,
     mesh_cull_invalid_strips: u32 = 0,
-    mesh_cull_anchor_failures: u32 = 0,
+    mesh_cull_zero_area: u32 = 0,
     mesh_cull_clip_empty: u32 = 0,
-    mesh_cull_transform_failures: u32 = 0,
+    mesh_cull_non_finite: u32 = 0,
 
     pub fn reset(self: *Snapshot) void {
         self.* = .{};
@@ -103,9 +103,9 @@ pub const Snapshot = extern struct {
             .mesh_tiles_culled = counters[@intFromEnum(CounterIndex.mesh_tiles_culled)],
             .mesh_cull_empty_slices = counters[@intFromEnum(CounterIndex.mesh_cull_empty_slices)],
             .mesh_cull_invalid_strips = counters[@intFromEnum(CounterIndex.mesh_cull_invalid_strips)],
-            .mesh_cull_anchor_failures = counters[@intFromEnum(CounterIndex.mesh_cull_anchor_failures)],
+            .mesh_cull_zero_area = counters[@intFromEnum(CounterIndex.mesh_cull_zero_area)],
             .mesh_cull_clip_empty = counters[@intFromEnum(CounterIndex.mesh_cull_clip_empty)],
-            .mesh_cull_transform_failures = counters[@intFromEnum(CounterIndex.mesh_cull_transform_failures)],
+            .mesh_cull_non_finite = counters[@intFromEnum(CounterIndex.mesh_cull_non_finite)],
         };
     }
 
@@ -131,9 +131,9 @@ pub const Snapshot = extern struct {
         return .{
             .empty_slices = self.mesh_cull_empty_slices,
             .invalid_strips = self.mesh_cull_invalid_strips,
-            .anchor_failures = self.mesh_cull_anchor_failures,
+            .zero_area = self.mesh_cull_zero_area,
             .clip_empty = self.mesh_cull_clip_empty,
-            .transform_failures = self.mesh_cull_transform_failures,
+            .non_finite = self.mesh_cull_non_finite,
         };
     }
 
@@ -179,7 +179,7 @@ fn perMille(numerator: u32, denominator: u32) u32 {
 
 test "shader stats counter ABI is a packed u32 array" {
     try std.testing.expectEqual(@as(usize, counter_count * @sizeOf(u32)), @sizeOf(Snapshot));
-    try std.testing.expectEqual(@as(u32, 23), @intFromEnum(CounterIndex.mesh_cull_transform_failures));
+    try std.testing.expectEqual(@as(u32, 23), @intFromEnum(CounterIndex.mesh_cull_non_finite));
 }
 
 test "shader stats snapshot maps task and mesh counters" {
@@ -199,9 +199,9 @@ test "shader stats snapshot maps task and mesh counters" {
     counters[@intFromEnum(CounterIndex.mesh_tiles_culled)] = 16;
     counters[@intFromEnum(CounterIndex.mesh_cull_empty_slices)] = 1;
     counters[@intFromEnum(CounterIndex.mesh_cull_invalid_strips)] = 2;
-    counters[@intFromEnum(CounterIndex.mesh_cull_anchor_failures)] = 3;
+    counters[@intFromEnum(CounterIndex.mesh_cull_zero_area)] = 3;
     counters[@intFromEnum(CounterIndex.mesh_cull_clip_empty)] = 4;
-    counters[@intFromEnum(CounterIndex.mesh_cull_transform_failures)] = 5;
+    counters[@intFromEnum(CounterIndex.mesh_cull_non_finite)] = 5;
 
     const snapshot = Snapshot.fromCounters(&counters);
     try std.testing.expectEqual(@as(u32, 3), snapshot.task_workgroups);
@@ -220,9 +220,9 @@ test "shader stats snapshot maps task and mesh counters" {
     const mesh_cull = snapshot.meshCullBreakdown();
     try std.testing.expectEqual(@as(u32, 1), mesh_cull.empty_slices);
     try std.testing.expectEqual(@as(u32, 2), mesh_cull.invalid_strips);
-    try std.testing.expectEqual(@as(u32, 3), mesh_cull.anchor_failures);
+    try std.testing.expectEqual(@as(u32, 3), mesh_cull.zero_area);
     try std.testing.expectEqual(@as(u32, 4), mesh_cull.clip_empty);
-    try std.testing.expectEqual(@as(u32, 5), mesh_cull.transform_failures);
+    try std.testing.expectEqual(@as(u32, 5), mesh_cull.non_finite);
     try std.testing.expectEqual(@as(u32, 15), mesh_cull.total());
 }
 

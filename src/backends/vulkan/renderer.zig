@@ -14,6 +14,7 @@ const shader_stats_mod = heavy_slug.gpu.shader_stats;
 pub const Error = error{
     NoSuitableMemoryType,
     FrameResourcesInUse,
+    InvalidFrameView,
     MeshTaskWorkgroupLimitExceeded,
 };
 
@@ -41,7 +42,7 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
             const shader_analysis = self.shader.analysis();
             const mesh_cull = self.shader.meshCullBreakdown();
             std.log.scoped(.renderer).debug(
-                "vulkan stats: binding_writes={d} binding_pushes={d} frame_busy={d} task_visible={d}/{d} mesh_tiles={d}/{d} tile_culled={d} mesh_cull=empty:{d},invalid:{d},anchor:{d},clip:{d},xform:{d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
+                "vulkan stats: binding_writes={d} binding_pushes={d} frame_busy={d} task_visible={d}/{d} mesh_tiles={d}/{d} tile_culled={d} mesh_cull=empty:{d},invalid:{d},zero_area:{d},clip:{d},nonfinite:{d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
                 .{
                     self.binding_writes,
                     self.binding_pushes,
@@ -53,9 +54,9 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
                     self.shader.mesh_tiles_culled,
                     mesh_cull.empty_slices,
                     mesh_cull.invalid_strips,
-                    mesh_cull.anchor_failures,
+                    mesh_cull.zero_area,
                     mesh_cull.clip_empty,
-                    mesh_cull.transform_failures,
+                    mesh_cull.non_finite,
                     self.shader.fragment_invocations,
                     shader_analysis.fragments_per_visible_glyph_milli,
                     shader_analysis.fragments_per_mesh_tile_milli,
@@ -86,8 +87,6 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
 
 pub const Target = struct {
     command_buffer: vk.CommandBuffer,
-    projection: [4][4]f32,
-    viewport: [2]f32,
 };
 
 const GlyphBatch = heavy_slug.core.render.GlyphBatch(bindings.GlyphInstance);
@@ -96,6 +95,7 @@ const ShaderStatsBuffers = if (backend_options.shader_stats) [frames_in_flight]M
 pub const Frame = struct {
     renderer: *Renderer,
     batch: GlyphBatch,
+    view: core_types.FrameView2D,
     submitted: bool = false,
 
     pub fn drawText(
@@ -103,12 +103,12 @@ pub const Frame = struct {
         run: heavy_slug.TextRun,
     ) !void {
         if (self.submitted) return error.FrameAlreadySubmitted;
-        try self.renderer.core.appendRun(self.renderer, &self.batch, run);
+        try self.renderer.core.appendRun(self.renderer, &self.batch, self.view, run);
     }
 
     pub fn submit(self: *Frame, target: Target) !render.FrameToken {
         if (self.submitted) return error.FrameAlreadySubmitted;
-        const token = try self.renderer.submitFrame(target, self.batch.count());
+        const token = try self.renderer.submitFrame(target, self.view, self.batch.count());
         self.batch.markSubmitted();
         self.submitted = true;
         return token;
@@ -371,13 +371,14 @@ pub const Renderer = struct {
         self.core.beginFrame(self.completed_frame, self);
     }
 
-    pub fn beginFrame(self: *Renderer) Error!Frame {
+    pub fn beginFrame(self: *Renderer, view: core_types.FrameView2D) Error!Frame {
         try self.reserveFrameSlot();
         const glyphs: [*]bindings.GlyphInstance = @ptrCast(@alignCast(self.glyph_buffers[self.active_frame].mapped));
         const glyph_slice = glyphs[0..self.core.max_glyphs_per_frame];
         return .{
             .renderer = self,
             .batch = GlyphBatch.init(glyph_slice),
+            .view = view,
         };
     }
 
@@ -432,16 +433,13 @@ pub const Renderer = struct {
     /// rendering pass. The caller is responsible for starting/ending the
     /// render pass and submitting the command buffer.
     ///
-    /// `projection`: column-major 4x4 projection matrix (e.g. orthographic).
-    /// `viewport`: viewport dimensions in pixels [width, height].
-    fn submitFrame(self: *Renderer, target: Target, glyph_count: u32) Error!render.FrameToken {
+    fn submitFrame(self: *Renderer, target: Target, view: core_types.FrameView2D, glyph_count: u32) Error!render.FrameToken {
         if (glyph_count == 0) return self.last_submitted_frame;
         const workgroup_count = mesh_limits.taskWorkgroupCount(glyph_count);
         try validateTaskDrawWorkgroups(self.mesh_shader_properties, workgroup_count);
 
         const vk_cmd = target.command_buffer;
-        const projection = target.projection;
-        const viewport = target.viewport;
+        const viewport = viewportToF32(view) orelse return Error.InvalidFrameView;
 
         const vk_viewport = yUpViewport(viewport);
         self.dispatch.cmdSetViewport(vk_cmd, 0, &.{vk_viewport});
@@ -449,8 +447,8 @@ pub const Renderer = struct {
         const vk_scissor = vk.Rect2D{
             .offset = .{ .x = 0, .y = 0 },
             .extent = .{
-                .width = @intFromFloat(viewport[0]),
-                .height = @intFromFloat(viewport[1]),
+                .width = @intFromFloat(@round(viewport[0])),
+                .height = @intFromFloat(@round(viewport[1])),
             },
         };
         self.dispatch.cmdSetScissor(vk_cmd, 0, &.{vk_scissor});
@@ -486,16 +484,11 @@ pub const Renderer = struct {
             self.stats.binding_pushes += push_stats.push_calls;
         }
 
-        // Scale projection from pixel-space to 26.6 em-space.
-        // Motor translations and em-box extents are in 26.6 units (64x pixels).
-        // Dividing columns 0 and 1 by 64 maps 26.6 world coords to clip space.
-        const em_projection = render.projectionToEm(projection);
-
         const params = bindings.FrameParams{
-            .projection = em_projection,
             .viewport_size = viewport,
             .glyph_count = glyph_count,
             .glyph_base = 0,
+            .diagnostic_flags = 0,
         };
         self.dispatch.cmdPushConstants(
             vk_cmd,
@@ -545,6 +538,19 @@ fn resetShaderStatsBuffer(buffer: MappedBuffer) void {
 fn readShaderStatsBuffer(buffer: MappedBuffer) heavy_slug.ShaderStats {
     const bytes: []align(@alignOf(u32)) const u8 = @alignCast(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
     return shader_stats_mod.Snapshot.fromBytes(bytes);
+}
+
+fn viewportToF32(view: core_types.FrameView2D) ?[2]f32 {
+    if (!view.isFinite()) return null;
+    if (view.viewport_width > @as(f64, @floatFromInt(std.math.maxInt(u32))) or
+        view.viewport_height > @as(f64, @floatFromInt(std.math.maxInt(u32))))
+    {
+        return null;
+    }
+    return .{
+        @floatCast(view.viewport_width),
+        @floatCast(view.viewport_height),
+    };
 }
 
 // Match the Metal demo's y-up clip-space convention without changing shared scene input math.

@@ -29,13 +29,12 @@ const Cubic = struct {
 };
 
 pub fn curveBounds(view: decode.BlobView, curve_index: u32) CurveBounds {
-    const texels = view.curveTexels(curve_index);
-    const bbox = texels[2];
+    const curve = view.curve(curve_index);
     return .{
-        .min_x = bbox.r,
-        .max_x = bbox.g,
-        .min_y = bbox.b,
-        .max_y = bbox.a,
+        .min_x = curve.bbox_min_x_q,
+        .max_x = curve.bbox_max_x_q,
+        .min_y = curve.bbox_min_y_q,
+        .max_y = curve.bbox_max_y_q,
     };
 }
 
@@ -81,13 +80,18 @@ pub fn coverageAtPoint(view: decode.BlobView, point: Point, even_odd: bool) bool
 }
 
 fn readCurve(view: decode.BlobView, curve_index: u32) Cubic {
-    const texels = view.curveTexels(curve_index);
+    const curve = view.curve(curve_index);
+    const fraction_bits: u8 = @intCast(view.header.fraction_bits);
     return .{
-        .p0 = .{ .x = @floatFromInt(texels[0].r), .y = @floatFromInt(texels[0].g) },
-        .p1 = .{ .x = @floatFromInt(texels[0].b), .y = @floatFromInt(texels[0].a) },
-        .p2 = .{ .x = @floatFromInt(texels[1].r), .y = @floatFromInt(texels[1].g) },
-        .p3 = .{ .x = @floatFromInt(texels[1].b), .y = @floatFromInt(texels[1].a) },
+        .p0 = .{ .x = formatDequantize(curve.p0_x_q, fraction_bits), .y = formatDequantize(curve.p0_y_q, fraction_bits) },
+        .p1 = .{ .x = formatDequantize(curve.p1_x_q, fraction_bits), .y = formatDequantize(curve.p1_y_q, fraction_bits) },
+        .p2 = .{ .x = formatDequantize(curve.p2_x_q, fraction_bits), .y = formatDequantize(curve.p2_y_q, fraction_bits) },
+        .p3 = .{ .x = formatDequantize(curve.p3_x_q, fraction_bits), .y = formatDequantize(curve.p3_y_q, fraction_bits) },
     };
+}
+
+fn formatDequantize(v: i32, fraction_bits: u8) f64 {
+    return @import("format.zig").dequantize(v, fraction_bits);
 }
 
 fn curveWindingAtPoint(curve: Cubic, point: Point) i32 {
@@ -194,7 +198,7 @@ test "reference: h-band candidates are a superset of full-scan y-overlap" {
         },
     };
 
-    var blob = try encode.curves(std.testing.allocator, &curves);
+    var blob = try encode.curves(std.testing.allocator, &curves, @import("format.zig").default_fraction_bits);
     defer blob.deinit();
 
     const view = try decode.BlobView.initCoverageBlob(blob);
@@ -220,10 +224,10 @@ test "reference: analytic point coverage handles filled contours" {
         .{ .p0 = .{ .x = 0, .y = 3 }, .p1 = .{ .x = 0, .y = 2 }, .p2 = .{ .x = 0, .y = 1 }, .p3 = .{ .x = 0, .y = 0 } },
     };
 
-    var blob = try encode.curves(std.testing.allocator, &square);
+    var blob = try encode.curves(std.testing.allocator, &square, @import("format.zig").default_fraction_bits);
     defer blob.deinit();
     const view = try decode.BlobView.initCoverageBlob(blob);
 
-    try std.testing.expect(coverageAtPoint(view, .{ .x = 6, .y = 6 }, false));
-    try std.testing.expect(!coverageAtPoint(view, .{ .x = 20, .y = 6 }, false));
+    try std.testing.expect(coverageAtPoint(view, .{ .x = 1.5, .y = 1.5 }, false));
+    try std.testing.expect(!coverageAtPoint(view, .{ .x = 5.0, .y = 1.5 }, false));
 }
