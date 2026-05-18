@@ -5,7 +5,7 @@
 `heavy-slug` is a Zig 0.16 GPU text rendering library for analytic,
 resolution-independent text. It shapes Unicode with HarfBuzz, captures native
 font outlines with FreeType, encodes precision-tiered cubic coverage blobs, and
-renders them with task, mesh, and fragment shaders on Vulkan 1.4 and Metal 4.
+renders them with mesh and fragment shaders on Vulkan 1.4 and Metal 4.
 
 `README.md` is the canonical public architecture and build document. Keep it
 accurate when changing public APIs, backend requirements, shader layout,
@@ -35,8 +35,7 @@ window-toolkit object.
 - `shaders/core/` contains shared Slang 2026 ABI, stats, chart mapping,
   h-band, and coverage logic.
 - `shaders/backend_vulkan/` and `shaders/backend_metal/` contain binding shims.
-- `shaders/entries/` contains `task.slang`, `mesh.slang`, and
-  `fragment.slang`.
+- `shaders/entries/` contains `mesh.slang` and `fragment.slang`.
 - `tools/layout_gen.zig` generates Zig GPU ABI structs from Slang reflection.
 
 ## Build, Test, And Development Commands
@@ -83,7 +82,7 @@ Metal, Wayland, Cocoa, or any window toolkit. Keep `vulkan` and
 demos. It must support Slang 2026, SPIR-V 1.6, and `metallib_4_0`.
 
 Vulkan runtime/demo execution needs a Vulkan loader, a Vulkan 1.4 driver, core
-push descriptors, `VK_EXT_mesh_shader`, `VK_EXT_shader_object`, task/mesh shader
+push descriptors, `VK_EXT_mesh_shader`, `VK_EXT_shader_object`, mesh shader
 features, dynamic rendering, and sufficient mesh limits. Keep Vulkan pNext
 chains in `src/backends/vulkan/chains.zig`.
 
@@ -123,10 +122,10 @@ Prefer semantic names tied to renderer roles:
 
 - build steps: `spirv`, `msl`,
 - demo backends: `vulkan`, `metal`,
-- shader entries: `task`, `mesh`, `fragment`,
+- shader entries: `mesh`, `fragment`,
 - shader language mode: explicit `#language slang 2026` modules,
 - per-frame glyph records: `GlyphInstance`,
-- per-frame glyph storage: `GlyphBatch`,
+- per-frame glyph and meshlet storage: `FrameBatch`,
 - glyph-pool references: `GlyphBlobRef`,
 - shader ABI fields: `blob_ref`,
 - Vulkan per-frame resource binding helper: `FrameBindings`,

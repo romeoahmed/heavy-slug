@@ -52,12 +52,12 @@ void meshMain(
     if (gtid == 0)
     {
         bool emit = inRange;
-        uint cullReason = kMeshCullNone;
+        uint cullReason = kMeshletCullNone;
 
         if (!inRange || rectIsInvalid(meshlet.rect_min_q, meshlet.rect_max_q))
         {
             emit = false;
-            cullReason = kMeshCullInvalidStrip;
+            cullReason = kMeshletCullInvalidStrip;
         }
 
         float2 clipped[kMeshOutputVertices];
@@ -78,18 +78,18 @@ void meshMain(
             if (!isFinite2(meshlet.screen_anchor_px) || !isFinite2(p0) || !isFinite2(p1) || !isFinite2(p2) || !isFinite2(p3))
             {
                 emit = false;
-                cullReason = kMeshCullNonFinite;
+                cullReason = kMeshletCullNonFinite;
             }
             else if (abs(area2) <= 1.0e-12)
             {
                 emit = false;
-                cullReason = kMeshCullZeroArea;
+                cullReason = kMeshletCullZeroArea;
             }
             else
             {
                 emit = clipNdcQuad(p0, p1, p2, p3, clipped, clippedCount);
                 if (!emit)
-                    cullReason = kMeshCullClipEmpty;
+                    cullReason = kMeshletCullClipEmpty;
             }
         }
 
@@ -100,7 +100,7 @@ void meshMain(
         s_emit = emit ? 1u : 0u;
 
 #if HEAVY_SLUG_SHADER_STATS
-        addMeshTileStat(shaderStats, emit, cullReason);
+        addMeshletStat(shaderStats, emit, cullReason);
 #endif
     }
 

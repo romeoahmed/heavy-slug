@@ -2,9 +2,9 @@
 
 const std = @import("std");
 
-pub fn BackendContract(comptime Backend: type) void {
+pub fn checkBackend(comptime Backend: type) void {
     comptime {
-        const Impl = BackendImpl(Backend);
+        const Impl = backendImpl(Backend);
         requireDecl(Impl, "GlyphBlobRef");
         requireDecl(Impl, "FrameToken");
         requireDecl(Impl, "GlyphInstance");
@@ -14,21 +14,21 @@ pub fn BackendContract(comptime Backend: type) void {
     }
 }
 
-pub fn BackendImpl(comptime Backend: type) type {
+pub fn backendImpl(comptime Backend: type) type {
     return switch (@typeInfo(Backend)) {
         .pointer => |ptr| ptr.child,
         else => Backend,
     };
 }
 
-pub fn GlyphInstanceType(comptime Backend: type) type {
-    BackendContract(Backend);
-    return BackendImpl(Backend).GlyphInstance;
+pub fn glyphInstanceType(comptime Backend: type) type {
+    checkBackend(Backend);
+    return backendImpl(Backend).GlyphInstance;
 }
 
-pub fn GlyphMeshletType(comptime Backend: type) type {
-    BackendContract(Backend);
-    return BackendImpl(Backend).GlyphMeshlet;
+pub fn glyphMeshletType(comptime Backend: type) type {
+    checkBackend(Backend);
+    return backendImpl(Backend).GlyphMeshlet;
 }
 
 fn requireDecl(comptime T: type, comptime name: []const u8) void {
@@ -58,8 +58,8 @@ const GoodBackend = struct {
     pub fn retireBlob(_: *@This(), _: GlyphBlobRef) void {}
 };
 
-test "BackendContract accepts a complete backend shape" {
-    BackendContract(GoodBackend);
-    BackendContract(*GoodBackend);
+test "checkBackend accepts a complete backend shape" {
+    checkBackend(GoodBackend);
+    checkBackend(*GoodBackend);
     try std.testing.expect(true);
 }

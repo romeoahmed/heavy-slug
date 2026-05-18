@@ -2,12 +2,12 @@
 
 pub const backend_contract = @import("backend_contract.zig");
 pub const glyph_store = @import("glyph_store.zig");
-pub const glyph_batch = @import("glyph_batch.zig");
+pub const frame_batch = @import("frame_batch.zig");
 
 pub const renderer_core = @import("renderer_core.zig");
 
-pub const BackendContract = backend_contract.BackendContract;
-pub const FrameBatch = glyph_batch.FrameBatch;
+pub const checkBackend = backend_contract.checkBackend;
+pub const FrameBatch = frame_batch.FrameBatch;
 pub const GlyphStore = glyph_store.GlyphStore;
 pub const RendererOptions = renderer_core.RendererOptions;
 pub const RendererCore = renderer_core.RendererCore;
@@ -19,6 +19,6 @@ pub const FrameToken = renderer_core.FrameToken;
 test {
     _ = backend_contract;
     _ = glyph_store;
-    _ = glyph_batch;
+    _ = frame_batch;
     _ = renderer_core;
 }

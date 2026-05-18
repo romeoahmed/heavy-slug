@@ -29,8 +29,8 @@ pub const FontHandle = render.FontHandle;
 pub const FrameToken = render.FrameToken;
 pub const shader_stats_enabled = backend_options.shader_stats;
 pub const Stats = if (@import("builtin").mode == .Debug) struct {
-    common: render.Stats = .{},
-    frame_slot_wait_ns: u64 = 0,
+    core: render.Stats = .{},
+    slot_wait_ns: u64 = 0,
     shader: heavy_slug.ShaderStats = .{},
 
     pub fn reset(self: *@This()) void {
@@ -39,42 +39,42 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
 
     pub fn log(self: *const @This()) void {
         if (backend_options.shader_stats) {
-            const shader_analysis = self.shader.analysis();
-            const mesh_cull = self.shader.meshCullBreakdown();
+            const shader_ratios = self.shader.ratios();
+            const meshlet_cull = self.shader.meshletCull();
             std.log.scoped(.renderer).debug(
-                "metal stats: wait_ns={d} cpu_glyphs={d} cpu_meshlets={d} draw_chunks={d} mesh_tiles={d}/{d} tile_culled={d} mesh_cull=empty:{d},invalid:{d},zero_area:{d},clip:{d},nonfinite:{d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} meshlets_per_glyph_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
+                "metal stats: wait_ns={d} submitted_glyphs={d} submitted_meshlets={d} draw_chunks={d} meshlets={d}/{d} meshlet_culled={d} meshlet_cull=empty:{d},invalid:{d},zero_area:{d},clip:{d},nonfinite:{d} fragments={d} frag_per_glyph_milli={d} frag_per_meshlet_milli={d} meshlets_per_glyph_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
                 .{
-                    self.frame_slot_wait_ns,
-                    self.shader.cpu_glyphs_submitted,
-                    self.shader.cpu_meshlets_submitted,
+                    self.slot_wait_ns,
+                    self.shader.submitted_glyphs,
+                    self.shader.submitted_meshlets,
                     self.shader.draw_chunks,
-                    self.shader.mesh_tiles_emitted,
+                    self.shader.meshlets_emitted,
                     self.shader.mesh_workgroups,
-                    self.shader.mesh_tiles_culled,
-                    mesh_cull.empty_slices,
-                    mesh_cull.invalid_strips,
-                    mesh_cull.zero_area,
-                    mesh_cull.clip_empty,
-                    mesh_cull.non_finite,
+                    self.shader.meshlets_culled,
+                    meshlet_cull.empty_slices,
+                    meshlet_cull.invalid_strips,
+                    meshlet_cull.zero_area,
+                    meshlet_cull.clip_empty,
+                    meshlet_cull.non_finite,
                     self.shader.fragment_invocations,
-                    shader_analysis.fragments_per_submitted_glyph_milli,
-                    shader_analysis.fragments_per_mesh_tile_milli,
-                    shader_analysis.meshlets_per_glyph_milli,
-                    shader_analysis.full_scan_fragment_per_mille,
+                    shader_ratios.fragments_per_glyph_milli,
+                    shader_ratios.fragments_per_meshlet_milli,
+                    shader_ratios.meshlets_per_glyph_milli,
+                    shader_ratios.full_scan_fragment_per_mille,
                     self.shader.totalCurveIntegrations(),
                     self.shader.totalCurveTests(),
-                    shader_analysis.bbox_reject_per_mille,
-                    shader_analysis.bbox_empty_fragment_per_mille,
-                    shader_analysis.coverage_zero_fragment_per_mille,
+                    shader_ratios.bbox_reject_per_mille,
+                    shader_ratios.bbox_empty_fragment_per_mille,
+                    shader_ratios.coverage_zero_fragment_per_mille,
                 },
             );
         } else {
             std.log.scoped(.renderer).debug(
                 "metal stats: wait_ns={d}",
-                .{self.frame_slot_wait_ns},
+                .{self.slot_wait_ns},
             );
         }
-        self.common.log(.renderer);
+        self.core.log(.renderer);
     }
 } else struct {
     pub fn reset(_: *@This()) void {}
@@ -110,31 +110,31 @@ fn seedShaderStatsBuffer(buffer: metal.Buffer, glyph_count: u32, meshlet_count: 
 
 fn readShaderStatsBuffer(buffer: metal.Buffer) heavy_slug.ShaderStats {
     const bytes: []align(@alignOf(u32)) const u8 = @alignCast(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
-    return shader_stats_mod.Snapshot.fromBytes(bytes);
+    return shader_stats_mod.Stats.fromBytes(bytes);
 }
 
-fn viewportToU32(view: core_types.FrameView2D) ?[2]u32 {
+fn viewSizeU32(view: core_types.View) ?[2]u32 {
     if (!view.isFinite()) return null;
-    if (view.viewport_width > @as(f64, @floatFromInt(std.math.maxInt(u32))) or
-        view.viewport_height > @as(f64, @floatFromInt(std.math.maxInt(u32))))
+    if (view.width > @as(f64, @floatFromInt(std.math.maxInt(u32))) or
+        view.height > @as(f64, @floatFromInt(std.math.maxInt(u32))))
     {
         return null;
     }
     return .{
-        @intFromFloat(@round(view.viewport_width)),
-        @intFromFloat(@round(view.viewport_height)),
+        @intFromFloat(@round(view.width)),
+        @intFromFloat(@round(view.height)),
     };
 }
 
-fn writeFrameParams(buffer: metal.Buffer, viewport: [2]u32, meshlet_count: u32) void {
+fn writeFrameParams(buffer: metal.Buffer, view_size: [2]u32, meshlet_count: u32) void {
     var meshlet_base: u32 = 0;
     var chunk_index: usize = 0;
     while (meshlet_base < meshlet_count) : (chunk_index += 1) {
         const chunk_count = @min(meshlet_count - meshlet_base, metal_mesh_threadgroups_per_draw);
         const params = FrameParams{
-            .viewport_size = .{ @floatFromInt(viewport[0]), @floatFromInt(viewport[1]) },
+            .viewport_size = .{ @floatFromInt(view_size[0]), @floatFromInt(view_size[1]) },
             .screen_from_framebuffer_2x2 = .{ 1, 0, 0, -1 },
-            .screen_from_framebuffer_offset = .{ 0, @floatFromInt(viewport[1]) },
+            .screen_from_framebuffer_offset = .{ 0, @floatFromInt(view_size[1]) },
             .meshlet_count = chunk_count,
             .meshlet_base = meshlet_base,
         };
@@ -173,7 +173,7 @@ const FrameSlot = struct {
 pub const Frame = struct {
     renderer: *Renderer,
     batch: FrameBatch,
-    view: core_types.FrameView2D,
+    view: core_types.View,
     submitted: bool = false,
 
     pub fn drawText(
@@ -208,8 +208,8 @@ pub const Renderer = struct {
     slot_tokens: [frames_in_flight]render.FrameToken,
     last_submitted_frame: render.FrameToken,
     completed_frame: render.FrameToken,
-    stats: Stats,
-    shader_stats_snapshot: heavy_slug.ShaderStats,
+    debug_stats: Stats,
+    last_shader_stats: heavy_slug.ShaderStats,
 
     pub fn init(
         context: Context,
@@ -264,8 +264,8 @@ pub const Renderer = struct {
             .slot_tokens = .{0} ** frames_in_flight,
             .last_submitted_frame = 0,
             .completed_frame = 0,
-            .stats = .{},
-            .shader_stats_snapshot = .{},
+            .debug_stats = .{},
+            .last_shader_stats = .{},
         };
     }
 
@@ -289,7 +289,7 @@ pub const Renderer = struct {
         }
 
         self.active_frame = (self.active_frame + 1) % frames_in_flight;
-        self.stats.reset();
+        self.debug_stats.reset();
         var error_buf: [2048]u8 = undefined;
         @memset(&error_buf, 0);
         const wait_start = monotonicNs();
@@ -299,10 +299,10 @@ pub const Renderer = struct {
         };
         if (@import("builtin").mode == .Debug) {
             const wait_end = monotonicNs();
-            self.stats.frame_slot_wait_ns = if (wait_end >= wait_start) wait_end - wait_start else 0;
+            self.debug_stats.slot_wait_ns = if (wait_end >= wait_start) wait_end - wait_start else 0;
         }
         if (backend_options.shader_stats and self.slot_tokens[self.active_frame] > self.completed_frame) {
-            self.shader_stats_snapshot = readShaderStatsBuffer(self.frame_slots[self.active_frame].shader_stats);
+            self.last_shader_stats = readShaderStatsBuffer(self.frame_slots[self.active_frame].shader_stats);
         }
         if (self.slot_tokens[self.active_frame] > self.completed_frame) {
             self.completed_frame = self.slot_tokens[self.active_frame];
@@ -313,15 +313,15 @@ pub const Renderer = struct {
         self.core.beginFrame(self.completed_frame, self);
     }
 
-    pub fn statsSnapshot(self: *const Renderer) Stats {
+    pub fn stats(self: *const Renderer) Stats {
         if (@import("builtin").mode != .Debug) return .{};
-        var out = self.stats;
-        out.common = self.core.stats;
-        if (backend_options.shader_stats) out.shader = self.shader_stats_snapshot;
+        var out = self.debug_stats;
+        out.core = self.core.stats;
+        if (backend_options.shader_stats) out.shader = self.last_shader_stats;
         return out;
     }
 
-    pub fn beginFrame(self: *Renderer, view: core_types.FrameView2D) Error!Frame {
+    pub fn beginFrame(self: *Renderer, view: core_types.View) Error!Frame {
         try self.reserveFrameSlot();
         const glyphs: [*]AbiGlyphInstance = @ptrCast(@alignCast(self.frame_slots[self.active_frame].glyphs.mapped));
         const glyph_slice = glyphs[0..self.core.max_glyphs_per_frame];
@@ -350,7 +350,7 @@ pub const Renderer = struct {
         return self.completed_frame;
     }
 
-    fn submitFrame(self: *Renderer, target: Target, view: core_types.FrameView2D, glyph_count: u32, meshlet_count: u32) Error!render.FrameToken {
+    fn submitFrame(self: *Renderer, target: Target, view: core_types.View, glyph_count: u32, meshlet_count: u32) Error!render.FrameToken {
         if (glyph_count == 0 or meshlet_count == 0) {
             if (self.frame_reserved) {
                 metal.releaseFrameSlot(self.context, self.active_frame);
@@ -359,7 +359,7 @@ pub const Renderer = struct {
             return self.last_submitted_frame;
         }
 
-        const viewport = viewportToU32(view) orelse return Error.InvalidFrameView;
+        const view_size = viewSizeU32(view) orelse return Error.InvalidView;
         const clear_color = target.clear_color;
         const frame_slot = &self.frame_slots[self.active_frame];
         const draw_chunks = drawChunkCount(meshlet_count);
@@ -371,13 +371,13 @@ pub const Renderer = struct {
         else
             null;
 
-        writeFrameParams(frame_slot.frame_params, viewport, meshlet_count);
+        writeFrameParams(frame_slot.frame_params, view_size, meshlet_count);
 
         const workgroup_count = meshlet_count;
         var error_buf: [2048]u8 = undefined;
         @memset(&error_buf, 0);
         metal.draw(self.context, .{
-            .viewport = viewport,
+            .viewport = view_size,
             .clear_color = clear_color,
             .glyphs = frame_slot.glyphs,
             .meshlets = frame_slot.meshlets,
@@ -396,8 +396,8 @@ pub const Renderer = struct {
         self.frame_reserved = false;
 
         if (@import("builtin").mode == .Debug) {
-            self.core.stats.instances_submitted += glyph_count;
-            self.core.stats.meshlets_submitted += meshlet_count;
+            self.core.stats.submitted_glyphs += glyph_count;
+            self.core.stats.submitted_meshlets += meshlet_count;
             self.core.stats.pool = self.core.poolSnapshot();
         }
         self.last_submitted_frame +%= 1;
@@ -429,7 +429,7 @@ test "Metal renderer public API compiles" {
     try std.testing.expectEqual(backend_options.shader_stats, shader_stats_enabled);
     _ = @TypeOf(Context.init);
     _ = @TypeOf(Renderer.init);
-    heavy_slug.core.render.BackendContract(Renderer);
+    heavy_slug.core.render.checkBackend(Renderer);
 }
 
 test "Metal frame params are chunked by mesh threadgroup draw limit" {

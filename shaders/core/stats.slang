@@ -9,8 +9,8 @@ public static const uint kShaderStatFullScanFragments = 2;
 public static const uint kShaderStatCandidateCurveTests = 3;
 public static const uint kShaderStatFullScanCurveTests = 4;
 public static const uint kShaderStatEmptyFragments = 5;
-public static const uint kShaderStatCpuGlyphsSubmitted = 6;
-public static const uint kShaderStatCpuMeshletsSubmitted = 7;
+public static const uint kShaderStatSubmittedGlyphs = 6;
+public static const uint kShaderStatSubmittedMeshlets = 7;
 public static const uint kShaderStatDrawChunks = 8;
 public static const uint kShaderStatFrameSubmissions = 9;
 public static const uint kShaderStatMeshWorkgroups = 10;
@@ -20,43 +20,43 @@ public static const uint kShaderStatCandidateCurveIntegrations = 13;
 public static const uint kShaderStatFullScanCurveIntegrations = 14;
 public static const uint kShaderStatBboxEmptyFragments = 15;
 public static const uint kShaderStatCoverageZeroFragments = 16;
-public static const uint kShaderStatMeshTilesEmitted = 17;
-public static const uint kShaderStatMeshTilesCulled = 18;
-public static const uint kShaderStatMeshCullEmptySlices = 19;
-public static const uint kShaderStatMeshCullInvalidStrips = 20;
-public static const uint kShaderStatMeshCullZeroArea = 21;
-public static const uint kShaderStatMeshCullClipEmpty = 22;
-public static const uint kShaderStatMeshCullNonFinite = 23;
+public static const uint kShaderStatMeshletsEmitted = 17;
+public static const uint kShaderStatMeshletsCulled = 18;
+public static const uint kShaderStatMeshletCullEmptySlices = 19;
+public static const uint kShaderStatMeshletCullInvalidStrips = 20;
+public static const uint kShaderStatMeshletCullZeroArea = 21;
+public static const uint kShaderStatMeshletCullClipEmpty = 22;
+public static const uint kShaderStatMeshletCullNonFinite = 23;
 
-public static const uint kMeshCullNone = 0;
-public static const uint kMeshCullEmptySlice = 1;
-public static const uint kMeshCullInvalidStrip = 2;
-public static const uint kMeshCullZeroArea = 3;
-public static const uint kMeshCullClipEmpty = 4;
-public static const uint kMeshCullNonFinite = 5;
+public static const uint kMeshletCullNone = 0;
+public static const uint kMeshletCullEmptySlice = 1;
+public static const uint kMeshletCullInvalidStrip = 2;
+public static const uint kMeshletCullZeroArea = 3;
+public static const uint kMeshletCullClipEmpty = 4;
+public static const uint kMeshletCullNonFinite = 5;
 
 public void addShaderStat(RWStructuredBuffer<uint> counters, uint index, uint value)
 {
     InterlockedAdd(counters[index], value);
 }
 
-public void addMeshTileStat(RWStructuredBuffer<uint> counters, bool emitted, uint cullReason)
+public void addMeshletStat(RWStructuredBuffer<uint> counters, bool emitted, uint cullReason)
 {
     if (emitted)
     {
-        addShaderStat(counters, kShaderStatMeshTilesEmitted, 1);
+        addShaderStat(counters, kShaderStatMeshletsEmitted, 1);
         return;
     }
 
-    addShaderStat(counters, kShaderStatMeshTilesCulled, 1);
-    if (cullReason == kMeshCullEmptySlice)
-        addShaderStat(counters, kShaderStatMeshCullEmptySlices, 1);
-    else if (cullReason == kMeshCullInvalidStrip)
-        addShaderStat(counters, kShaderStatMeshCullInvalidStrips, 1);
-    else if (cullReason == kMeshCullZeroArea)
-        addShaderStat(counters, kShaderStatMeshCullZeroArea, 1);
-    else if (cullReason == kMeshCullClipEmpty)
-        addShaderStat(counters, kShaderStatMeshCullClipEmpty, 1);
-    else if (cullReason == kMeshCullNonFinite)
-        addShaderStat(counters, kShaderStatMeshCullNonFinite, 1);
+    addShaderStat(counters, kShaderStatMeshletsCulled, 1);
+    if (cullReason == kMeshletCullEmptySlice)
+        addShaderStat(counters, kShaderStatMeshletCullEmptySlices, 1);
+    else if (cullReason == kMeshletCullInvalidStrip)
+        addShaderStat(counters, kShaderStatMeshletCullInvalidStrips, 1);
+    else if (cullReason == kMeshletCullZeroArea)
+        addShaderStat(counters, kShaderStatMeshletCullZeroArea, 1);
+    else if (cullReason == kMeshletCullClipEmpty)
+        addShaderStat(counters, kShaderStatMeshletCullClipEmpty, 1);
+    else if (cullReason == kMeshletCullNonFinite)
+        addShaderStat(counters, kShaderStatMeshletCullNonFinite, 1);
 }

@@ -14,7 +14,7 @@ const shader_stats_mod = heavy_slug.gpu.shader_stats;
 pub const Error = error{
     NoSuitableMemoryType,
     FrameResourcesInUse,
-    InvalidFrameView,
+    InvalidView,
     MeshWorkgroupLimitExceeded,
 };
 
@@ -27,7 +27,7 @@ pub const shader_stats_enabled = backend_options.shader_stats;
 const frames_in_flight = 3;
 
 pub const Stats = if (@import("builtin").mode == .Debug) struct {
-    common: render.Stats = .{},
+    core: render.Stats = .{},
     binding_writes: u32 = 0,
     binding_pushes: u32 = 0,
     frame_resources_in_use: u32 = 0,
@@ -39,35 +39,35 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
 
     pub fn log(self: *const @This()) void {
         if (backend_options.shader_stats) {
-            const shader_analysis = self.shader.analysis();
-            const mesh_cull = self.shader.meshCullBreakdown();
+            const shader_ratios = self.shader.ratios();
+            const meshlet_cull = self.shader.meshletCull();
             std.log.scoped(.renderer).debug(
-                "vulkan stats: binding_writes={d} binding_pushes={d} frame_busy={d} cpu_glyphs={d} cpu_meshlets={d} draw_chunks={d} mesh_tiles={d}/{d} tile_culled={d} mesh_cull=empty:{d},invalid:{d},zero_area:{d},clip:{d},nonfinite:{d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} meshlets_per_glyph_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
+                "vulkan stats: binding_writes={d} binding_pushes={d} frame_busy={d} submitted_glyphs={d} submitted_meshlets={d} draw_chunks={d} meshlets={d}/{d} meshlet_culled={d} meshlet_cull=empty:{d},invalid:{d},zero_area:{d},clip:{d},nonfinite:{d} fragments={d} frag_per_glyph_milli={d} frag_per_meshlet_milli={d} meshlets_per_glyph_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
                 .{
                     self.binding_writes,
                     self.binding_pushes,
                     self.frame_resources_in_use,
-                    self.shader.cpu_glyphs_submitted,
-                    self.shader.cpu_meshlets_submitted,
+                    self.shader.submitted_glyphs,
+                    self.shader.submitted_meshlets,
                     self.shader.draw_chunks,
-                    self.shader.mesh_tiles_emitted,
+                    self.shader.meshlets_emitted,
                     self.shader.mesh_workgroups,
-                    self.shader.mesh_tiles_culled,
-                    mesh_cull.empty_slices,
-                    mesh_cull.invalid_strips,
-                    mesh_cull.zero_area,
-                    mesh_cull.clip_empty,
-                    mesh_cull.non_finite,
+                    self.shader.meshlets_culled,
+                    meshlet_cull.empty_slices,
+                    meshlet_cull.invalid_strips,
+                    meshlet_cull.zero_area,
+                    meshlet_cull.clip_empty,
+                    meshlet_cull.non_finite,
                     self.shader.fragment_invocations,
-                    shader_analysis.fragments_per_submitted_glyph_milli,
-                    shader_analysis.fragments_per_mesh_tile_milli,
-                    shader_analysis.meshlets_per_glyph_milli,
-                    shader_analysis.full_scan_fragment_per_mille,
+                    shader_ratios.fragments_per_glyph_milli,
+                    shader_ratios.fragments_per_meshlet_milli,
+                    shader_ratios.meshlets_per_glyph_milli,
+                    shader_ratios.full_scan_fragment_per_mille,
                     self.shader.totalCurveIntegrations(),
                     self.shader.totalCurveTests(),
-                    shader_analysis.bbox_reject_per_mille,
-                    shader_analysis.bbox_empty_fragment_per_mille,
-                    shader_analysis.coverage_zero_fragment_per_mille,
+                    shader_ratios.bbox_reject_per_mille,
+                    shader_ratios.bbox_empty_fragment_per_mille,
+                    shader_ratios.coverage_zero_fragment_per_mille,
                 },
             );
         } else {
@@ -80,7 +80,7 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
                 },
             );
         }
-        self.common.log(.renderer);
+        self.core.log(.renderer);
     }
 } else struct {
     pub fn reset(_: *@This()) void {}
@@ -97,7 +97,7 @@ const ShaderStatsBuffers = if (backend_options.shader_stats) [frames_in_flight]M
 pub const Frame = struct {
     renderer: *Renderer,
     batch: FrameBatch,
-    view: core_types.FrameView2D,
+    view: core_types.View,
     submitted: bool = false,
 
     pub fn drawText(
@@ -257,13 +257,13 @@ pub const Renderer = struct {
     active_frame: u32,
 
     // Per-frame debug counters, compiled to no-ops outside Debug.
-    stats: Stats,
+    debug_stats: Stats,
 
     allocator: std.mem.Allocator,
     last_submitted_frame: render.FrameToken,
     completed_frame: render.FrameToken,
     frame_tokens: [frames_in_flight]render.FrameToken,
-    shader_stats_snapshot: heavy_slug.ShaderStats,
+    last_shader_stats: heavy_slug.ShaderStats,
 
     pub fn init(
         ctx: gpu_context.Context,
@@ -361,12 +361,12 @@ pub const Renderer = struct {
             .meshlet_buffers = meshlet_buffers,
             .shader_stats_buffers = shader_stats_buffers,
             .active_frame = frames_in_flight - 1,
-            .stats = .{},
+            .debug_stats = .{},
             .allocator = allocator,
             .last_submitted_frame = 0,
             .completed_frame = 0,
             .frame_tokens = .{0} ** frames_in_flight,
-            .shader_stats_snapshot = .{},
+            .last_shader_stats = .{},
         };
     }
 
@@ -388,17 +388,17 @@ pub const Renderer = struct {
     fn reserveFrameSlot(self: *Renderer) Error!void {
         const next_frame = (self.active_frame + 1) % frames_in_flight;
         if (self.frame_tokens[next_frame] > self.completed_frame) {
-            if (@import("builtin").mode == .Debug) self.stats.frame_resources_in_use += 1;
+            if (@import("builtin").mode == .Debug) self.debug_stats.frame_resources_in_use += 1;
             return Error.FrameResourcesInUse;
         }
         self.active_frame = next_frame;
-        self.stats.reset();
+        self.debug_stats.reset();
         if (backend_options.shader_stats) resetShaderStatsBuffer(self.shader_stats_buffers[self.active_frame]);
         self.core.setRetireAfterToken(self.last_submitted_frame);
         self.core.beginFrame(self.completed_frame, self);
     }
 
-    pub fn beginFrame(self: *Renderer, view: core_types.FrameView2D) Error!Frame {
+    pub fn beginFrame(self: *Renderer, view: core_types.View) Error!Frame {
         try self.reserveFrameSlot();
         const glyphs: [*]bindings.GlyphInstance = @ptrCast(@alignCast(self.glyph_buffers[self.active_frame].mapped));
         const glyph_slice = glyphs[0..self.core.max_glyphs_per_frame];
@@ -419,11 +419,11 @@ pub const Renderer = struct {
         }
     }
 
-    pub fn statsSnapshot(self: *const Renderer) Stats {
+    pub fn stats(self: *const Renderer) Stats {
         if (@import("builtin").mode != .Debug) return .{};
-        var out = self.stats;
-        out.common = self.core.stats;
-        if (backend_options.shader_stats) out.shader = self.shader_stats_snapshot;
+        var out = self.debug_stats;
+        out.core = self.core.stats;
+        if (backend_options.shader_stats) out.shader = self.last_shader_stats;
         return out;
     }
 
@@ -443,7 +443,7 @@ pub const Renderer = struct {
             }
         }
         if (best_slot) |slot_i| {
-            self.shader_stats_snapshot = readShaderStatsBuffer(self.shader_stats_buffers[slot_i]);
+            self.last_shader_stats = readShaderStatsBuffer(self.shader_stats_buffers[slot_i]);
         }
     }
 
@@ -462,19 +462,19 @@ pub const Renderer = struct {
     /// rendering pass. The caller is responsible for starting/ending the
     /// render pass and submitting the command buffer.
     ///
-    fn submitFrame(self: *Renderer, target: Target, view: core_types.FrameView2D, glyph_count: u32, meshlet_count: u32) Error!render.FrameToken {
+    fn submitFrame(self: *Renderer, target: Target, view: core_types.View, glyph_count: u32, meshlet_count: u32) Error!render.FrameToken {
         if (glyph_count == 0 or meshlet_count == 0) return self.last_submitted_frame;
         const vk_cmd = target.command_buffer;
-        const viewport = viewportToF32(view) orelse return Error.InvalidFrameView;
+        const view_size = viewSizeF32(view) orelse return Error.InvalidView;
 
-        const vk_viewport = yUpViewport(viewport);
+        const vk_viewport = yUpViewport(view_size);
         self.dispatch.cmdSetViewportWithCount(vk_cmd, &.{vk_viewport});
 
         const vk_scissor = vk.Rect2D{
             .offset = .{ .x = 0, .y = 0 },
             .extent = .{
-                .width = @intFromFloat(@round(viewport[0])),
-                .height = @intFromFloat(@round(viewport[1])),
+                .width = @intFromFloat(@round(view_size[0])),
+                .height = @intFromFloat(@round(view_size[1])),
             },
         };
         self.dispatch.cmdSetScissorWithCount(vk_cmd, &.{vk_scissor});
@@ -522,8 +522,8 @@ pub const Renderer = struct {
             shader_stats_binding,
         );
         if (@import("builtin").mode == .Debug) {
-            self.stats.binding_writes += push_stats.binding_writes;
-            self.stats.binding_pushes += push_stats.push_calls;
+            self.debug_stats.binding_writes += push_stats.binding_writes;
+            self.debug_stats.binding_pushes += push_stats.push_calls;
         }
 
         var meshlet_base: u32 = 0;
@@ -532,9 +532,9 @@ pub const Renderer = struct {
             try validateMeshDrawWorkgroups(self.mesh_shader_properties, workgroup_count);
 
             const params = bindings.FrameParams{
-                .viewport_size = viewport,
+                .viewport_size = view_size,
                 .screen_from_framebuffer_2x2 = .{ 1, 0, 0, -1 },
-                .screen_from_framebuffer_offset = .{ 0, viewport[1] },
+                .screen_from_framebuffer_offset = .{ 0, view_size[1] },
                 .meshlet_count = workgroup_count,
                 .meshlet_base = meshlet_base,
             };
@@ -551,8 +551,8 @@ pub const Renderer = struct {
             meshlet_base += workgroup_count;
         }
         if (@import("builtin").mode == .Debug) {
-            self.core.stats.instances_submitted += glyph_count;
-            self.core.stats.meshlets_submitted += meshlet_count;
+            self.core.stats.submitted_glyphs += glyph_count;
+            self.core.stats.submitted_meshlets += meshlet_count;
             self.core.stats.pool = self.core.poolSnapshot();
         }
 
@@ -596,19 +596,19 @@ fn seedShaderStatsBuffer(buffer: MappedBuffer, glyph_count: u32, meshlet_count: 
 
 fn readShaderStatsBuffer(buffer: MappedBuffer) heavy_slug.ShaderStats {
     const bytes: []align(@alignOf(u32)) const u8 = @alignCast(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
-    return shader_stats_mod.Snapshot.fromBytes(bytes);
+    return shader_stats_mod.Stats.fromBytes(bytes);
 }
 
-fn viewportToF32(view: core_types.FrameView2D) ?[2]f32 {
+fn viewSizeF32(view: core_types.View) ?[2]f32 {
     if (!view.isFinite()) return null;
-    if (view.viewport_width > @as(f64, @floatFromInt(std.math.maxInt(u32))) or
-        view.viewport_height > @as(f64, @floatFromInt(std.math.maxInt(u32))))
+    if (view.width > @as(f64, @floatFromInt(std.math.maxInt(u32))) or
+        view.height > @as(f64, @floatFromInt(std.math.maxInt(u32))))
     {
         return null;
     }
     return .{
-        @floatCast(view.viewport_width),
-        @floatCast(view.viewport_height),
+        @floatCast(view.width),
+        @floatCast(view.height),
     };
 }
 
@@ -714,7 +714,7 @@ test "fragment framebuffer conversion restores y-up screen coordinates" {
 }
 
 test "Renderer satisfies core backend contract" {
-    heavy_slug.core.render.BackendContract(Renderer);
+    heavy_slug.core.render.checkBackend(Renderer);
     try std.testing.expect(true);
 }
 

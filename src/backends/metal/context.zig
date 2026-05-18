@@ -31,7 +31,7 @@ pub const Error = error{
     MetalInitFailed,
     MetalBufferCreateFailed,
     MetalDrawFailed,
-    InvalidFrameView,
+    InvalidView,
 };
 
 pub const Context = struct {

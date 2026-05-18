@@ -174,8 +174,8 @@ Vulkan generator output are private build-graph imports rather than public
 package modules.
 
 Stable top-level core exports include `FontHandle`, `FontSource`,
-`FontOptions`, `TextRun`, `FrameToken`, `Color`, `Transform`, `Affine2D64`,
-`FrameView2D`, `PrecisionPolicy`, `Viewport`, `FillRule`, and `ShaderStats`.
+`FontOptions`, `TextRun`, `FrameToken`, `Color`, `Transform`, `View`,
+`PrecisionPolicy`, `FillRule`, and `ShaderStats`.
 
 Backend modules expose `Context`, `Renderer`, `Frame`, `Target`,
 `RendererOptions`, `FontHandle`, `FrameToken`, `Stats`, and
@@ -195,7 +195,7 @@ const font = try renderer.loadFont(.{ .path = "assets/Inter-Regular.otf" }, .{
     .size_px = 32,
 });
 
-const view = heavy_slug.FrameView2D.identity(width_px, height_px);
+const view = heavy_slug.View.identity(width_px, height_px);
 var frame = try renderer.beginFrame(view);
 try frame.drawText(.{
     .font = font,
@@ -284,7 +284,7 @@ zig-out/shaders/msl/fragment.metal
 | Diagnostic source | Signals |
 | --- | --- |
 | CPU/backend debug stats | Shaping counts, cache hits/misses, precision insufficiency, uploads, retirements, pool state, backend binding work. |
-| Shader stats opt-in | Submitted glyph/meshlet counts, draw chunks, emitted mesh work, explicit mesh cull reasons, candidate-path usage, fallback scans, fragment pressure. |
+| Shader stats opt-in | Submitted glyph/meshlet counts, draw chunks, emitted meshlets, explicit meshlet-cull reasons, candidate-path usage, fallback scans, fragment pressure. |
 
 Enable shader counters only when investigating GPU behavior:
 
@@ -292,6 +292,8 @@ Enable shader counters only when investigating GPU behavior:
 zig build test -Dvulkan=true -Dshader-stats=true
 zig build test -Dmetal=true -Dshader-stats=true
 ```
+
+Backend debug counters are exposed through `Renderer.stats()` in Debug builds.
 
 ## Project Layout
 
@@ -315,7 +317,7 @@ zig build test -Dmetal=true -Dshader-stats=true
 | --- | --- |
 | Core boundary | Core is backend-neutral and window-system-free. |
 | Host boundary | Applications own graphics/device/window lifetimes. |
-| Frame math | Draw submission uses a CPU f64 affine `FrameView2D`; backends no longer accept f32 projection matrices. |
+| Frame math | Draw submission uses a CPU f64 affine `View`; backends no longer accept f32 projection matrices. |
 | Glyph resources | Cached glyph blobs live in a backend-owned byte pool; visible strips live in per-frame meshlet buffers. |
 | Blob precision | Glyph blobs are 32-bit fixed-point and keyed by precision tier. |
 | Blob references | `GlyphBlobRef` values are byte offsets. |

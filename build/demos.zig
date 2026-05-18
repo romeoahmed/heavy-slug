@@ -55,7 +55,7 @@ pub fn buildVulkan(
     optimize: std.builtin.OptimizeMode,
     core_mod: *std.Build.Module,
     backend: backends.VulkanBackend,
-    use_lto: bool,
+    thin_lto: bool,
 ) ?*std.Build.Step.Compile {
     const exe = b.addExecutable(.{
         .name = "heavy_slug_demo",
@@ -78,7 +78,7 @@ pub fn buildVulkan(
     exe.root_module.addImport("demo_scene", demo_scene);
     exe.root_module.addImport("demo_platform", demo_platform);
 
-    deps.enableThinLtoAll(use_lto, &.{exe});
+    deps.enableThinLtoAll(thin_lto, &.{exe});
     return exe;
 }
 
@@ -88,7 +88,7 @@ pub fn buildMetal(
     optimize: std.builtin.OptimizeMode,
     core_mod: *std.Build.Module,
     backend: backends.MetalBackend,
-    use_lto: bool,
+    thin_lto: bool,
 ) ?*std.Build.Step.Compile {
     const exe = b.addExecutable(.{
         .name = "heavy_slug_demo",
@@ -130,7 +130,7 @@ pub fn buildMetal(
         .flags = objcxx.flags(b, optimize, &.{}),
     });
 
-    deps.enableThinLtoAll(use_lto, &.{exe});
+    deps.enableThinLtoAll(thin_lto, &.{exe});
     return exe;
 }
 

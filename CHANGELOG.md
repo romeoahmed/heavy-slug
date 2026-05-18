@@ -12,6 +12,14 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Breaking naming contraction:** the public f64 affine type is now
+  `Transform`, frame submission now takes `View`, the stale `Viewport` and
+  `Affine2D64` exports were removed, render batch internals moved from
+  `glyph_batch` to `frame_batch`, backend shape checks use `checkBackend`, and
+  shader stats now use submitted-glyph/submitted-meshlet and meshlet-cull names.
+  The unused public `GlyphKey` export was removed, backend stats access is now
+  `Renderer.stats()`, and core debug stats use glyph/transform names instead of
+  instance/affine leftovers.
 - **Breaking build graph semantics:** `zig build` now builds and installs the
   backend-neutral static library instead of completing an empty install step;
   generated shader blobs, GPU reflection structs, and Vulkan generator output
@@ -31,7 +39,7 @@ implementation notes belong in commits and code review history.
   renderer path; mesh workgroup dispatch count now equals the CPU meshlet
   count.
 - **Mesh-only diagnostics cleaned up:** shader-stat counters and backend logs
-  now report CPU-submitted glyphs, meshlets, draw chunks, and mesh cull
+  now report submitted glyphs, submitted meshlets, draw chunks, and meshlet-cull
   outcomes directly instead of preserving obsolete task-shader terminology.
 - **Vulkan mesh limit validation tightened:** the Vulkan backend now validates
   mesh workgroup y/z dimensions and mesh shared-memory capacity in addition to
@@ -115,10 +123,10 @@ implementation notes belong in commits and code review history.
 - **Shader build graph tightened:** Slang sources now use explicit Slang 2026
   modules, source-declared shader entries, stricter capability checks, and
   shared shader-stat constants.
-- **Shader diagnostics expanded:** mesh cull reasons now use the normal
+- **Shader diagnostics expanded:** meshlet-cull reasons now use the normal
   `shader-stats` ABI and backend debug logs instead of ad hoc counters.
 - **Breaking extreme-zoom precision contract:** renderer submission now uses a
-  CPU f64 affine `FrameView2D`; backend `Target` values no longer carry f32
+  CPU f64 affine `View`; backend `Target` values no longer carry f32
   projection matrices; glyph blobs are 32-bit fixed-point and cache keys include
   the selected precision tier.
 - **Reflection ABI generation hardened:** `tools/layout_gen.zig` now rejects

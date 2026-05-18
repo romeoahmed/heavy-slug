@@ -51,7 +51,7 @@ pub fn main() !void {
             .clear_color = scene.clearColor(),
         });
         if (heavy_slug_metal.shader_stats_enabled and now - stats_log_time >= 1.0) {
-            text_renderer.statsSnapshot().log();
+            text_renderer.stats().log();
             stats_log_time = now;
         }
     }

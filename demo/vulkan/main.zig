@@ -58,7 +58,7 @@ pub fn main() !void {
         };
         text_renderer.markFrameComplete(submitted_text_tokens[frame.frame_index]);
         if (heavy_slug_vulkan.shader_stats_enabled and now - stats_log_time >= 1.0) {
-            text_renderer.statsSnapshot().log();
+            text_renderer.stats().log();
             stats_log_time = now;
         }
 

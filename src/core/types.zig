@@ -4,22 +4,13 @@ const std = @import("std");
 
 const Vec2 = @Vector(2, f64);
 
-pub const Point2D64 = extern struct {
-    x: f64,
-    y: f64,
-
-    pub fn init(x: f64, y: f64) Point2D64 {
-        return .{ .x = x, .y = y };
-    }
-};
-
-pub const Rect64 = extern struct {
+pub const Rect = extern struct {
     x_min: f64,
     y_min: f64,
     x_max: f64,
     y_max: f64,
 
-    pub fn init(x_min: f64, y_min: f64, x_max: f64, y_max: f64) Rect64 {
+    pub fn init(x_min: f64, y_min: f64, x_max: f64, y_max: f64) Rect {
         return .{
             .x_min = @min(x_min, x_max),
             .y_min = @min(y_min, y_max),
@@ -28,18 +19,18 @@ pub const Rect64 = extern struct {
         };
     }
 
-    pub fn isFinite(self: Rect64) bool {
+    pub fn isFinite(self: Rect) bool {
         return std.math.isFinite(self.x_min) and
             std.math.isFinite(self.y_min) and
             std.math.isFinite(self.x_max) and
             std.math.isFinite(self.y_max);
     }
 
-    pub fn isEmpty(self: Rect64) bool {
+    pub fn isEmpty(self: Rect) bool {
         return self.x_max <= self.x_min or self.y_max <= self.y_min;
     }
 
-    pub fn intersects(self: Rect64, other: Rect64) bool {
+    pub fn intersects(self: Rect, other: Rect) bool {
         return self.x_max > other.x_min and self.x_min < other.x_max and
             self.y_max > other.y_min and self.y_min < other.y_max;
     }
@@ -49,7 +40,7 @@ pub const Rect64 = extern struct {
 ///
 /// x' = xx*x + yx*y + tx
 /// y' = xy*x + yy*y + ty
-pub const Affine2D64 = extern struct {
+pub const Transform = extern struct {
     xx: f64,
     xy: f64,
     yx: f64,
@@ -57,7 +48,7 @@ pub const Affine2D64 = extern struct {
     tx: f64,
     ty: f64,
 
-    pub const identity: Affine2D64 = .{
+    pub const identity: Transform = .{
         .xx = 1,
         .xy = 0,
         .yx = 0,
@@ -66,25 +57,25 @@ pub const Affine2D64 = extern struct {
         .ty = 0,
     };
 
-    pub fn init(xx: f64, xy: f64, yx: f64, yy: f64, tx: f64, ty: f64) Affine2D64 {
+    pub fn init(xx: f64, xy: f64, yx: f64, yy: f64, tx: f64, ty: f64) Transform {
         return .{ .xx = xx, .xy = xy, .yx = yx, .yy = yy, .tx = tx, .ty = ty };
     }
 
-    pub fn translation(x: f64, y: f64) Affine2D64 {
+    pub fn translation(x: f64, y: f64) Transform {
         return .{ .xx = 1, .xy = 0, .yx = 0, .yy = 1, .tx = x, .ty = y };
     }
 
-    pub fn scale(sx: f64, sy: f64) Affine2D64 {
+    pub fn scale(sx: f64, sy: f64) Transform {
         return .{ .xx = sx, .xy = 0, .yx = 0, .yy = sy, .tx = 0, .ty = 0 };
     }
 
-    pub fn rotation(angle_radians: f64) Affine2D64 {
+    pub fn rotation(angle_radians: f64) Transform {
         const c = @cos(angle_radians);
         const s = @sin(angle_radians);
         return .{ .xx = c, .xy = s, .yx = -s, .yy = c, .tx = 0, .ty = 0 };
     }
 
-    pub fn rotationAbout(angle_radians: f64, x: f64, y: f64) Affine2D64 {
+    pub fn rotationAbout(angle_radians: f64, x: f64, y: f64) Transform {
         return compose(
             translation(x, y),
             compose(rotation(angle_radians), translation(-x, -y)),
@@ -92,7 +83,7 @@ pub const Affine2D64 = extern struct {
     }
 
     /// Return `a * b`, i.e. apply `b` first and then `a`.
-    pub fn compose(a: Affine2D64, b: Affine2D64) Affine2D64 {
+    pub fn compose(a: Transform, b: Transform) Transform {
         return .{
             .xx = a.xx * b.xx + a.yx * b.xy,
             .xy = a.xy * b.xx + a.yy * b.xy,
@@ -103,11 +94,11 @@ pub const Affine2D64 = extern struct {
         };
     }
 
-    pub fn translate(self: Affine2D64, x: f64, y: f64) Affine2D64 {
+    pub fn translate(self: Transform, x: f64, y: f64) Transform {
         return compose(self, translation(x, y));
     }
 
-    pub fn apply(self: Affine2D64, point: anytype) [2]f64 {
+    pub fn apply(self: Transform, point: anytype) [2]f64 {
         const x: f64 = @floatCast(point[0]);
         const y: f64 = @floatCast(point[1]);
         return .{
@@ -116,7 +107,7 @@ pub const Affine2D64 = extern struct {
         };
     }
 
-    pub fn applyVector(self: Affine2D64, vector: anytype) [2]f64 {
+    pub fn applyVector(self: Transform, vector: anytype) [2]f64 {
         const x: f64 = @floatCast(vector[0]);
         const y: f64 = @floatCast(vector[1]);
         return .{
@@ -125,12 +116,7 @@ pub const Affine2D64 = extern struct {
         };
     }
 
-    pub fn applyPoint(self: Affine2D64, point: Point2D64) Point2D64 {
-        const out = self.apply(.{ point.x, point.y });
-        return .{ .x = out[0], .y = out[1] };
-    }
-
-    pub fn transformRect(self: Affine2D64, rect: Rect64) Rect64 {
+    pub fn applyRect(self: Transform, rect: Rect) Rect {
         const p0 = self.apply(.{ rect.x_min, rect.y_min });
         const p1 = self.apply(.{ rect.x_max, rect.y_min });
         const p2 = self.apply(.{ rect.x_max, rect.y_max });
@@ -147,11 +133,11 @@ pub const Affine2D64 = extern struct {
         };
     }
 
-    pub fn determinant(self: Affine2D64) f64 {
+    pub fn determinant(self: Transform) f64 {
         return self.xx * self.yy - self.yx * self.xy;
     }
 
-    pub fn inverse(self: Affine2D64) ?Affine2D64 {
+    pub fn inverse(self: Transform) ?Transform {
         const det = self.determinant();
         if (!std.math.isFinite(det) or det == 0) return null;
         const inv_det = 1.0 / det;
@@ -170,11 +156,11 @@ pub const Affine2D64 = extern struct {
         };
     }
 
-    pub fn normInf(self: Affine2D64) f64 {
+    pub fn linearNormInf(self: Transform) f64 {
         return @max(@abs(self.xx) + @abs(self.yx), @abs(self.xy) + @abs(self.yy));
     }
 
-    pub fn isFinite(self: Affine2D64) bool {
+    pub fn isFinite(self: Transform) bool {
         return std.math.isFinite(self.xx) and
             std.math.isFinite(self.xy) and
             std.math.isFinite(self.yx) and
@@ -183,7 +169,7 @@ pub const Affine2D64 = extern struct {
             std.math.isFinite(self.ty);
     }
 
-    pub fn linearScaled(self: Affine2D64, scale_factor: f64) Affine2D64 {
+    pub fn scaleLinear(self: Transform, scale_factor: f64) Transform {
         return .{
             .xx = self.xx * scale_factor,
             .xy = self.xy * scale_factor,
@@ -195,34 +181,32 @@ pub const Affine2D64 = extern struct {
     }
 };
 
-pub const Transform = Affine2D64;
+pub const View = extern struct {
+    width: f64,
+    height: f64,
+    screen_from_world: Transform,
 
-pub const FrameView2D = extern struct {
-    viewport_width: f64,
-    viewport_height: f64,
-    screen_from_world: Affine2D64,
-
-    pub fn init(width: f64, height: f64, screen_from_world: Affine2D64) FrameView2D {
+    pub fn init(width: f64, height: f64, screen_from_world: Transform) View {
         return .{
-            .viewport_width = width,
-            .viewport_height = height,
+            .width = width,
+            .height = height,
             .screen_from_world = screen_from_world,
         };
     }
 
-    pub fn identity(width: f64, height: f64) FrameView2D {
+    pub fn identity(width: f64, height: f64) View {
         return init(width, height, .identity);
     }
 
-    pub fn viewportRect(self: FrameView2D) Rect64 {
-        return .{ .x_min = 0, .y_min = 0, .x_max = self.viewport_width, .y_max = self.viewport_height };
+    pub fn viewportRect(self: View) Rect {
+        return .{ .x_min = 0, .y_min = 0, .x_max = self.width, .y_max = self.height };
     }
 
-    pub fn isFinite(self: FrameView2D) bool {
-        return std.math.isFinite(self.viewport_width) and
-            std.math.isFinite(self.viewport_height) and
-            self.viewport_width > 0 and
-            self.viewport_height > 0 and
+    pub fn isFinite(self: View) bool {
+        return std.math.isFinite(self.width) and
+            std.math.isFinite(self.height) and
+            self.width > 0 and
+            self.height > 0 and
             self.screen_from_world.isFinite();
     }
 };
@@ -235,12 +219,12 @@ pub const PrecisionPolicy = extern struct {
     hysteresis_frames: u8 = 8,
     _pad: u8 = 0,
 
-    pub fn selectFractionBits(self: PrecisionPolicy, screen_from_local: Affine2D64) !u8 {
+    pub fn selectFractionBits(self: PrecisionPolicy, screen_from_local: Transform) !u8 {
         if (!screen_from_local.isFinite()) return error.InvalidTransform;
-        const sigma = screen_from_local.normInf();
+        const sigma = screen_from_local.linearNormInf();
         if (!std.math.isFinite(sigma) or sigma <= 0) return error.InvalidTransform;
         const local_from_screen = screen_from_local.inverse() orelse return error.InvalidTransform;
-        const condition = sigma * local_from_screen.normInf();
+        const condition = sigma * local_from_screen.linearNormInf();
         if (!std.math.isFinite(condition) or
             !std.math.isFinite(self.max_condition_number) or
             self.max_condition_number <= 0 or
@@ -303,19 +287,6 @@ pub const Color = extern struct {
     }
 };
 
-pub const Viewport = extern struct {
-    width: f32,
-    height: f32,
-
-    pub fn init(width: f32, height: f32) Viewport {
-        return .{ .width = width, .height = height };
-    }
-
-    pub fn asArray(self: Viewport) [2]f32 {
-        return .{ self.width, self.height };
-    }
-};
-
 pub const FontHandle = extern struct {
     id: u32,
 
@@ -332,22 +303,11 @@ pub const FontOptions = struct {
     variation_key: u64 = 0,
 };
 
-pub const GlyphKey = extern struct {
-    font_id: u32,
-    glyph_id: u32,
-    face_index: u32 = 0,
-    size_px: u32 = 0,
-    variation_key: u64 = 0,
-    fill_rule: FillRule = .non_zero,
-};
-
 comptime {
     std.debug.assert(@sizeOf(Color) == 16);
-    std.debug.assert(@sizeOf(Viewport) == 8);
-    std.debug.assert(@sizeOf(Point2D64) == 16);
-    std.debug.assert(@sizeOf(Rect64) == 32);
-    std.debug.assert(@sizeOf(Affine2D64) == 48);
-    std.debug.assert(@sizeOf(FrameView2D) == 64);
+    std.debug.assert(@sizeOf(Rect) == 32);
+    std.debug.assert(@sizeOf(Transform) == 48);
+    std.debug.assert(@sizeOf(View) == 64);
     std.debug.assert(@sizeOf(FontHandle) == 4);
 }
 
@@ -358,7 +318,7 @@ test "Color exposes common constants and RGBA constructor" {
     try std.testing.expectEqual(@as(f32, 0.75), c.rgba[2]);
 }
 
-test "Transform aliases the f64 affine frame transform" {
+test "Transform is the public f64 affine transform" {
     const t = Transform.translation(10, -2);
     const p = t.apply(.{ 1, 2 });
     try std.testing.expectApproxEqAbs(@as(f64, 11), p[0], 1.0e-12);
@@ -370,8 +330,8 @@ test "Transform aliases the f64 affine frame transform" {
     try std.testing.expectApproxEqAbs(@as(f64, 1), q[1], 1.0e-12);
 }
 
-test "Affine2D64 applies points and vectors with distinct affine semantics" {
-    const t = Affine2D64.init(2, 3, 5, 7, 11, 13);
+test "Transform applies points and vectors with distinct affine semantics" {
+    const t = Transform.init(2, 3, 5, 7, 11, 13);
 
     const point = t.apply(.{ 17, 19 });
     try std.testing.expectApproxEqAbs(@as(f64, 140), point[0], 1.0e-12);
@@ -382,8 +342,8 @@ test "Affine2D64 applies points and vectors with distinct affine semantics" {
     try std.testing.expectApproxEqAbs(@as(f64, 184), vector[1], 1.0e-12);
 }
 
-test "Affine2D64 composes, inverts, and transforms bounds" {
-    const t = Affine2D64.compose(Affine2D64.translation(10, 20), Affine2D64.scale(2, 3));
+test "Transform composes, inverts, and applies to bounds" {
+    const t = Transform.compose(Transform.translation(10, 20), Transform.scale(2, 3));
     const p = t.apply(.{ 4, 5 });
     try std.testing.expectApproxEqAbs(@as(f64, 18), p[0], 1.0e-12);
     try std.testing.expectApproxEqAbs(@as(f64, 35), p[1], 1.0e-12);
@@ -393,20 +353,20 @@ test "Affine2D64 composes, inverts, and transforms bounds" {
     try std.testing.expectApproxEqAbs(@as(f64, 4), q[0], 1.0e-12);
     try std.testing.expectApproxEqAbs(@as(f64, 5), q[1], 1.0e-12);
 
-    const bounds = Affine2D64.rotation(std.math.pi / 2.0).transformRect(.{ .x_min = 0, .y_min = 0, .x_max = 2, .y_max = 1 });
+    const bounds = Transform.rotation(std.math.pi / 2.0).applyRect(.{ .x_min = 0, .y_min = 0, .x_max = 2, .y_max = 1 });
     try std.testing.expectApproxEqAbs(@as(f64, -1), bounds.x_min, 1.0e-12);
     try std.testing.expectApproxEqAbs(@as(f64, 2), bounds.y_max, 1.0e-12);
 }
 
 test "PrecisionPolicy selects even tiers and rejects unsupported zoom" {
     const policy = PrecisionPolicy{};
-    const moderate = Affine2D64.scale(1024, 1024);
+    const moderate = Transform.scale(1024, 1024);
     try std.testing.expectEqual(@as(u8, 12), try policy.selectFractionBits(moderate));
 
-    const high = Affine2D64.scale(1_000_000, 1_000_000);
+    const high = Transform.scale(1_000_000, 1_000_000);
     try std.testing.expectEqual(@as(u8, 22), try policy.selectFractionBits(high));
 
-    const too_high = Affine2D64.scale(100_000_000, 100_000_000);
+    const too_high = Transform.scale(100_000_000, 100_000_000);
     try std.testing.expectError(error.PrecisionUnsupported, policy.selectFractionBits(too_high));
 
     try std.testing.expectError(
@@ -414,7 +374,7 @@ test "PrecisionPolicy selects even tiers and rejects unsupported zoom" {
         (PrecisionPolicy{ .min_fraction_bits = 24, .max_fraction_bits = 12 }).selectFractionBits(moderate),
     );
 
-    const nearly_singular = Affine2D64.scale(1.0e6, 1.0e-6);
+    const nearly_singular = Transform.scale(1.0e6, 1.0e-6);
     try std.testing.expectError(error.InvalidTransform, policy.selectFractionBits(nearly_singular));
 }
 

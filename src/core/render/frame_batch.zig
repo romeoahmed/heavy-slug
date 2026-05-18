@@ -5,13 +5,13 @@ const std = @import("std");
 pub fn FrameBatch(comptime GlyphInstance: type, comptime GlyphMeshlet: type) type {
     return struct {
         const Self = @This();
-        pub const GlyphInstanceType = GlyphInstance;
-        pub const GlyphMeshletType = GlyphMeshlet;
+        pub const Glyph = GlyphInstance;
+        pub const Meshlet = GlyphMeshlet;
 
         glyphs: []GlyphInstance,
         meshlets: []GlyphMeshlet,
-        glyph_len: u32 = 0,
-        meshlet_len: u32 = 0,
+        glyph_count: u32 = 0,
+        meshlet_count: u32 = 0,
         submitted: bool = false,
 
         pub fn init(glyphs: []GlyphInstance, meshlets: []GlyphMeshlet) Self {
@@ -19,48 +19,48 @@ pub fn FrameBatch(comptime GlyphInstance: type, comptime GlyphMeshlet: type) typ
         }
 
         pub fn reset(self: *Self) void {
-            self.glyph_len = 0;
-            self.meshlet_len = 0;
+            self.glyph_count = 0;
+            self.meshlet_count = 0;
             self.submitted = false;
         }
 
         pub fn appendGlyph(self: *Self, glyph: GlyphInstance) !u32 {
             if (self.submitted) return error.FrameAlreadySubmitted;
-            if (self.glyph_len >= self.glyphs.len) return error.GlyphCapacityExceeded;
-            const index = self.glyph_len;
+            if (self.glyph_count >= self.glyphs.len) return error.GlyphCapacityExceeded;
+            const index = self.glyph_count;
             self.glyphs[index] = glyph;
-            self.glyph_len += 1;
+            self.glyph_count += 1;
             return index;
         }
 
         pub fn appendMeshlet(self: *Self, meshlet: GlyphMeshlet) !void {
             if (self.submitted) return error.FrameAlreadySubmitted;
-            if (self.meshlet_len >= self.meshlets.len) return error.MeshletCapacityExceeded;
-            self.meshlets[self.meshlet_len] = meshlet;
-            self.meshlet_len += 1;
+            if (self.meshlet_count >= self.meshlets.len) return error.MeshletCapacityExceeded;
+            self.meshlets[self.meshlet_count] = meshlet;
+            self.meshlet_count += 1;
         }
 
-        pub fn rollback(self: *Self, glyph_len: u32, meshlet_len: u32) void {
-            std.debug.assert(glyph_len <= self.glyph_len);
-            std.debug.assert(meshlet_len <= self.meshlet_len);
-            self.glyph_len = glyph_len;
-            self.meshlet_len = meshlet_len;
+        pub fn rollback(self: *Self, glyph_count: u32, meshlet_count: u32) void {
+            std.debug.assert(glyph_count <= self.glyph_count);
+            std.debug.assert(meshlet_count <= self.meshlet_count);
+            self.glyph_count = glyph_count;
+            self.meshlet_count = meshlet_count;
         }
 
         pub fn glyphSlice(self: *const Self) []const GlyphInstance {
-            return self.glyphs[0..self.glyph_len];
+            return self.glyphs[0..self.glyph_count];
         }
 
         pub fn meshletSlice(self: *const Self) []const GlyphMeshlet {
-            return self.meshlets[0..self.meshlet_len];
+            return self.meshlets[0..self.meshlet_count];
         }
 
         pub fn glyphCount(self: *const Self) u32 {
-            return self.glyph_len;
+            return self.glyph_count;
         }
 
         pub fn meshletCount(self: *const Self) u32 {
-            return self.meshlet_len;
+            return self.meshlet_count;
         }
 
         pub fn markSubmitted(self: *Self) void {

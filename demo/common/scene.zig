@@ -133,10 +133,10 @@ pub const Scene = struct {
         return if (self.dark_mode) .white else .black;
     }
 
-    pub fn frameView(self: Scene, width: f64, height: f64) heavy_slug.FrameView2D {
+    pub fn frameView(self: Scene, width: f64, height: f64) heavy_slug.View {
         const view = viewTransform(self.view);
-        const rotation = heavy_slug.Affine2D64.rotationAbout(self.rotation_angle, content_cx, content_cy);
-        return heavy_slug.FrameView2D.init(width, height, heavy_slug.Affine2D64.compose(view, rotation));
+        const rotation = heavy_slug.Transform.rotationAbout(self.rotation_angle, content_cx, content_cy);
+        return heavy_slug.View.init(width, height, heavy_slug.Transform.compose(view, rotation));
     }
 
     pub fn draw(self: Scene, renderer: anytype, font: anytype) !void {
@@ -241,7 +241,7 @@ fn contentFit(width: f64, height: f64) ViewState {
     };
 }
 
-fn viewTransform(view: ViewState) heavy_slug.Affine2D64 {
+fn viewTransform(view: ViewState) heavy_slug.Transform {
     return .{
         .xx = view.scale,
         .xy = 0,

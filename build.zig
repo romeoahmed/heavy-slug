@@ -29,7 +29,7 @@ pub fn build(b: *std.Build) void {
         .linkage = .static,
         .root_module = core_mod,
     });
-    deps.enableThinLtoAll(opts.use_lto, &.{ ft_lib, hb_lib, core_lib });
+    deps.enableThinLtoAll(opts.thin_lto, &.{ ft_lib, hb_lib, core_lib });
     b.installArtifact(core_lib);
 
     const spirv_step = b.step("spirv", "Compile Slang shaders to SPIR-V 1.6");
@@ -40,7 +40,7 @@ pub fn build(b: *std.Build) void {
     const msl_shaders = shaders.compileMsl(b, opts.shader_stats);
     shaders.installMsl(b, msl_step, msl_shaders);
 
-    const gpu_structs_mod = if (opts.build_vulkan or opts.build_metal)
+    const gpu_structs_mod = if (opts.vulkan or opts.metal)
         shaders.buildGpuStructsModule(b)
     else
         null;
@@ -50,7 +50,7 @@ pub fn build(b: *std.Build) void {
     addBuildHelperTests(b, test_step);
     addToolTests(b, test_step);
 
-    const vulkan_backend = if (opts.build_vulkan)
+    const vulkan_backend = if (opts.vulkan)
         backends.buildVulkan(b, opts.target, core_mod, spirv_shaders, gpu_structs_mod.?, opts.shader_stats) orelse return
     else
         null;
@@ -58,7 +58,7 @@ pub fn build(b: *std.Build) void {
         addModuleTest(b, test_step, "heavy_slug_vulkan", backend.module);
     }
 
-    const metal_backend = if (opts.build_metal)
+    const metal_backend = if (opts.metal)
         backends.buildMetal(b, opts.target, opts.optimize, core_mod, msl_shaders, gpu_structs_mod.?, opts.shader_stats)
     else
         null;
@@ -66,7 +66,7 @@ pub fn build(b: *std.Build) void {
         addModuleTest(b, test_step, "heavy_slug_metal", backend.module);
     }
 
-    if (opts.build_demo) {
+    if (opts.demo) {
         const exe = switch (opts.demo_backend.?) {
             .vulkan => demos.buildVulkan(
                 b,
@@ -74,7 +74,7 @@ pub fn build(b: *std.Build) void {
                 opts.optimize,
                 core_mod,
                 vulkan_backend.?,
-                opts.use_lto,
+                opts.thin_lto,
             ) orelse return,
             .metal => demos.buildMetal(
                 b,
@@ -82,7 +82,7 @@ pub fn build(b: *std.Build) void {
                 opts.optimize,
                 core_mod,
                 metal_backend.?,
-                opts.use_lto,
+                opts.thin_lto,
             ) orelse return,
         };
 

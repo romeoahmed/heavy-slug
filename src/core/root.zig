@@ -11,15 +11,12 @@ pub const render = @import("render/root.zig");
 
 pub const Color = types.Color;
 pub const Transform = types.Transform;
-pub const Affine2D64 = types.Affine2D64;
-pub const FrameView2D = types.FrameView2D;
+pub const View = types.View;
 pub const PrecisionPolicy = types.PrecisionPolicy;
-pub const Viewport = types.Viewport;
 pub const FillRule = types.FillRule;
 pub const FontHandle = types.FontHandle;
 pub const FontSource = types.FontSource;
 pub const FontOptions = types.FontOptions;
-pub const GlyphKey = types.GlyphKey;
 pub const Error = errors.Error;
 pub const RendererOptions = render.RendererOptions;
 pub const TextRun = render.TextRun;

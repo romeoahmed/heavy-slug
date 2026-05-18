@@ -8,7 +8,7 @@ const blob_decode = @import("../blob/decode.zig");
 const font_mod = @import("../font/root.zig");
 const glyph_store_mod = @import("glyph_store.zig");
 const backend_contract = @import("backend_contract.zig");
-const glyph_batch_mod = @import("glyph_batch.zig");
+const frame_batch_mod = @import("frame_batch.zig");
 const core_types = @import("../types.zig");
 const units = @import("../units.zig");
 const mesh_limits = @import("../../gpu/mesh_limits.zig");
@@ -20,7 +20,7 @@ pub const Error = error{
     GlyphCapacityExceeded,
     ShapingFailed,
     PoolExhausted,
-    InvalidFrameView,
+    InvalidView,
     InvalidTransform,
     PrecisionUnsupported,
     TextPositionOverflow,
@@ -48,11 +48,11 @@ pub const TextRun = struct {
 pub const Stats = if (@import("builtin").mode == .Debug) struct {
     runs_shaped: u32 = 0,
     glyphs_shaped: u32 = 0,
-    instances_written: u32 = 0,
+    glyphs_written: u32 = 0,
     meshlets_written: u32 = 0,
     empty_glyphs_skipped: u32 = 0,
-    cpu_culled: u32 = 0,
-    invalid_affine: u32 = 0,
+    host_culled: u32 = 0,
+    invalid_transform: u32 = 0,
     precision_insufficient: u32 = 0,
     tier_promotions: u32 = 0,
     cache_hits: u32 = 0,
@@ -64,9 +64,9 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
     evictions: u32 = 0,
     retirements_queued: u32 = 0,
     retirements_completed: u32 = 0,
-    pool_alloc_failures: u32 = 0,
-    instances_submitted: u32 = 0,
-    meshlets_submitted: u32 = 0,
+    pool_exhausted: u32 = 0,
+    submitted_glyphs: u32 = 0,
+    submitted_meshlets: u32 = 0,
     pool: pool_mod.Snapshot = .{},
 
     pub fn reset(self: *@This()) void {
@@ -75,15 +75,15 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
 
     pub fn log(self: *const @This(), comptime scope: anytype) void {
         std.log.scoped(scope).debug(
-            "core stats: runs={d} shaped={d} instances={d} meshlets={d} empty={d} cpu_culled={d} invalid_affine={d} precision_insufficient={d} tier_promotions={d} hits={d} misses={d} encoded={d} spans={d} upload_bytes={d} evictions={d} retire_q={d} retire_done={d} pool_used={d} pool_free={d} largest_free={d} free_blocks={d}",
+            "core stats: runs={d} shaped={d} glyphs={d} meshlets={d} empty={d} host_culled={d} invalid_transform={d} precision_insufficient={d} tier_promotions={d} hits={d} misses={d} encoded={d} spans={d} upload_bytes={d} evictions={d} retire_q={d} retire_done={d} pool_exhausted={d} pool_used={d} pool_free={d} largest_free={d} free_blocks={d}",
             .{
                 self.runs_shaped,
                 self.glyphs_shaped,
-                self.instances_written,
+                self.glyphs_written,
                 self.meshlets_written,
                 self.empty_glyphs_skipped,
-                self.cpu_culled,
-                self.invalid_affine,
+                self.host_culled,
+                self.invalid_transform,
                 self.precision_insufficient,
                 self.tier_promotions,
                 self.cache_hits,
@@ -94,6 +94,7 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
                 self.evictions,
                 self.retirements_queued,
                 self.retirements_completed,
+                self.pool_exhausted,
                 self.pool.used_bytes,
                 self.pool.free_bytes,
                 self.pool.largest_free_block,
@@ -116,7 +117,6 @@ const FontEntry = struct {
 
 const CachedGlyph = struct {
     blob_ref: GlyphBlobRef,
-    em_box: cache_mod.EmBox,
     bounds_q: cache_mod.FixedBounds,
     precision_bits: u8,
     mesh_metadata: cache_mod.MeshMetadata,
@@ -241,7 +241,7 @@ pub const RendererCore = struct {
     }
 
     pub fn beginFrame(self: *RendererCore, completed_token: FrameToken, backend: anytype) void {
-        comptime backend_contract.BackendContract(@TypeOf(backend));
+        comptime backend_contract.checkBackend(@TypeOf(backend));
         self.stats.reset();
         const retired = self.store.beginFrame(completed_token, backend);
         if (@import("builtin").mode == .Debug) {
@@ -255,7 +255,7 @@ pub const RendererCore = struct {
     }
 
     pub fn retireCompleted(self: *RendererCore, completed_token: FrameToken, backend: anytype) void {
-        comptime backend_contract.BackendContract(@TypeOf(backend));
+        comptime backend_contract.checkBackend(@TypeOf(backend));
         const retired = self.store.retireCompleted(completed_token, backend);
         if (@import("builtin").mode == .Debug) {
             self.stats.retirements_completed += retired;
@@ -271,20 +271,20 @@ pub const RendererCore = struct {
         self: *RendererCore,
         backend: anytype,
         batch: anytype,
-        view: core_types.FrameView2D,
+        view: core_types.View,
         run: TextRun,
     ) !void {
-        comptime backend_contract.BackendContract(@TypeOf(backend));
+        comptime backend_contract.checkBackend(@TypeOf(backend));
         comptime {
-            const ExpectedBatch = *glyph_batch_mod.FrameBatch(
-                backend_contract.GlyphInstanceType(@TypeOf(backend)),
-                backend_contract.GlyphMeshletType(@TypeOf(backend)),
+            const ExpectedBatch = *frame_batch_mod.FrameBatch(
+                backend_contract.glyphInstanceType(@TypeOf(backend)),
+                backend_contract.glyphMeshletType(@TypeOf(backend)),
             );
             if (@TypeOf(batch) != ExpectedBatch) {
-                @compileError("RendererCore.appendRun requires *FrameBatch(Backend.GlyphInstance, Backend.GlyphMeshlet)");
+                @compileError("RendererCore.appendRun requires *FrameBatch(backend GlyphInstance, backend GlyphMeshlet)");
             }
         }
-        if (!view.isFinite()) return Error.InvalidFrameView;
+        if (!view.isFinite()) return Error.InvalidView;
         const font = run.font;
         const font_entry = self.fonts.get(font.id) orelse return Error.ShapingFailed;
 
@@ -295,13 +295,13 @@ pub const RendererCore = struct {
             self.stats.runs_shaped += 1;
             self.stats.glyphs_shaped += @intCast(infos.len);
         }
-        const run_screen_from_text = core_types.Affine2D64.compose(view.screen_from_world, run.transform);
+        const run_screen_from_text = core_types.Transform.compose(view.screen_from_world, run.transform);
         const color = run.color.rgba;
         const flags = run.fill_rule.shaderFlags();
-        const start_glyph_len = batch.glyph_len;
-        const start_meshlet_len = batch.meshlet_len;
+        const start_glyph_count = batch.glyph_count;
+        const start_meshlet_count = batch.meshlet_count;
         errdefer {
-            batch.rollback(start_glyph_len, start_meshlet_len);
+            batch.rollback(start_glyph_count, start_meshlet_count);
         }
 
         var pen_x: i64 = 0;
@@ -313,9 +313,9 @@ pub const RendererCore = struct {
             const glyph_x = units.hb26p6ToPixelsI64(glyph_x_hb);
             const glyph_y = units.hb26p6ToPixelsI64(glyph_y_hb);
             const screen_from_glyph_pixels = run_screen_from_text.translate(glyph_x, glyph_y);
-            const screen_from_local = screen_from_glyph_pixels.linearScaled(1.0 / units.hb_subpixels_per_pixel_f64);
+            const screen_from_local = screen_from_glyph_pixels.scaleLinear(1.0 / units.hb_subpixels_per_pixel_f64);
             const local_from_screen = screen_from_local.inverse() orelse {
-                if (@import("builtin").mode == .Debug) self.stats.invalid_affine += 1;
+                if (@import("builtin").mode == .Debug) self.stats.invalid_transform += 1;
                 try advancePen(&pen_x, &pen_y, pos);
                 continue;
             };
@@ -326,7 +326,7 @@ pub const RendererCore = struct {
                     continue;
                 },
                 else => {
-                    if (@import("builtin").mode == .Debug) self.stats.invalid_affine += 1;
+                    if (@import("builtin").mode == .Debug) self.stats.invalid_transform += 1;
                     try advancePen(&pen_x, &pen_y, pos);
                     continue;
                 },
@@ -349,7 +349,6 @@ pub const RendererCore = struct {
                 }
                 break :blk CachedGlyph{
                     .blob_ref = entry.blob_ref,
-                    .em_box = entry.em_box,
                     .bounds_q = entry.bounds_q,
                     .precision_bits = entry.precision_bits,
                     .mesh_metadata = entry.mesh_metadata,
@@ -368,14 +367,14 @@ pub const RendererCore = struct {
 
             if (!cached_glyph.blob_ref.isEmpty()) {
                 const local_bounds = localRectFromFixed(cached_glyph.bounds_q, cached_glyph.precision_bits);
-                const screen_bounds = screen_from_local.transformRect(local_bounds);
+                const screen_bounds = screen_from_local.applyRect(local_bounds);
                 if (!screen_bounds.isFinite() or screen_bounds.isEmpty()) {
-                    if (@import("builtin").mode == .Debug) self.stats.invalid_affine += 1;
+                    if (@import("builtin").mode == .Debug) self.stats.invalid_transform += 1;
                     try advancePen(&pen_x, &pen_y, pos);
                     continue;
                 }
                 if (!screen_bounds.intersects(inflatedViewportRect(view, 1.0))) {
-                    if (@import("builtin").mode == .Debug) self.stats.cpu_culled += 1;
+                    if (@import("builtin").mode == .Debug) self.stats.host_culled += 1;
                     try advancePen(&pen_x, &pen_y, pos);
                     continue;
                 }
@@ -385,29 +384,29 @@ pub const RendererCore = struct {
                     cached_glyph.precision_bits,
                     local_from_screen,
                     .{
-                        view.viewport_width * 0.5,
-                        view.viewport_height * 0.5,
+                        view.width * 0.5,
+                        view.height * 0.5,
                     },
                 );
                 const anchor_local = localPointFromFixed(glyph_anchor_q, cached_glyph.precision_bits);
                 const screen_anchor = screen_from_local.apply(anchor_local);
                 const screen_anchor_px = castPoint2F32(screen_anchor) orelse {
-                    if (@import("builtin").mode == .Debug) self.stats.invalid_affine += 1;
+                    if (@import("builtin").mode == .Debug) self.stats.invalid_transform += 1;
                     try advancePen(&pen_x, &pen_y, pos);
                     continue;
                 };
                 const screen_from_local_2x2 = castAffineLinear2x2F32(screen_from_local) orelse {
-                    if (@import("builtin").mode == .Debug) self.stats.invalid_affine += 1;
+                    if (@import("builtin").mode == .Debug) self.stats.invalid_transform += 1;
                     try advancePen(&pen_x, &pen_y, pos);
                     continue;
                 };
                 const local_from_screen_2x2 = castAffineLinear2x2F32(local_from_screen) orelse {
-                    if (@import("builtin").mode == .Debug) self.stats.invalid_affine += 1;
+                    if (@import("builtin").mode == .Debug) self.stats.invalid_transform += 1;
                     try advancePen(&pen_x, &pen_y, pos);
                     continue;
                 };
 
-                const GlyphInstance = backend_contract.GlyphInstanceType(@TypeOf(backend));
+                const GlyphInstance = backend_contract.glyphInstanceType(@TypeOf(backend));
                 const glyph_payload: GlyphInstance = .{
                     .color = color,
                     .blob_ref = cached_glyph.blob_ref.value,
@@ -426,8 +425,8 @@ pub const RendererCore = struct {
                     .local_from_screen_2x2 = local_from_screen_2x2,
                 };
 
-                const glyph_mark = batch.glyph_len;
-                const meshlet_mark = batch.meshlet_len;
+                const glyph_mark = batch.glyph_count;
+                const meshlet_mark = batch.meshlet_count;
                 const glyph_index = try batch.appendGlyph(glyph_payload);
                 try appendGlyphMeshlets(
                     batch,
@@ -440,12 +439,12 @@ pub const RendererCore = struct {
                     view,
                     screen_bounds,
                 );
-                if (batch.meshlet_len == meshlet_mark) {
+                if (batch.meshlet_count == meshlet_mark) {
                     batch.rollback(glyph_mark, meshlet_mark);
-                    if (@import("builtin").mode == .Debug) self.stats.cpu_culled += 1;
+                    if (@import("builtin").mode == .Debug) self.stats.host_culled += 1;
                 } else if (@import("builtin").mode == .Debug) {
-                    self.stats.instances_written += 1;
-                    self.stats.meshlets_written += batch.meshlet_len - meshlet_mark;
+                    self.stats.glyphs_written += 1;
+                    self.stats.meshlets_written += batch.meshlet_count - meshlet_mark;
                 }
             } else {
                 if (@import("builtin").mode == .Debug) self.stats.empty_glyphs_skipped += 1;
@@ -488,7 +487,6 @@ pub const RendererCore = struct {
             try self.store.glyph_cache.insertColdWithBounds(cache_key, GlyphBlobRef.empty, .{ .offset = 0, .size = 0 }, extent_box, empty_bounds);
             return .{
                 .blob_ref = GlyphBlobRef.empty,
-                .em_box = extent_box,
                 .bounds_q = empty_bounds,
                 .precision_bits = precision_bits,
                 .mesh_metadata = .empty(),
@@ -501,7 +499,7 @@ pub const RendererCore = struct {
         var owns_mesh_metadata = true;
         errdefer if (owns_mesh_metadata) mesh_metadata.deinit(self.allocator);
         const pool_alloc = self.store.pool_alloc.alloc(@intCast(encoded.data.len)) orelse {
-            if (@import("builtin").mode == .Debug) self.stats.pool_alloc_failures += 1;
+            if (@import("builtin").mode == .Debug) self.stats.pool_exhausted += 1;
             return Error.PoolExhausted;
         };
         errdefer self.store.pool_alloc.free(pool_alloc);
@@ -517,7 +515,6 @@ pub const RendererCore = struct {
         try self.store.glyph_cache.insertColdWithMetadata(cache_key, blob_ref, pool_alloc, em_box, bounds_q, mesh_metadata);
         return .{
             .blob_ref = blob_ref,
-            .em_box = em_box,
             .bounds_q = bounds_q,
             .precision_bits = precision_bits,
             .mesh_metadata = mesh_metadata,
@@ -577,12 +574,12 @@ fn appendGlyphMeshlets(
     mesh_metadata: cache_mod.MeshMetadata,
     bounds: cache_mod.FixedBounds,
     precision_bits: u8,
-    local_from_screen: core_types.Affine2D64,
-    view: core_types.FrameView2D,
-    screen_bounds: core_types.Rect64,
+    local_from_screen: core_types.Transform,
+    view: core_types.View,
+    screen_bounds: core_types.Rect,
 ) !void {
     const Batch = @typeInfo(@TypeOf(batch)).pointer.child;
-    const GlyphMeshlet = Batch.GlyphMeshletType;
+    const GlyphMeshlet = Batch.Meshlet;
 
     if (mesh_metadata.curve_count == 0 or mesh_metadata.band_count == 0) return;
 
@@ -653,11 +650,11 @@ fn appendGlyphMeshlets(
     }
 }
 
-fn visiblePixelExtent(screen_bounds: core_types.Rect64, view: core_types.FrameView2D) [2]f64 {
+fn visiblePixelExtent(screen_bounds: core_types.Rect, view: core_types.View) [2]f64 {
     const min_x = @max(screen_bounds.x_min, 0.0);
     const min_y = @max(screen_bounds.y_min, 0.0);
-    const max_x = @min(screen_bounds.x_max, view.viewport_width);
-    const max_y = @min(screen_bounds.y_max, view.viewport_height);
+    const max_x = @min(screen_bounds.x_max, view.width);
+    const max_y = @min(screen_bounds.y_max, view.height);
     return .{ @max(max_x - min_x, 0.0), @max(max_y - min_y, 0.0) };
 }
 
@@ -682,13 +679,13 @@ fn localPixelDilationQ(glyph: anytype, precision_bits: u8) [2]i32 {
 fn viewportLocalBoundsQ(
     glyph: anytype,
     precision_bits: u8,
-    local_from_screen: core_types.Affine2D64,
-    view: core_types.FrameView2D,
+    local_from_screen: core_types.Transform,
+    view: core_types.View,
 ) [4]i32 {
     const s0 = [2]f64{ 0.0, 0.0 };
-    const s1 = [2]f64{ view.viewport_width, 0.0 };
-    const s2 = [2]f64{ view.viewport_width, view.viewport_height };
-    const s3 = [2]f64{ 0.0, view.viewport_height };
+    const s1 = [2]f64{ view.width, 0.0 };
+    const s2 = [2]f64{ view.width, view.height };
+    const s3 = [2]f64{ 0.0, view.height };
 
     const min_x = @min(
         @min(localScreenToQ(glyph, precision_bits, local_from_screen, s0, 0, false), localScreenToQ(glyph, precision_bits, local_from_screen, s1, 0, false)),
@@ -712,7 +709,7 @@ fn viewportLocalBoundsQ(
 fn localScreenToQ(
     glyph: anytype,
     precision_bits: u8,
-    local_from_screen: core_types.Affine2D64,
+    local_from_screen: core_types.Transform,
     screen: [2]f64,
     axis: u1,
     upper: bool,
@@ -780,7 +777,7 @@ fn clampI64ToI32(value: i64) i32 {
     return @intCast(value);
 }
 
-fn localRectFromFixed(bounds: cache_mod.FixedBounds, precision_bits: u8) core_types.Rect64 {
+fn localRectFromFixed(bounds: cache_mod.FixedBounds, precision_bits: u8) core_types.Rect {
     return .{
         .x_min = blob_format.dequantize(bounds.x_min, precision_bits),
         .y_min = blob_format.dequantize(bounds.y_min, precision_bits),
@@ -801,19 +798,19 @@ fn localPointFromFixed(point_q: [2]i32, precision_bits: u8) [2]f64 {
     };
 }
 
-fn inflatedViewportRect(view: core_types.FrameView2D, guard_px: f64) core_types.Rect64 {
+fn inflatedViewportRect(view: core_types.View, guard_px: f64) core_types.Rect {
     return .{
         .x_min = -guard_px,
         .y_min = -guard_px,
-        .x_max = view.viewport_width + guard_px,
-        .y_max = view.viewport_height + guard_px,
+        .x_max = view.width + guard_px,
+        .y_max = view.height + guard_px,
     };
 }
 
 fn chooseGlyphAnchorQ(
     bounds: cache_mod.FixedBounds,
     precision_bits: u8,
-    local_from_screen: core_types.Affine2D64,
+    local_from_screen: core_types.Transform,
     screen_point: [2]f64,
 ) [2]i32 {
     const local = local_from_screen.apply(screen_point);
@@ -849,7 +846,7 @@ fn castPoint2F32(point: [2]f64) ?[2]f32 {
     };
 }
 
-fn castAffineLinear2x2F32(transform: core_types.Affine2D64) ?[4]f32 {
+fn castAffineLinear2x2F32(transform: core_types.Transform) ?[4]f32 {
     return .{
         castF32Finite(transform.xx) orelse return null,
         castF32Finite(transform.xy) orelse return null,
@@ -884,7 +881,7 @@ const TestGlyphMeshlet = extern struct {
 };
 
 test "render: viewport local bounds invert screen corners without double translation" {
-    const screen_from_local = core_types.Affine2D64.init(2, 0, 0, 4, 100, 200);
+    const screen_from_local = core_types.Transform.init(2, 0, 0, 4, 100, 200);
     const local_from_screen = screen_from_local.inverse().?;
     const glyph_anchor_q = [2]i32{ 8, -12 };
     const screen_anchor = screen_from_local.apply(.{
@@ -904,7 +901,7 @@ test "render: viewport local bounds invert screen corners without double transla
         glyph,
         @intCast(glyph.precision_bits),
         local_from_screen,
-        core_types.FrameView2D.identity(1280, 720),
+        core_types.View.identity(1280, 720),
     );
 
     try std.testing.expectEqual(@as(i32, -50), bounds[0]);
@@ -935,11 +932,11 @@ const FakeBackend = struct {
 };
 
 const test_font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
-const test_view = core_types.FrameView2D.identity(1280, 720);
+const test_view = core_types.View.identity(1280, 720);
 
 test "render: FakeBackend satisfies backend contract" {
-    backend_contract.BackendContract(FakeBackend);
-    backend_contract.BackendContract(*FakeBackend);
+    backend_contract.checkBackend(FakeBackend);
+    backend_contract.checkBackend(*FakeBackend);
     try std.testing.expect(true);
 }
 
@@ -971,7 +968,7 @@ test "render: RendererCore appends shaped glyph instances and caches blobs" {
     var backend = FakeBackend{ .pool = &pool };
     var glyphs: [16]TestGlyphInstance = undefined;
     var meshlets: [16 * mesh_limits.max_subdivisions_per_glyph]TestGlyphMeshlet = undefined;
-    var batch = glyph_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
+    var batch = frame_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);
@@ -997,7 +994,7 @@ test "render: RendererCore appends shaped glyph instances and caches blobs" {
     if (@import("builtin").mode == .Debug) {
         try std.testing.expectEqual(@as(u32, 1), core.stats.runs_shaped);
         try std.testing.expect(core.stats.glyphs_shaped >= batch.glyphCount());
-        try std.testing.expectEqual(batch.glyphCount(), core.stats.instances_written);
+        try std.testing.expectEqual(batch.glyphCount(), core.stats.glyphs_written);
         try std.testing.expectEqual(batch.meshletCount(), core.stats.meshlets_written);
         try std.testing.expect(core.stats.cache_misses > 0);
         try std.testing.expect(core.stats.glyphs_encoded > 0);
@@ -1017,7 +1014,7 @@ test "render: RendererCore appends shaped glyph instances and caches blobs" {
     try std.testing.expectEqual(refs_after_first, backend.next_ref);
     if (@import("builtin").mode == .Debug) {
         try std.testing.expect(core.stats.cache_hits > 0);
-        try std.testing.expectEqual(batch.glyphCount(), core.stats.instances_written);
+        try std.testing.expectEqual(batch.glyphCount(), core.stats.glyphs_written);
     }
 }
 
@@ -1029,7 +1026,7 @@ test "render: RendererCore skips empty glyph instances while preserving cache en
     var backend = FakeBackend{ .pool = &pool };
     var glyphs: [4]TestGlyphInstance = undefined;
     var meshlets: [4 * mesh_limits.max_subdivisions_per_glyph]TestGlyphMeshlet = undefined;
-    var batch = glyph_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
+    var batch = frame_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);
@@ -1059,7 +1056,7 @@ test "render: RendererCore enforces instance capacity after skipping empty glyph
     var backend = FakeBackend{ .pool = &pool };
     var glyphs: [1]TestGlyphInstance = undefined;
     var meshlets: [1 * mesh_limits.max_subdivisions_per_glyph]TestGlyphMeshlet = undefined;
-    var batch = glyph_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
+    var batch = frame_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);
@@ -1083,7 +1080,7 @@ test "render: RendererCore writes fill-rule flags into glyph instances" {
     var backend = FakeBackend{ .pool = &pool };
     var glyphs: [4]TestGlyphInstance = undefined;
     var meshlets: [4 * mesh_limits.max_subdivisions_per_glyph]TestGlyphMeshlet = undefined;
-    var batch = glyph_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
+    var batch = frame_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);
@@ -1107,13 +1104,13 @@ test "render: RendererCore emits finite chart payload after large pan cancellati
     var backend = FakeBackend{ .pool = &pool };
     var glyphs: [4]TestGlyphInstance = undefined;
     var meshlets: [4 * mesh_limits.max_subdivisions_per_glyph]TestGlyphMeshlet = undefined;
-    var batch = glyph_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
+    var batch = frame_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
-    const world = core_types.Affine2D64.translation(-1.0e12, -1.0e12);
+    const world = core_types.Transform.translation(-1.0e12, -1.0e12);
     const run_transform = core_types.Transform.translation(1.0e12 + 32.0, 1.0e12 + 48.0);
     core.beginFrame(0, &backend);
-    try core.appendRun(&backend, &batch, core_types.FrameView2D.init(1280, 720, world), .{
+    try core.appendRun(&backend, &batch, core_types.View.init(1280, 720, world), .{
         .font = font,
         .text = "A",
         .transform = run_transform,
@@ -1136,7 +1133,7 @@ test "render: RendererCore reports unsupported precision instead of emitting uns
     var backend = FakeBackend{ .pool = &pool };
     var glyphs: [4]TestGlyphInstance = undefined;
     var meshlets: [4 * mesh_limits.max_subdivisions_per_glyph]TestGlyphMeshlet = undefined;
-    var batch = glyph_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
+    var batch = frame_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);
@@ -1166,7 +1163,7 @@ test "render: RendererCore defers evicted glyph retirement until frame token com
     var backend = FakeBackend{ .pool = &pool };
     var glyphs: [4]TestGlyphInstance = undefined;
     var meshlets: [4 * mesh_limits.max_subdivisions_per_glyph]TestGlyphMeshlet = undefined;
-    var batch = glyph_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
+    var batch = frame_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.setRetireAfterToken(7);
@@ -1211,7 +1208,7 @@ test "render: RendererCore unloadFont removes handle and defers cached glyph ret
     var backend = FakeBackend{ .pool = &pool };
     var glyphs: [4]TestGlyphInstance = undefined;
     var meshlets: [4 * mesh_limits.max_subdivisions_per_glyph]TestGlyphMeshlet = undefined;
-    var batch = glyph_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
+    var batch = frame_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);
