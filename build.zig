@@ -49,7 +49,7 @@ pub fn build(b: *std.Build) void {
     }
 
     const metal_backend = if (opts.build_metal)
-        backends.buildMetal(b, opts.target, core_mod, msl_shaders, gpu_structs_mod.?, opts.shader_stats)
+        backends.buildMetal(b, opts.target, opts.optimize, core_mod, msl_shaders, gpu_structs_mod.?, opts.shader_stats)
     else
         null;
     if (metal_backend) |backend| {

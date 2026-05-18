@@ -1,40 +1,15 @@
 //! Cocoa demo window and Metal host object access.
 
 const std = @import("std");
+const c = @import("cocoa_c");
 const demo_input = @import("demo_input");
 
-const CocoaWindowHandle = opaque {};
-
-const cocoa_key_count = 10;
-const cocoa_mouse_button_count = 2;
+const CocoaWindowHandle = c.hs_demo_cocoa_window;
+const Snapshot = c.hs_demo_cocoa_snapshot;
+const cocoa_key_count: usize = @intCast(c.HS_DEMO_KEY_COUNT);
+const cocoa_mouse_button_count: usize = @intCast(c.HS_DEMO_MOUSE_COUNT);
 const key_count = @typeInfo(demo_input.Key).@"enum".fields.len;
 const mouse_button_count = @typeInfo(demo_input.MouseButton).@"enum".fields.len;
-
-const Snapshot = extern struct {
-    keys: [cocoa_key_count]bool,
-    mouse_buttons: [cocoa_mouse_button_count]bool,
-    cursor_x: f64,
-    cursor_y: f64,
-    scroll_delta: f64,
-    framebuffer_width: u32,
-    framebuffer_height: u32,
-    should_close: bool,
-};
-
-extern fn hs_demo_cocoa_window_create(
-    width: c_int,
-    height: c_int,
-    title: [*:0]const u8,
-    error_buffer: [*]u8,
-    error_buffer_len: usize,
-) ?*CocoaWindowHandle;
-extern fn hs_demo_cocoa_window_destroy(host: *CocoaWindowHandle) void;
-extern fn hs_demo_cocoa_window_poll_events(host: *CocoaWindowHandle) void;
-extern fn hs_demo_cocoa_window_snapshot(host: *CocoaWindowHandle, snapshot: *Snapshot) void;
-extern fn hs_demo_cocoa_window_time(host: *CocoaWindowHandle) f64;
-extern fn hs_demo_cocoa_window_device(host: *CocoaWindowHandle) *anyopaque;
-extern fn hs_demo_cocoa_window_command_queue(host: *CocoaWindowHandle) *anyopaque;
-extern fn hs_demo_cocoa_window_layer(host: *CocoaWindowHandle) *anyopaque;
 
 pub const Window = struct {
     handle: *CocoaWindowHandle = undefined,
@@ -51,7 +26,7 @@ pub const Window = struct {
 
         var error_buf: [2048]u8 = undefined;
         @memset(&error_buf, 0);
-        const handle = hs_demo_cocoa_window_create(width, height, title_z.ptr, &error_buf, error_buf.len) orelse {
+        const handle = c.hs_demo_cocoa_window_create(width, height, title_z.ptr, &error_buf, error_buf.len) orelse {
             std.log.err("Cocoa host init failed: {s}", .{std.mem.sliceTo(&error_buf, 0)});
             return error.CocoaHostInitFailed;
         };
@@ -60,11 +35,11 @@ pub const Window = struct {
     }
 
     pub fn deinit(self: *Window) void {
-        hs_demo_cocoa_window_destroy(self.handle);
+        c.hs_demo_cocoa_window_destroy(self.handle);
     }
 
     pub fn pollEvents(self: *Window) void {
-        hs_demo_cocoa_window_poll_events(self.handle);
+        c.hs_demo_cocoa_window_poll_events(self.handle);
         self.refreshSnapshot();
     }
 
@@ -77,24 +52,24 @@ pub const Window = struct {
     }
 
     pub fn time(self: *const Window) f64 {
-        return hs_demo_cocoa_window_time(self.handle);
+        return c.hs_demo_cocoa_window_time(self.handle);
     }
 
     pub fn device(self: *const Window) *anyopaque {
-        return hs_demo_cocoa_window_device(self.handle);
+        return c.hs_demo_cocoa_window_device(self.handle).?;
     }
 
     pub fn commandQueue(self: *const Window) *anyopaque {
-        return hs_demo_cocoa_window_command_queue(self.handle);
+        return c.hs_demo_cocoa_window_command_queue(self.handle).?;
     }
 
     pub fn layer(self: *const Window) *anyopaque {
-        return hs_demo_cocoa_window_layer(self.handle);
+        return c.hs_demo_cocoa_window_layer(self.handle).?;
     }
 
     fn refreshSnapshot(self: *Window) void {
         var snapshot: Snapshot = undefined;
-        hs_demo_cocoa_window_snapshot(self.handle, &snapshot);
+        c.hs_demo_cocoa_window_snapshot(self.handle, &snapshot);
         self.input_state.keys = snapshot.keys;
         self.input_state.mouse_buttons = snapshot.mouse_buttons;
         self.input_state.cursor = .{ snapshot.cursor_x, snapshot.cursor_y };
@@ -119,6 +94,21 @@ comptime {
 test "Cocoa ABI input counts match shared demo input" {
     try std.testing.expectEqual(@as(usize, cocoa_key_count), key_count);
     try std.testing.expectEqual(@as(usize, cocoa_mouse_button_count), mouse_button_count);
+}
+
+test "Cocoa ABI input constants match shared demo input order" {
+    try std.testing.expectEqual(@intFromEnum(demo_input.Key.escape), @as(u8, @intCast(c.HS_DEMO_KEY_ESCAPE)));
+    try std.testing.expectEqual(@intFromEnum(demo_input.Key.space), @as(u8, @intCast(c.HS_DEMO_KEY_SPACE)));
+    try std.testing.expectEqual(@intFromEnum(demo_input.Key.equal), @as(u8, @intCast(c.HS_DEMO_KEY_EQUAL)));
+    try std.testing.expectEqual(@intFromEnum(demo_input.Key.minus), @as(u8, @intCast(c.HS_DEMO_KEY_MINUS)));
+    try std.testing.expectEqual(@intFromEnum(demo_input.Key.b), @as(u8, @intCast(c.HS_DEMO_KEY_B)));
+    try std.testing.expectEqual(@intFromEnum(demo_input.Key.r), @as(u8, @intCast(c.HS_DEMO_KEY_R)));
+    try std.testing.expectEqual(@intFromEnum(demo_input.Key.up), @as(u8, @intCast(c.HS_DEMO_KEY_UP)));
+    try std.testing.expectEqual(@intFromEnum(demo_input.Key.down), @as(u8, @intCast(c.HS_DEMO_KEY_DOWN)));
+    try std.testing.expectEqual(@intFromEnum(demo_input.Key.left), @as(u8, @intCast(c.HS_DEMO_KEY_LEFT)));
+    try std.testing.expectEqual(@intFromEnum(demo_input.Key.right), @as(u8, @intCast(c.HS_DEMO_KEY_RIGHT)));
+    try std.testing.expectEqual(@intFromEnum(demo_input.MouseButton.left), @as(u8, @intCast(c.HS_DEMO_MOUSE_LEFT)));
+    try std.testing.expectEqual(@intFromEnum(demo_input.MouseButton.right), @as(u8, @intCast(c.HS_DEMO_MOUSE_RIGHT)));
 }
 
 test "Cocoa window requires positive initial extents" {

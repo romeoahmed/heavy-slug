@@ -1,77 +1,31 @@
 //! Zig-facing Metal 4 bridge context and host-owned object contract.
 
 const std = @import("std");
+const c = @import("metal_c");
 const msl_shaders = @import("msl_shaders");
 
-pub const ContextHandle = opaque {};
-pub const BufferHandle = opaque {};
+pub const ContextHandle = c.hs_metal_context;
+pub const BufferHandle = c.hs_metal_buffer;
 
-pub const Host = extern struct {
+pub const Host = struct {
     /// Borrowed id<MTLDevice>; must outlive Context.
     device: *anyopaque,
     /// Borrowed id<MTL4CommandQueue>; must belong to device.
     command_queue: *anyopaque,
     /// Borrowed CAMetalLayer with device and pixelFormat already configured.
     layer: *anyopaque,
+
+    fn cValue(self: Host) c.hs_metal_host_objects {
+        return .{
+            .device = self.device,
+            .command_queue = self.command_queue,
+            .layer = self.layer,
+        };
+    }
 };
 
-pub const ResourceIndices = extern struct {
-    glyph_pool: u32,
-    glyphs: u32,
-    frame_params: u32,
-    shader_stats: u32,
-};
-
-pub const GeometryLimits = extern struct {
-    task_threadgroup_size: u32,
-    mesh_threadgroup_size: u32,
-    task_max_meshlets: u32,
-    task_payload_bytes: u32,
-};
-
-extern fn hs_metal_context_create(
-    host: Host,
-    task_source: [*]const u8,
-    task_source_len: usize,
-    mesh_source: [*]const u8,
-    mesh_source_len: usize,
-    fragment_source: [*]const u8,
-    fragment_source_len: usize,
-    error_buffer: [*]u8,
-    error_buffer_len: usize,
-) ?*ContextHandle;
-
-extern fn hs_metal_context_destroy(context: *ContextHandle) void;
-extern fn hs_metal_context_wait_frame_slot(
-    context: *ContextHandle,
-    slot_index: u32,
-    error_buffer: [*]u8,
-    error_buffer_len: usize,
-) c_int;
-extern fn hs_metal_context_release_frame_slot(context: *ContextHandle, slot_index: u32) void;
-extern fn hs_metal_context_wait_submitted(context: *ContextHandle) void;
-extern fn hs_metal_buffer_create(context: *ContextHandle, size: usize) ?*BufferHandle;
-extern fn hs_metal_buffer_destroy(buffer: *BufferHandle) void;
-extern fn hs_metal_buffer_contents(buffer: *BufferHandle) ?[*]u8;
-extern fn hs_metal_context_draw(
-    context: *ContextHandle,
-    width: u32,
-    height: u32,
-    clear_r: f32,
-    clear_g: f32,
-    clear_b: f32,
-    clear_a: f32,
-    glyphs: *BufferHandle,
-    frame_params: *BufferHandle,
-    glyph_pool: *BufferHandle,
-    shader_stats: ?*BufferHandle,
-    workgroup_count: u32,
-    slot_index: u32,
-    error_buffer: [*]u8,
-    error_buffer_len: usize,
-) c_int;
-extern fn hs_metal_get_resource_indices() ResourceIndices;
-extern fn hs_metal_get_geometry_limits() GeometryLimits;
+pub const ResourceIndices = c.hs_metal_resource_indices;
+pub const GeometryLimits = c.hs_metal_geometry_limits;
 
 pub const Error = error{
     MetalInitFailed,
@@ -86,8 +40,8 @@ pub const Context = struct {
     pub fn init(host: Host) !Context {
         var error_buf: [2048]u8 = undefined;
         @memset(&error_buf, 0);
-        const handle = hs_metal_context_create(
-            host,
+        const handle = c.hs_metal_context_create(
+            host.cValue(),
             msl_shaders.task.ptr,
             msl_shaders.task.len,
             msl_shaders.mesh.ptr,
@@ -104,7 +58,7 @@ pub const Context = struct {
     }
 
     pub fn deinit(self: *Context) void {
-        hs_metal_context_destroy(self.handle);
+        c.hs_metal_context_destroy(self.handle);
         self.* = undefined;
     }
 };
@@ -114,26 +68,26 @@ pub const Buffer = struct {
     mapped: [*]u8,
 
     pub fn init(ctx: Context, size: usize) !Buffer {
-        const handle = hs_metal_buffer_create(ctx.handle, size) orelse
+        const handle = c.hs_metal_buffer_create(ctx.handle, size) orelse
             return Error.MetalBufferCreateFailed;
-        errdefer hs_metal_buffer_destroy(handle);
+        errdefer c.hs_metal_buffer_destroy(handle);
 
-        const mapped = hs_metal_buffer_contents(handle) orelse
+        const contents = c.hs_metal_buffer_contents(handle) orelse
             return Error.MetalBufferCreateFailed;
 
         return .{
             .handle = handle,
-            .mapped = mapped,
+            .mapped = @ptrCast(contents),
         };
     }
 
     pub fn deinit(self: Buffer) void {
-        hs_metal_buffer_destroy(self.handle);
+        c.hs_metal_buffer_destroy(self.handle);
     }
 };
 
 pub fn waitFrameSlot(ctx: Context, slot_index: u32, error_buffer: []u8) Error!void {
-    if (hs_metal_context_wait_frame_slot(
+    if (c.hs_metal_context_wait_frame_slot(
         ctx.handle,
         slot_index,
         error_buffer.ptr,
@@ -142,11 +96,11 @@ pub fn waitFrameSlot(ctx: Context, slot_index: u32, error_buffer: []u8) Error!vo
 }
 
 pub fn releaseFrameSlot(ctx: Context, slot_index: u32) void {
-    hs_metal_context_release_frame_slot(ctx.handle, slot_index);
+    c.hs_metal_context_release_frame_slot(ctx.handle, slot_index);
 }
 
 pub fn waitSubmitted(ctx: Context) void {
-    hs_metal_context_wait_submitted(ctx.handle);
+    c.hs_metal_context_wait_submitted(ctx.handle);
 }
 
 pub const DrawInfo = struct {
@@ -166,7 +120,7 @@ pub fn draw(ctx: Context, info: DrawInfo, error_buffer: []u8) Error!void {
     else
         null;
 
-    if (hs_metal_context_draw(
+    if (c.hs_metal_context_draw(
         ctx.handle,
         info.viewport[0],
         info.viewport[1],
@@ -186,11 +140,11 @@ pub fn draw(ctx: Context, info: DrawInfo, error_buffer: []u8) Error!void {
 }
 
 pub fn resourceIndices() ResourceIndices {
-    return hs_metal_get_resource_indices();
+    return c.hs_metal_get_resource_indices();
 }
 
 pub fn geometryLimits() GeometryLimits {
-    return hs_metal_get_geometry_limits();
+    return c.hs_metal_get_geometry_limits();
 }
 
 test "Metal context public API compiles" {
@@ -199,4 +153,14 @@ test "Metal context public API compiles" {
     _ = Buffer;
     _ = GeometryLimits;
     _ = @TypeOf(Context.init);
+}
+
+test "Metal context uses translated C bridge ABI" {
+    try std.testing.expectEqual(@as(u32, 0), c.HS_METAL_BUFFER_GLYPH_POOL);
+    try std.testing.expectEqual(@as(u32, 1), c.HS_METAL_BUFFER_GLYPHS);
+    try std.testing.expectEqual(@as(u32, 2), c.HS_METAL_BUFFER_SHADER_STATS);
+    try std.testing.expectEqual(@as(u32, 32), c.HS_METAL_TASK_THREADGROUP_SIZE);
+    try std.testing.expectEqual(@as(u32, 32), c.HS_METAL_MESH_THREADGROUP_SIZE);
+    try std.testing.expectEqual(@as(u32, 512), c.HS_METAL_TASK_MAX_MESHLETS);
+    try std.testing.expectEqual(@as(u32, 4096), c.HS_METAL_TASK_PAYLOAD_BYTES);
 }

@@ -23,6 +23,10 @@ implementation notes belong in commits and code review history.
   `NSTrackingArea`, maps keyboard input through AppKit characters instead of
   hardware key codes, and clears captured input on close, quit, focus loss,
   minimization, or app deactivation.
+- **Metal Zig/C ABI boundary tightened:** the Metal backend bridge header and
+  Cocoa demo host header are now translated through build-system
+  `addTranslateC()` modules, leaving `bridge.h` and `cocoa.h` as the single
+  source of truth for C functions, opaque handles, ABI structs, and constants.
 - **Wayland demo GNOME 50 cleanup:** the Linux Vulkan host now binds
   GNOME 50/Mutter-compatible Wayland core versions plus the latest generated
   xdg-shell, viewporter, fractional-scale, and cursor-shape objects used by the
