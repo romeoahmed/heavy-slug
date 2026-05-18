@@ -21,7 +21,7 @@ pub const Options = struct {
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     build_demo: bool,
-    demo_backend: ResolvedDemoBackend,
+    demo_backend: ?ResolvedDemoBackend,
     build_vulkan: bool,
     build_metal: bool,
     use_lto: bool,
@@ -35,11 +35,11 @@ pub fn resolve(b: *std.Build) Options {
     const requested_backend = b.option(DemoBackend, "demo-backend", "Demo backend: auto, vulkan, metal") orelse .auto;
     const thin_lto_mode = b.option(ThinLtoMode, "thinlto", "ThinLTO: auto, on, off") orelse .auto;
     const shader_stats = b.option(bool, "shader-stats", "Enable opt-in GPU shader statistics buffers") orelse false;
-    const demo_backend = resolveDemoBackend(target.result.os.tag, requested_backend);
-    const build_vulkan = (b.option(bool, "vulkan", "Build the Vulkan SPIR-V 1.6 backend module") orelse false) or
-        (build_demo and demo_backend == .vulkan);
-    const build_metal = (b.option(bool, "metal", "Build the Metal 4 backend module") orelse false) or
-        (build_demo and demo_backend == .metal);
+    const demo_backend = resolveOptionalDemoBackend(target.result.os.tag, build_demo, requested_backend);
+    const requested_vulkan = b.option(bool, "vulkan", "Build the Vulkan SPIR-V 1.6 backend module") orelse false;
+    const requested_metal = b.option(bool, "metal", "Build the Metal 4 backend module") orelse false;
+    const build_vulkan = requested_vulkan or (demo_backend != null and demo_backend.? == .vulkan);
+    const build_metal = requested_metal or (demo_backend != null and demo_backend.? == .metal);
 
     if (build_metal and target.result.os.tag != .macos) {
         std.process.fatal("Metal backend is supported only on macOS targets", .{});
@@ -84,12 +84,21 @@ fn resolveDemoBackend(
     return resolved;
 }
 
+fn resolveOptionalDemoBackend(
+    os: std.Target.Os.Tag,
+    build_demo: bool,
+    requested: DemoBackend,
+) ?ResolvedDemoBackend {
+    return if (build_demo) resolveDemoBackend(os, requested) else null;
+}
+
 fn resolveThinLto(
     optimize: std.builtin.OptimizeMode,
     target: std.Target,
     mode: ThinLtoMode,
 ) bool {
-    if (optimize == .Debug or mode == .off) return false;
+    if (mode == .off) return false;
+    if (mode == .auto and optimize == .Debug) return false;
 
     // Zig 0.16 requires LLD for LTO, but native Mach-O LLD linking is not
     // available. Keep auto conservative and make -Dthinlto=on fail loudly.
@@ -110,4 +119,30 @@ pub fn enableThinLtoAll(enabled: bool, compile_steps: []const *std.Build.Step.Co
         compile_step.use_lld = true;
         compile_step.lto = .thin;
     }
+}
+
+test "resolveOptionalDemoBackend ignores demo-backend unless demo is enabled" {
+    try std.testing.expectEqual(@as(?ResolvedDemoBackend, null), resolveOptionalDemoBackend(.linux, false, .metal));
+    try std.testing.expectEqual(ResolvedDemoBackend.vulkan, resolveOptionalDemoBackend(.linux, true, .auto).?);
+}
+
+test "resolveDemoBackend maps supported requests" {
+    try std.testing.expectEqual(ResolvedDemoBackend.vulkan, resolveDemoBackend(.linux, .auto));
+    try std.testing.expectEqual(ResolvedDemoBackend.vulkan, resolveDemoBackend(.windows, .auto));
+    try std.testing.expectEqual(ResolvedDemoBackend.metal, resolveDemoBackend(.macos, .auto));
+    try std.testing.expectEqual(ResolvedDemoBackend.vulkan, resolveDemoBackend(.linux, .vulkan));
+    try std.testing.expectEqual(ResolvedDemoBackend.metal, resolveDemoBackend(.macos, .metal));
+}
+
+test "resolveThinLto treats auto and on as different user intents" {
+    var target = @import("builtin").target;
+
+    target.ofmt = .elf;
+    try std.testing.expect(!resolveThinLto(.Debug, target, .auto));
+    try std.testing.expect(resolveThinLto(.Debug, target, .on));
+    try std.testing.expect(resolveThinLto(.ReleaseFast, target, .auto));
+    try std.testing.expect(!resolveThinLto(.ReleaseFast, target, .off));
+
+    target.ofmt = .macho;
+    try std.testing.expect(!resolveThinLto(.ReleaseFast, target, .auto));
 }

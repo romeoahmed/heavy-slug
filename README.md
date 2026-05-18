@@ -34,7 +34,7 @@ UTF-8 text -> HarfBuzz shaping -> font outlines -> precision blobs -> CPU meshle
 
 | Goal | Command | Notes |
 | --- | --- | --- |
-| Core build | `zig build` | Builds the backend-neutral library. |
+| Core build | `zig build` | Builds and installs the backend-neutral static library under `zig-out/`. |
 | Core tests | `zig build test` | No shader compiler or GPU SDK required. |
 | Vulkan tests | `zig build test -Dvulkan=true` | Requires `slangc` and Vulkan packages. |
 | Metal tests | `zig build test -Dmetal=true` | macOS only; requires Metal 4 SDK and `slangc`. |
@@ -148,6 +148,8 @@ Important dependency facts:
   Metal, Wayland, Cocoa, or a window toolkit.
 - Vulkan and Vulkan Headers stay lazy; they are fetched only when the Vulkan
   backend or Vulkan demo is requested.
+- `-Ddemo-backend=` is interpreted only when `-Ddemo=true`; backend-only builds
+  use `-Dvulkan=true` or `-Dmetal=true`.
 - Metal/Cocoa Objective-C++ sources compile as C++23 with ARC, no C++ or
   Objective-C exceptions, no RTTI, warnings as errors, and Zig optimize-mode
   mapped `-O0`/`-O3`/`-Os` flags.
@@ -166,6 +168,10 @@ Important dependency facts:
 | `heavy_slug` | default | Core public types and backend-neutral renderer logic. |
 | `heavy_slug_vulkan` | `-Dvulkan=true` or Vulkan demo | Vulkan 1.4 / SPIR-V 1.6 shader-object backend. |
 | `heavy_slug_metal` | `-Dmetal=true` or Metal demo | macOS Metal 4 backend. |
+
+Generated shader-blob modules, Slang reflection structs, and third-party
+Vulkan generator output are private build-graph imports rather than public
+package modules.
 
 Stable top-level core exports include `FontHandle`, `FontSource`,
 `FontOptions`, `TextRun`, `FrameToken`, `Color`, `Transform`, `Affine2D64`,

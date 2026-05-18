@@ -58,7 +58,7 @@ pub fn compileSpirv(b: *std.Build, shader_stats: bool) SpirvBundle {
     return .{
         .mesh = mesh_spv,
         .fragment = fragment_spv,
-        .module = b.addModule("spirv_shaders", .{ .root_source_file = module_zig }),
+        .module = b.createModule(.{ .root_source_file = module_zig }),
     };
 }
 
@@ -77,7 +77,7 @@ pub fn compileMsl(b: *std.Build, shader_stats: bool) MslBundle {
     return .{
         .mesh = mesh_msl,
         .fragment = fragment_msl,
-        .module = b.addModule("msl_shaders", .{ .root_source_file = module_zig }),
+        .module = b.createModule(.{ .root_source_file = module_zig }),
     };
 }
 
@@ -133,7 +133,7 @@ fn generateGpuStructs(
 pub fn buildGpuStructsModule(b: *std.Build) *std.Build.Module {
     const reflection_json = generateReflectionJson(b);
     const gpu_structs_zig = generateGpuStructs(b, reflection_json);
-    return b.addModule("gpu_structs", .{ .root_source_file = gpu_structs_zig });
+    return b.createModule(.{ .root_source_file = gpu_structs_zig });
 }
 
 fn compileStage(
@@ -175,13 +175,7 @@ fn addCommonArgs(
 
     addSlangImportInputs(b, cmd, target);
     cmd.addArgs(&.{"-matrix-layout-column-major"});
-    cmd.addArgs(&.{ "-I", "shaders" });
-    cmd.addArgs(&.{ "-I", "shaders/core" });
-    cmd.addArgs(&.{ "-I", switch (target) {
-        .spirv => "shaders/backend_vulkan",
-        .msl => "shaders/backend_metal",
-    } });
-    cmd.addArgs(&.{ "-I", "shaders/entries" });
+    addSlangImportDirs(b, cmd, target);
     cmd.addArgs(&.{"-restrictive-capability-check"});
     cmd.addArgs(&.{ "-warnings-as-errors", "all" });
     cmd.addArgs(&.{"-O2"});
@@ -189,6 +183,25 @@ fn addCommonArgs(
 
 fn addCapabilities(cmd: *std.Build.Step.Run, caps: []const []const u8) void {
     for (caps) |cap| cmd.addArgs(&.{ "-capability", cap });
+}
+
+fn addSlangImportDirs(
+    b: *std.Build,
+    cmd: *std.Build.Step.Run,
+    target: SlangTarget,
+) void {
+    addIncludeDir(cmd, b.path("shaders"));
+    addIncludeDir(cmd, b.path("shaders/core"));
+    addIncludeDir(cmd, b.path(switch (target) {
+        .spirv => "shaders/backend_vulkan",
+        .msl => "shaders/backend_metal",
+    }));
+    addIncludeDir(cmd, b.path("shaders/entries"));
+}
+
+fn addIncludeDir(cmd: *std.Build.Step.Run, dir: std.Build.LazyPath) void {
+    cmd.addArg("-I");
+    cmd.addDirectoryArg(dir);
 }
 
 fn spirvCapabilities(stage: Stage) []const []const u8 {

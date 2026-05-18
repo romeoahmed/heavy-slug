@@ -10,22 +10,11 @@ const shaders = @import("build/shaders.zig");
 pub fn build(b: *std.Build) void {
     const opts = deps.resolve(b);
 
-    const spirv_step = b.step("spirv", "Compile Slang shaders to SPIR-V 1.6");
-    const spirv_shaders = shaders.compileSpirv(b, opts.shader_stats);
-    shaders.installSpirv(b, spirv_step, spirv_shaders);
-
-    const msl_step = b.step("msl", "Compile Slang shaders to Metal Shading Language");
-    const msl_shaders = shaders.compileMsl(b, opts.shader_stats);
-    shaders.installMsl(b, msl_step, msl_shaders);
-
     const core_mod = b.addModule("heavy_slug", .{
         .root_source_file = b.path("src/root.zig"),
         .target = opts.target,
+        .optimize = opts.optimize,
     });
-    const gpu_structs_mod = if (opts.build_vulkan or opts.build_metal)
-        shaders.buildGpuStructsModule(b)
-    else
-        null;
 
     const c_deps = c_libs.resolveCoreDeps(b);
     const ft_lib = c_libs.buildFreetype(b, opts.target, opts.optimize, c_deps);
@@ -34,10 +23,31 @@ pub fn build(b: *std.Build) void {
     core_mod.addImport("heavy_slug_c", c_mod);
     core_mod.linkLibrary(ft_lib);
     core_mod.linkLibrary(hb_lib);
-    deps.enableThinLtoAll(opts.use_lto, &.{ ft_lib, hb_lib });
+
+    const core_lib = b.addLibrary(.{
+        .name = "heavy_slug",
+        .linkage = .static,
+        .root_module = core_mod,
+    });
+    deps.enableThinLtoAll(opts.use_lto, &.{ ft_lib, hb_lib, core_lib });
+    b.installArtifact(core_lib);
+
+    const spirv_step = b.step("spirv", "Compile Slang shaders to SPIR-V 1.6");
+    const spirv_shaders = shaders.compileSpirv(b, opts.shader_stats);
+    shaders.installSpirv(b, spirv_step, spirv_shaders);
+
+    const msl_step = b.step("msl", "Compile Slang shaders to Metal Shading Language");
+    const msl_shaders = shaders.compileMsl(b, opts.shader_stats);
+    shaders.installMsl(b, msl_step, msl_shaders);
+
+    const gpu_structs_mod = if (opts.build_vulkan or opts.build_metal)
+        shaders.buildGpuStructsModule(b)
+    else
+        null;
 
     const test_step = b.step("test", "Run tests");
-    addModuleTest(b, test_step, core_mod);
+    addModuleTest(b, test_step, "heavy_slug", core_mod);
+    addBuildHelperTests(b, test_step);
     addToolTests(b, test_step);
 
     const vulkan_backend = if (opts.build_vulkan)
@@ -45,7 +55,7 @@ pub fn build(b: *std.Build) void {
     else
         null;
     if (vulkan_backend) |backend| {
-        addModuleTest(b, test_step, backend.module);
+        addModuleTest(b, test_step, "heavy_slug_vulkan", backend.module);
     }
 
     const metal_backend = if (opts.build_metal)
@@ -53,11 +63,11 @@ pub fn build(b: *std.Build) void {
     else
         null;
     if (metal_backend) |backend| {
-        addModuleTest(b, test_step, backend.module);
+        addModuleTest(b, test_step, "heavy_slug_metal", backend.module);
     }
 
     if (opts.build_demo) {
-        const exe = switch (opts.demo_backend) {
+        const exe = switch (opts.demo_backend.?) {
             .vulkan => demos.buildVulkan(
                 b,
                 opts.target,
@@ -78,16 +88,29 @@ pub fn build(b: *std.Build) void {
 
         b.installArtifact(exe);
         addDemoRunStep(b, exe);
-        addModuleTest(b, test_step, exe.root_module);
+        addModuleTest(b, test_step, "heavy_slug_demo", exe.root_module);
     }
 }
 
 fn addModuleTest(
     b: *std.Build,
     test_step: *std.Build.Step,
+    name: []const u8,
     module: *std.Build.Module,
 ) void {
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = module })).step);
+    const tests = b.addTest(.{
+        .name = name,
+        .root_module = module,
+    });
+    test_step.dependOn(&b.addRunArtifact(tests).step);
+}
+
+fn addBuildHelperTests(b: *std.Build, test_step: *std.Build.Step) void {
+    const deps_mod = b.createModule(.{
+        .root_source_file = b.path("build/deps.zig"),
+        .target = b.graph.host,
+    });
+    addModuleTest(b, test_step, "build_deps", deps_mod);
 }
 
 fn addToolTests(b: *std.Build, test_step: *std.Build.Step) void {
@@ -95,7 +118,7 @@ fn addToolTests(b: *std.Build, test_step: *std.Build.Step) void {
         .root_source_file = b.path("tools/layout_gen.zig"),
         .target = b.graph.host,
     });
-    addModuleTest(b, test_step, layout_gen_mod);
+    addModuleTest(b, test_step, "layout_gen", layout_gen_mod);
 }
 
 fn addDemoRunStep(b: *std.Build, exe: *std.Build.Step.Compile) void {

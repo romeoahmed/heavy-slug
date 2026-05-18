@@ -12,6 +12,15 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Breaking build graph semantics:** `zig build` now builds and installs the
+  backend-neutral static library instead of completing an empty install step;
+  generated shader blobs, GPU reflection structs, and Vulkan generator output
+  are private build imports rather than public package modules.
+- **Build option semantics tightened:** `-Ddemo-backend=` is validated only
+  when `-Ddemo=true`, explicit `-Dthinlto=on` now means "enable or fail"
+  instead of being silently ignored in Debug mode, and the package manifest now
+  includes the build helpers, native demos, docs, license, shaders, tools, and
+  assets needed by the advertised build graph.
 - **Breaking meshlet renderer path:** the required GPU path now uses a
   CPU-authored `GlyphMeshlet` stream plus mesh/fragment shaders, adds
   per-frame meshlet buffers to Vulkan and Metal, removes task payload expansion

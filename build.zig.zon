@@ -31,9 +31,14 @@
     .paths = .{
         "build.zig",
         "build.zig.zon",
+        "build",
+        "demo",
         "src",
         "shaders",
         "tools",
         "assets",
+        "README.md",
+        "CHANGELOG.md",
+        "LICENSE",
     },
 }

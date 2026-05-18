@@ -30,7 +30,7 @@ pub fn buildVulkan(
     const vk_gen = vk_dep.?.artifact("vulkan-zig-generator");
     const vk_generate_cmd = b.addRunArtifact(vk_gen);
     vk_generate_cmd.addFileArg(registry);
-    const vulkan_zig = b.addModule("vulkan-zig", .{
+    const vulkan_zig = b.createModule(.{
         .root_source_file = vk_generate_cmd.addOutputFileArg("vk.zig"),
     });
 
