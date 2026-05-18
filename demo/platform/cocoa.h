@@ -1,6 +1,11 @@
 #pragma once
 
-/* Demo-only Cocoa window and Metal host bridge. */
+/*
+ * Demo-only Cocoa window and Metal host bridge.
+ *
+ * All functions are main-thread-only. Returned Metal and Cocoa objects are
+ * borrowed by Zig callers and remain valid until hs_demo_cocoa_window_destroy().
+ */
 
 #include <stdbool.h>
 #include <stddef.h>

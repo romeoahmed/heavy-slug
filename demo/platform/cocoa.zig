@@ -5,12 +5,14 @@ const demo_input = @import("demo_input");
 
 const CocoaWindowHandle = opaque {};
 
+const cocoa_key_count = 10;
+const cocoa_mouse_button_count = 2;
 const key_count = @typeInfo(demo_input.Key).@"enum".fields.len;
 const mouse_button_count = @typeInfo(demo_input.MouseButton).@"enum".fields.len;
 
 const Snapshot = extern struct {
-    keys: [key_count]bool,
-    mouse_buttons: [mouse_button_count]bool,
+    keys: [cocoa_key_count]bool,
+    mouse_buttons: [cocoa_mouse_button_count]bool,
     cursor_x: f64,
     cursor_y: f64,
     scroll_delta: f64,
@@ -42,6 +44,8 @@ pub const Window = struct {
     should_close: bool = false,
 
     pub fn init(self: *Window, allocator: std.mem.Allocator, width: c_int, height: c_int, title: []const u8) !void {
+        if (!validInitialExtent(width, height)) return error.InvalidWindowSize;
+
         const title_z = try allocator.dupeZ(u8, title);
         defer allocator.free(title_z);
 
@@ -100,3 +104,27 @@ pub const Window = struct {
         self.should_close = snapshot.should_close;
     }
 };
+
+fn validInitialExtent(width: c_int, height: c_int) bool {
+    return width > 0 and height > 0;
+}
+
+comptime {
+    if (key_count != cocoa_key_count)
+        @compileError("demo_input.Key and demo/platform/cocoa.h key counts must stay in lockstep");
+    if (mouse_button_count != cocoa_mouse_button_count)
+        @compileError("demo_input.MouseButton and demo/platform/cocoa.h mouse counts must stay in lockstep");
+}
+
+test "Cocoa ABI input counts match shared demo input" {
+    try std.testing.expectEqual(@as(usize, cocoa_key_count), key_count);
+    try std.testing.expectEqual(@as(usize, cocoa_mouse_button_count), mouse_button_count);
+}
+
+test "Cocoa window requires positive initial extents" {
+    try std.testing.expect(validInitialExtent(1, 1));
+    try std.testing.expect(!validInitialExtent(0, 1));
+    try std.testing.expect(!validInitialExtent(1, 0));
+    try std.testing.expect(!validInitialExtent(-1, 1));
+    try std.testing.expect(!validInitialExtent(1, -1));
+}
