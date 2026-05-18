@@ -149,6 +149,7 @@ fn buildVulkanPlatformModule(
                     "xdg-shell-protocol.c",
                     "viewporter-protocol.c",
                     "fractional-scale-v1-protocol.c",
+                    "cursor-shape-v1-protocol.c",
                 },
             });
             break :blk b.createModule(.{
@@ -203,6 +204,11 @@ fn generateWaylandProtocols(b: *std.Build) std.Build.LazyPath {
             .xml = "staging/fractional-scale/fractional-scale-v1.xml",
             .header = "fractional-scale-v1-client-protocol.h",
             .code = "fractional-scale-v1-protocol.c",
+        },
+        .{
+            .xml = "staging/cursor-shape/cursor-shape-v1.xml",
+            .header = "cursor-shape-v1-client-protocol.h",
+            .code = "cursor-shape-v1-protocol.c",
         },
     };
 

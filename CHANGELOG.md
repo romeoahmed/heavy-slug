@@ -12,6 +12,14 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Wayland demo GNOME 50 cleanup:** the Linux Vulkan host now binds
+  GNOME 50/Mutter-compatible Wayland core versions plus the latest generated
+  xdg-shell, viewporter, fractional-scale, and cursor-shape objects used by the
+  demo, handles xdg-shell state/capability events, uses cursor-shape-v1 for
+  compositor-owned pointer cursors, applies Adwaita-like client decoration
+  geometry atomically with xdg configures, handles constrained/tiled/maximized/
+  fullscreen edges, consumes high-resolution `wl_pointer.axis_value120` scroll
+  events, and treats `wl_keyboard.key_state.repeated` as pressed.
 - **Metal 4 backend tightened:** the Objective-C++ bridge now validates host
   device/queue/layer consistency up front, labels Metal 4 command resources,
   uses per-command residency for GPU-address argument table bindings, and keeps

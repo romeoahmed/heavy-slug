@@ -135,7 +135,7 @@ Task -> Mesh -> Fragment shaders
 | Shaders and backends | `slangc` with Slang 2026 support. | Backend-specific GPU runtime. |
 | Vulkan backend | Lazy `vulkan-zig` and Vulkan Headers packages. | Vulkan 1.4, `VK_EXT_mesh_shader`, `VK_EXT_shader_object`, dynamic rendering, push descriptors. |
 | Windows Vulkan demo | Native Win32 host; links `user32`; loads the Vulkan loader at runtime. | Vulkan-capable Windows 11 system. |
-| Linux Vulkan demo | `wayland-scanner`, `wayland-client`, `xkbcommon`, and xdg-shell/viewporter/fractional-scale protocol XML. | Modern Wayland session and Vulkan loader/driver. |
+| Linux Vulkan demo | `wayland-scanner`, `wayland-client`, `xkbcommon`, current Wayland client headers, and xdg-shell/viewporter/fractional-scale/cursor-shape protocol XML. | GNOME 50/Mutter 50.x-compatible Wayland session and Vulkan loader/driver. |
 | Metal backend/demo | macOS, Apple SDK with Metal 4 APIs, Objective-C++ support, `Metal`, `QuartzCore`, `Foundation`, and `Cocoa` for the demo. | Metal 4 capable device and native Cocoa host. |
 
 Important dependency facts:
