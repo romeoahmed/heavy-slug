@@ -1,0 +1,41 @@
+---
+BasedOnStyle: LLVM
+Standard: Latest
+ColumnLimit: 80
+IndentWidth: 2
+ContinuationIndentWidth: 4
+TabWidth: 8
+UseTab: Never
+
+AccessModifierOffset: -2
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None
+AlignOperands: Align
+AllowAllArgumentsOnNextLine: true
+AllowAllParametersOfDeclarationOnNextLine: true
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortEnumsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+BinPackArguments: true
+BinPackParameters: true
+BreakBeforeBraces: Attach
+Cpp11BracedListStyle: true
+DerivePointerAlignment: false
+IndentCaseLabels: false
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 1
+PointerAlignment: Right
+ReferenceAlignment: Pointer
+SortIncludes: CaseSensitive
+SpaceAfterCStyleCast: false
+SpacesInContainerLiterals: false
+
+ObjCBlockIndentWidth: 2
+ObjCBreakBeforeNestedBlockParam: true
+ObjCSpaceAfterProperty: false
+ObjCSpaceBeforeProtocolList: true
+...

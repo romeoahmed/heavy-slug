@@ -136,7 +136,7 @@ Task -> Mesh -> Fragment shaders
 | Vulkan backend | Lazy `vulkan-zig` and Vulkan Headers packages. | Vulkan 1.4, `VK_EXT_mesh_shader`, `VK_EXT_shader_object`, dynamic rendering, push descriptors. |
 | Windows Vulkan demo | Native Win32 host; links `user32`; embeds a Per-Monitor-V2/long-path/Segment-Heap manifest; loads the Vulkan loader at runtime. | Vulkan-capable Windows 11 system. |
 | Linux Vulkan demo | `wayland-scanner`, `wayland-client`, `xkbcommon`, current Wayland client headers, and xdg-shell/viewporter/fractional-scale/cursor-shape protocol XML. | GNOME 50/Mutter 50.x-compatible Wayland session and Vulkan loader/driver. |
-| Metal backend/demo | macOS, Apple SDK with Metal 4 APIs, Objective-C++ support, `Metal`, `QuartzCore`, `Foundation`, and `Cocoa` for the demo. | Metal 4 capable device and native Cocoa host. |
+| Metal backend/demo | macOS, Apple SDK with Metal 4 APIs, Objective-C++ C++23 support, `Metal`, `QuartzCore`, `Foundation`, and `Cocoa` for the demo. | Metal 4 capable device and native Cocoa host. |
 
 Important dependency facts:
 
@@ -147,6 +147,9 @@ Important dependency facts:
   Metal, Wayland, Cocoa, or a window toolkit.
 - Vulkan and Vulkan Headers stay lazy; they are fetched only when the Vulkan
   backend or Vulkan demo is requested.
+- Metal/Cocoa Objective-C++ sources compile as C++23 with ARC, no C++ or
+  Objective-C exceptions, no RTTI, warnings as errors, and Zig optimize-mode
+  mapped `-O0`/`-O3`/`-Os` flags.
 - The demo hosts are deliberately native: Win32 on Windows, Wayland on Linux,
   and Cocoa on macOS. GLFW/SDL-style toolkit dependencies are not part of the
   current build model.

@@ -27,6 +27,15 @@ implementation notes belong in commits and code review history.
   Cocoa demo host header are now translated through build-system
   `addTranslateC()` modules, leaving `bridge.h` and `cocoa.h` as the single
   source of truth for C functions, opaque handles, ABI structs, and constants.
+- **Objective-C++ bridge code moved to C++23:** the Metal backend bridge and
+  Cocoa demo host now compile as Objective-C++ C++23 and use `std::span`,
+  `std::array`, `std::optional`, and RAII helpers for internal host/context
+  creation, shader-source validation, input snapshots, and frame-slot cleanup
+  while preserving the translated C ABI seen by Zig.
+- **Objective-C++ compiler policy hardened:** Metal/Cocoa bridge sources now
+  share one build helper for C++23 ARC flags, optimize-mode-specific
+  `-O0`/`-O3`/`-Os`, disabled C++/Objective-C exceptions and RTTI, stricter
+  diagnostics, and warnings as errors.
 - **Wayland demo GNOME 50 cleanup:** the Linux Vulkan host now binds
   GNOME 50/Mutter-compatible Wayland core versions plus the latest generated
   xdg-shell, viewporter, fractional-scale, and cursor-shape objects used by the

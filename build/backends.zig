@@ -1,6 +1,7 @@
 //! Optional backend module wiring for Vulkan and Metal.
 
 const std = @import("std");
+const objcxx = @import("objcxx.zig");
 const shaders = @import("shaders.zig");
 
 pub const VulkanBackend = struct {
@@ -81,11 +82,9 @@ pub fn buildMetal(
     mod.addCSourceFiles(.{
         .root = b.path("src/backends/metal"),
         .files = &.{"bridge.mm"},
-        .flags = &.{
-            "-std=c++17",
-            "-fobjc-arc",
+        .flags = objcxx.flags(b, optimize, &.{
             if (shader_stats) "-DHEAVY_SLUG_SHADER_STATS=1" else "-DHEAVY_SLUG_SHADER_STATS=0",
-        },
+        }),
     });
 
     return .{ .module = mod };

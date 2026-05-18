@@ -100,9 +100,12 @@ behavior. Do not switch the low-level Vulkan surface demo to WinRT or Windows
 App SDK without a documented architecture decision.
 
 Metal builds are macOS-only and need an Apple SDK exposing Metal 4 APIs,
-Objective-C++ compilation support, and the `Metal`, `QuartzCore`, and
+Objective-C++ C++23 compilation support, and the `Metal`, `QuartzCore`, and
 `Foundation` frameworks. The Metal demo uses a direct Cocoa host, normal Cocoa
 menu/close/quit handling, native window chrome, and a `CAMetalLayer`.
+Keep Objective-C++ sources on the shared `build/objcxx.zig` compiler policy:
+ARC on, exceptions and RTTI off, warnings as errors, and optimize-mode-specific
+`-O0`/`-O3`/`-Os` flags.
 
 Do not add GLFW, SDL, or a similar window toolkit unless a documented
 architecture decision reverses the native-demo-host model.

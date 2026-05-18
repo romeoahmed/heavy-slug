@@ -3,6 +3,7 @@
 const std = @import("std");
 const backends = @import("backends.zig");
 const deps = @import("deps.zig");
+const objcxx = @import("objcxx.zig");
 
 pub fn buildVulkan(
     b: *std.Build,
@@ -82,7 +83,7 @@ pub fn buildMetal(
     exe.root_module.addCSourceFiles(.{
         .root = b.path("demo/platform"),
         .files = &.{"cocoa.mm"},
-        .flags = &.{ "-std=c++17", "-fobjc-arc" },
+        .flags = objcxx.flags(b, optimize, &.{}),
     });
 
     deps.enableThinLtoAll(use_lto, &.{exe});
