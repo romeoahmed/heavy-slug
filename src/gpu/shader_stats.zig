@@ -158,6 +158,14 @@ pub fn clearBytes(bytes: []u8) void {
     @memset(bytes[0..@sizeOf(Snapshot)], 0);
 }
 
+pub fn seedCpuMeshletPath(bytes: []align(@alignOf(u32)) u8, glyph_count: u32) void {
+    std.debug.assert(bytes.len >= @sizeOf(Snapshot));
+    const counters: *[counter_count]u32 = @ptrCast(bytes.ptr);
+    counters[@intFromEnum(CounterIndex.task_glyphs_tested)] = glyph_count;
+    counters[@intFromEnum(CounterIndex.task_glyphs_visible)] = glyph_count;
+    counters[@intFromEnum(CounterIndex.task_glyphs_culled)] = 0;
+}
+
 /// Integer ratios scaled by 1000 for stable debug logging.
 pub const Analysis = struct {
     task_cull_per_mille: u32 = 0,
@@ -238,6 +246,17 @@ test "shader stats bytes helpers clear and decode counters" {
     const snapshot = Snapshot.fromBytes(&bytes);
     try std.testing.expectEqual(@as(u32, 7), snapshot.fragment_invocations);
     try std.testing.expectEqual(@as(u32, 3), snapshot.mesh_tiles_emitted);
+}
+
+test "shader stats seed CPU meshlet path visible glyph counters" {
+    var bytes: [@sizeOf(Snapshot)]u8 align(@alignOf(u32)) = undefined;
+    clearBytes(&bytes);
+    seedCpuMeshletPath(&bytes, 42);
+
+    const snapshot = Snapshot.fromBytes(&bytes);
+    try std.testing.expectEqual(@as(u32, 42), snapshot.task_glyphs_tested);
+    try std.testing.expectEqual(@as(u32, 42), snapshot.task_glyphs_visible);
+    try std.testing.expectEqual(@as(u32, 0), snapshot.task_glyphs_culled);
 }
 
 test "shader stats analysis derives bottleneck ratios" {

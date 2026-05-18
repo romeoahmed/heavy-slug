@@ -8,6 +8,10 @@ const backend_options = @import("heavy_slug_backend_options");
 /// Generated from slangc reflection of shaders/core/abi.slang.
 pub const GlyphInstance = gpu_structs.GlyphInstance;
 
+/// Per-meshlet draw record uploaded to GPU each frame.
+/// Generated from slangc reflection of shaders/core/abi.slang.
+pub const GlyphMeshlet = gpu_structs.GlyphMeshlet;
+
 /// Per-frame shader parameters. Kept within Vulkan's guaranteed
 /// 128-byte minimum push constant range when sent through push constants.
 /// Generated from slangc reflection of shaders/core/abi.slang.
@@ -19,10 +23,18 @@ test "GlyphInstance v2 has chart fields with stable leading offsets" {
     try std.testing.expect(@sizeOf(GlyphInstance) <= 128);
 }
 
-test "FrameParams v2 carries only frame-wide draw parameters" {
+test "GlyphMeshlet v3 carries CPU-authored strip bounds" {
+    try std.testing.expectEqual(@as(usize, 0), @offsetOf(GlyphMeshlet, "glyph_index"));
+    try std.testing.expect(@offsetOf(GlyphMeshlet, "rect_min_q") > @offsetOf(GlyphMeshlet, "glyph_index"));
+    try std.testing.expect(@sizeOf(GlyphMeshlet) <= 96);
+}
+
+test "FrameParams v3 carries draw parameters and framebuffer conversion" {
     try std.testing.expect(@sizeOf(FrameParams) <= 128);
     try std.testing.expectEqual(@as(usize, 0), @offsetOf(FrameParams, "viewport_size"));
-    try std.testing.expectEqual(@as(usize, 8), @offsetOf(FrameParams, "glyph_count"));
+    try std.testing.expectEqual(@as(usize, 16), @offsetOf(FrameParams, "screen_from_framebuffer_2x2"));
+    try std.testing.expect(@offsetOf(FrameParams, "meshlet_count") > @offsetOf(FrameParams, "glyph_count"));
+    try std.testing.expect(@offsetOf(FrameParams, "meshlet_base") > @offsetOf(FrameParams, "meshlet_count"));
 }
 
 pub const PushStats = if (@import("builtin").mode == .Debug) struct {
@@ -31,7 +43,7 @@ pub const PushStats = if (@import("builtin").mode == .Debug) struct {
 } else struct {};
 
 pub fn frameBufferCount() u32 {
-    return if (backend_options.shader_stats) 3 else 2;
+    return if (backend_options.shader_stats) 4 else 3;
 }
 
 pub const BufferView = struct {
@@ -52,7 +64,7 @@ pub const FrameBindings = struct {
         const dispatch = ctx.dispatch;
 
         const binding_count = frameBufferCount();
-        const bindings = [3]vk.DescriptorSetLayoutBinding{
+        const bindings = [4]vk.DescriptorSetLayoutBinding{
             .{
                 .binding = 0,
                 .descriptor_type = .storage_buffer,
@@ -64,14 +76,21 @@ pub const FrameBindings = struct {
                 .binding = 1,
                 .descriptor_type = .storage_buffer,
                 .descriptor_count = 1,
-                .stage_flags = .{ .task_bit_ext = true, .mesh_bit_ext = true },
+                .stage_flags = .{ .mesh_bit_ext = true, .fragment_bit = true },
                 .p_immutable_samplers = null,
             },
             .{
                 .binding = 2,
                 .descriptor_type = .storage_buffer,
                 .descriptor_count = 1,
-                .stage_flags = .{ .task_bit_ext = true, .mesh_bit_ext = true, .fragment_bit = true },
+                .stage_flags = .{ .mesh_bit_ext = true, .fragment_bit = true },
+                .p_immutable_samplers = null,
+            },
+            .{
+                .binding = 3,
+                .descriptor_type = .storage_buffer,
+                .descriptor_count = 1,
+                .stage_flags = .{ .mesh_bit_ext = true, .fragment_bit = true },
                 .p_immutable_samplers = null,
             },
         };
@@ -101,17 +120,19 @@ pub const FrameBindings = struct {
         pipeline_layout: vk.PipelineLayout,
         glyph_pool: BufferView,
         glyph_instances: BufferView,
+        glyph_meshlets: BufferView,
         shader_stats: ?BufferView,
     ) PushStats {
-        var buffer_infos: [3]vk.DescriptorBufferInfo = undefined;
-        var writes: [3]vk.WriteDescriptorSet = undefined;
+        var buffer_infos: [4]vk.DescriptorBufferInfo = undefined;
+        var writes: [4]vk.WriteDescriptorSet = undefined;
         var write_count: u32 = 0;
 
         appendBufferWrite(&buffer_infos, &writes, &write_count, 0, glyph_pool);
         appendBufferWrite(&buffer_infos, &writes, &write_count, 1, glyph_instances);
+        appendBufferWrite(&buffer_infos, &writes, &write_count, 2, glyph_meshlets);
         if (shader_stats) |stats| {
             std.debug.assert(backend_options.shader_stats);
-            appendBufferWrite(&buffer_infos, &writes, &write_count, 2, stats);
+            appendBufferWrite(&buffer_infos, &writes, &write_count, 3, stats);
         }
 
         self.dispatch.cmdPushDescriptorSet(
@@ -130,8 +151,8 @@ pub const FrameBindings = struct {
     }
 
     fn appendBufferWrite(
-        buffer_infos: *[3]vk.DescriptorBufferInfo,
-        writes: *[3]vk.WriteDescriptorSet,
+        buffer_infos: *[4]vk.DescriptorBufferInfo,
+        writes: *[4]vk.WriteDescriptorSet,
         write_count: *u32,
         binding: u32,
         buffer_binding: BufferView,
@@ -167,6 +188,6 @@ test "FrameBindings debug stats compile in debug builds" {
 }
 
 test "FrameBindings: frame buffer count follows shader stats option" {
-    const expected: u32 = if (backend_options.shader_stats) 3 else 2;
+    const expected: u32 = if (backend_options.shader_stats) 4 else 3;
     try std.testing.expectEqual(expected, frameBufferCount());
 }

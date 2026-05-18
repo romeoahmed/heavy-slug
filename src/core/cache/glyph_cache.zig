@@ -41,6 +41,28 @@ pub const FixedBounds = extern struct {
     y_max: i32,
 };
 
+pub const BandMeshInfo = struct {
+    candidate_count: u32,
+    max_x_q: i32,
+};
+
+pub const MeshMetadata = struct {
+    curve_count: u32 = 0,
+    band_min: i32 = 0,
+    band_count: u32 = 0,
+    band_height_q: i32 = 1,
+    bands: []BandMeshInfo = &.{},
+
+    pub fn empty() MeshMetadata {
+        return .{};
+    }
+
+    pub fn deinit(self: *MeshMetadata, allocator: std.mem.Allocator) void {
+        if (self.bands.len != 0) allocator.free(self.bands);
+        self.* = .{};
+    }
+};
+
 pub const CacheEntry = struct {
     blob_ref: GlyphBlobRef,
     pool_alloc: pool_mod.Allocation,
@@ -50,6 +72,7 @@ pub const CacheEntry = struct {
     em_box: EmBox,
     bounds_q: FixedBounds,
     precision_bits: u8,
+    mesh_metadata: MeshMetadata = .{},
     lru_idx: u32 = LRU_NONE, // index into GlyphCache.lru_nodes; LRU_NONE for hot entries
 };
 
@@ -181,6 +204,10 @@ pub const GlyphCache = struct {
     }
 
     pub fn deinit(self: *GlyphCache) void {
+        var it = self.map.valueIterator();
+        while (it.next()) |entry| {
+            entry.mesh_metadata.deinit(self.allocator);
+        }
         self.allocator.free(self.lru_nodes);
         self.map.deinit();
         self.* = undefined;
@@ -209,8 +236,22 @@ pub const GlyphCache = struct {
         em_box: EmBox,
         bounds_q: FixedBounds,
     ) !void {
+        return self.insertHotWithMetadata(key, blob_ref, pool_alloc, em_box, bounds_q, .empty());
+    }
+
+    pub fn insertHotWithMetadata(
+        self: *GlyphCache,
+        key: CacheKey,
+        blob_ref: GlyphBlobRef,
+        pool_alloc: pool_mod.Allocation,
+        em_box: EmBox,
+        bounds_q: FixedBounds,
+        mesh_metadata: MeshMetadata,
+    ) !void {
         std.debug.assert(self.hot_count < self.hot_capacity);
         std.debug.assert(!self.map.contains(key));
+        var metadata = mesh_metadata;
+        errdefer metadata.deinit(self.allocator);
         try self.map.put(key, .{
             .blob_ref = blob_ref,
             .pool_alloc = pool_alloc,
@@ -220,6 +261,7 @@ pub const GlyphCache = struct {
             .em_box = em_box,
             .bounds_q = bounds_q,
             .precision_bits = key.precision_bits,
+            .mesh_metadata = metadata,
         });
         self.hot_count += 1;
     }
@@ -243,8 +285,23 @@ pub const GlyphCache = struct {
         em_box: EmBox,
         bounds_q: FixedBounds,
     ) !void {
+        return self.insertColdWithMetadata(key, blob_ref, pool_alloc, em_box, bounds_q, .empty());
+    }
+
+    pub fn insertColdWithMetadata(
+        self: *GlyphCache,
+        key: CacheKey,
+        blob_ref: GlyphBlobRef,
+        pool_alloc: pool_mod.Allocation,
+        em_box: EmBox,
+        bounds_q: FixedBounds,
+        mesh_metadata: MeshMetadata,
+    ) !void {
         std.debug.assert(self.cold_count < self.cold_capacity);
         std.debug.assert(!self.map.contains(key));
+
+        var metadata = mesh_metadata;
+        errdefer metadata.deinit(self.allocator);
 
         const lru_idx = self.lruAlloc();
         self.lru_nodes[lru_idx].key = key;
@@ -263,6 +320,7 @@ pub const GlyphCache = struct {
             .em_box = em_box,
             .bounds_q = bounds_q,
             .precision_bits = key.precision_bits,
+            .mesh_metadata = metadata,
             .lru_idx = lru_idx,
         });
         self.cold_count += 1;
@@ -334,6 +392,8 @@ pub const GlyphCache = struct {
 
         const removed = self.map.fetchRemove(key) orelse unreachable;
         self.cold_count -= 1;
+        var metadata = removed.value.mesh_metadata;
+        metadata.deinit(self.allocator);
 
         return .{
             .key = key,
@@ -362,6 +422,8 @@ pub const GlyphCache = struct {
         for (to_remove.items, 0..) |key, i| {
             // Safe: no map mutation occurs between collecting keys and removing them.
             const removed = self.map.fetchRemove(key).?;
+            var metadata = removed.value.mesh_metadata;
+            metadata.deinit(self.allocator);
             if (removed.value.tier == .hot) {
                 self.hot_count -= 1;
             } else {
@@ -432,6 +494,38 @@ test "GlyphCache: insert and lookup track tiers, counts, and full keys" {
     try std.testing.expectEqual(testBlobRef(2), variation_entry.blob_ref);
     try std.testing.expectEqual(@as(f32, -1), variation_entry.em_box.x_min);
     try std.testing.expectEqual(@as(f32, 12), variation_entry.em_box.y_max);
+}
+
+test "GlyphCache: cached mesh metadata is owned by cache entries" {
+    var cache = try GlyphCache.init(std.testing.allocator, 4, 4, 3);
+    defer cache.deinit();
+
+    const bands = try std.testing.allocator.alloc(BandMeshInfo, 2);
+    bands[0] = .{ .candidate_count = 3, .max_x_q = 10 };
+    bands[1] = .{ .candidate_count = 0, .max_x_q = -2147483647 };
+
+    const key = CacheKey{ .font_id = 1, .glyph_id = 65 };
+    const box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
+    try cache.insertColdWithMetadata(
+        key,
+        testBlobRef(1),
+        .{ .offset = 0, .size = 64 },
+        box,
+        fixedBoundsFromEmBox(box),
+        .{
+            .curve_count = 7,
+            .band_min = -1,
+            .band_count = 2,
+            .band_height_q = 16,
+            .bands = bands,
+        },
+    );
+
+    const entry = cache.lookup(key).?;
+    try std.testing.expectEqual(@as(u32, 7), entry.mesh_metadata.curve_count);
+    try std.testing.expectEqual(@as(i32, -1), entry.mesh_metadata.band_min);
+    try std.testing.expectEqual(@as(u32, 2), entry.mesh_metadata.band_count);
+    try std.testing.expectEqual(@as(u32, 3), entry.mesh_metadata.bands[0].candidate_count);
 }
 
 test "GlyphCache: evict LRU cold entry" {

@@ -1,4 +1,4 @@
-//! Vulkan shader-object program for the task/mesh/fragment text path.
+//! Vulkan shader-object program for the mesh/fragment text path.
 
 const std = @import("std");
 const vk = @import("vulkan");
@@ -7,7 +7,6 @@ const bindings = @import("bindings.zig");
 const spirv = @import("spirv_shaders");
 
 const stages = [_]vk.ShaderStageFlags{
-    .{ .task_bit_ext = true },
     .{ .mesh_bit_ext = true },
     .{ .fragment_bit = true },
 };
@@ -26,7 +25,6 @@ pub const ShaderProgram = struct {
         const dispatch = ctx.dispatch;
         const push_range = vk.PushConstantRange{
             .stage_flags = .{
-                .task_bit_ext = true,
                 .mesh_bit_ext = true,
                 .fragment_bit = true,
             },
@@ -78,13 +76,6 @@ fn shaderCreateInfos(
     push_ranges: []const vk.PushConstantRange,
 ) [stages.len]vk.ShaderCreateInfoEXT {
     return .{
-        shaderCreateInfo(
-            .{ .task_bit_ext = true },
-            .{ .mesh_bit_ext = true },
-            spirv.task,
-            set_layouts,
-            push_ranges,
-        ),
         shaderCreateInfo(
             .{ .mesh_bit_ext = true },
             .{ .fragment_bit = true },
@@ -192,19 +183,16 @@ test "push constant range matches FrameParams size" {
 }
 
 test "embedded SPIR-V data is non-empty" {
-    try std.testing.expect(spirv.task.len > 0);
     try std.testing.expect(spirv.mesh.len > 0);
     try std.testing.expect(spirv.fragment.len > 0);
 }
 
 test "SPIR-V length is multiple of 4 (u32-aligned words)" {
-    try std.testing.expectEqual(@as(usize, 0), spirv.task.len % 4);
     try std.testing.expectEqual(@as(usize, 0), spirv.mesh.len % 4);
     try std.testing.expectEqual(@as(usize, 0), spirv.fragment.len % 4);
 }
 
-test "shader object stages are task mesh fragment" {
-    try std.testing.expect(stages[0].task_bit_ext);
-    try std.testing.expect(stages[1].mesh_bit_ext);
-    try std.testing.expect(stages[2].fragment_bit);
+test "shader object stages are mesh fragment" {
+    try std.testing.expect(stages[0].mesh_bit_ext);
+    try std.testing.expect(stages[1].fragment_bit);
 }

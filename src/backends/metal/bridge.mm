@@ -5,6 +5,7 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -19,11 +20,12 @@ namespace {
 
 constexpr std::size_t kFrameSlotCount = 3;
 constexpr NSUInteger kArgumentTableBufferBindCount =
-    HEAVY_SLUG_SHADER_STATS ? 4 : 3;
+    HEAVY_SLUG_SHADER_STATS ? 5 : 4;
 
 enum class BufferIndex : std::uint32_t {
   glyphPool = HS_METAL_BUFFER_GLYPH_POOL,
   glyphs = HS_METAL_BUFFER_GLYPHS,
+  meshlets = HS_METAL_BUFFER_MESHLETS,
   frameParams = HS_METAL_BUFFER_FRAME_PARAMS,
   shaderStats = HS_METAL_BUFFER_SHADER_STATS,
 };
@@ -293,12 +295,8 @@ makeCommandAllocator(id<MTLDevice> device, NSString *label,
 
 [[nodiscard]] id<MTLRenderPipelineState> makePipelineState(
     id<MTL4Compiler> compiler, MTLPixelFormat color_format,
-    std::span<const char> task_source, std::span<const char> mesh_source,
-    std::span<const char> fragment_source, const ErrorSink &error) {
-  id<MTLLibrary> task_library =
-      makeLibrary(compiler, task_source, @"heavy-slug task", error);
-  if (!task_library)
-    return nil;
+    std::span<const char> mesh_source, std::span<const char> fragment_source,
+    const ErrorSink &error) {
   id<MTLLibrary> mesh_library =
       makeLibrary(compiler, mesh_source, @"heavy-slug mesh", error);
   if (!mesh_library)
@@ -311,22 +309,21 @@ makeCommandAllocator(id<MTLDevice> device, NSString *label,
   MTL4MeshRenderPipelineDescriptor *pipeline_desc =
       [MTL4MeshRenderPipelineDescriptor new];
   pipeline_desc.label = @"heavy-slug mesh pipeline";
-  pipeline_desc.objectFunctionDescriptor =
-      functionDescriptor(task_library, @"taskMain");
+  pipeline_desc.objectFunctionDescriptor = nil;
   pipeline_desc.meshFunctionDescriptor =
       functionDescriptor(mesh_library, @"meshMain");
   pipeline_desc.fragmentFunctionDescriptor =
       functionDescriptor(fragment_library, @"fragmentMain");
   pipeline_desc.maxTotalThreadsPerObjectThreadgroup =
-      HS_METAL_TASK_THREADGROUP_SIZE;
+      HS_METAL_OBJECT_THREADGROUP_SIZE;
   pipeline_desc.maxTotalThreadsPerMeshThreadgroup =
       HS_METAL_MESH_THREADGROUP_SIZE;
-  pipeline_desc.requiredThreadsPerObjectThreadgroup =
-      MTLSizeMake(HS_METAL_TASK_THREADGROUP_SIZE, 1, 1);
+  pipeline_desc.requiredThreadsPerObjectThreadgroup = MTLSizeMake(0, 0, 0);
   pipeline_desc.requiredThreadsPerMeshThreadgroup =
       MTLSizeMake(HS_METAL_MESH_THREADGROUP_SIZE, 1, 1);
-  pipeline_desc.payloadMemoryLength = HS_METAL_TASK_PAYLOAD_BYTES;
-  pipeline_desc.maxTotalThreadgroupsPerMeshGrid = HS_METAL_TASK_MAX_MESHLETS;
+  pipeline_desc.payloadMemoryLength = 0;
+  pipeline_desc.maxTotalThreadgroupsPerMeshGrid =
+      HS_METAL_MAX_MESH_THREADGROUPS_PER_DRAW;
   pipeline_desc.rasterSampleCount = 1;
   pipeline_desc.alphaToCoverageState = MTL4AlphaToCoverageStateDisabled;
   pipeline_desc.alphaToOneState = MTL4AlphaToOneStateDisabled;
@@ -381,8 +378,7 @@ void bindBuffer(id<MTL4ArgumentTable> table, hs_metal_buffer *buffer,
 } // namespace
 
 hs_metal_context *
-hs_metal_context_create(hs_metal_host_objects host, const char *task_source,
-                        size_t task_source_len, const char *mesh_source,
+hs_metal_context_create(hs_metal_host_objects host, const char *mesh_source,
                         size_t mesh_source_len, const char *fragment_source,
                         size_t fragment_source_len, char *error_buffer,
                         size_t error_buffer_len) {
@@ -393,10 +389,6 @@ hs_metal_context_create(hs_metal_host_objects host, const char *task_source,
       return nullptr;
     }
 
-    std::optional<std::span<const char>> task_source_buffer =
-        sourceBuffer(task_source, task_source_len, @"task shader", error);
-    if (!task_source_buffer)
-      return nullptr;
     std::optional<std::span<const char>> mesh_source_buffer =
         sourceBuffer(mesh_source, mesh_source_len, @"mesh shader", error);
     if (!mesh_source_buffer)
@@ -418,8 +410,8 @@ hs_metal_context_create(hs_metal_host_objects host, const char *task_source,
     }
 
     id<MTLRenderPipelineState> pipeline_state = makePipelineState(
-        compiler, host_objects->layer.pixelFormat, *task_source_buffer,
-        *mesh_source_buffer, *fragment_source_buffer, error);
+        compiler, host_objects->layer.pixelFormat, *mesh_source_buffer,
+        *fragment_source_buffer, error);
     if (!pipeline_state) {
       return nullptr;
     }
@@ -545,6 +537,7 @@ hs_metal_resource_indices hs_metal_get_resource_indices(void) {
   return hs_metal_resource_indices{
       HS_METAL_BUFFER_GLYPH_POOL,
       HS_METAL_BUFFER_GLYPHS,
+      HS_METAL_BUFFER_MESHLETS,
       HS_METAL_BUFFER_FRAME_PARAMS,
       HS_METAL_BUFFER_SHADER_STATS,
   };
@@ -552,17 +545,18 @@ hs_metal_resource_indices hs_metal_get_resource_indices(void) {
 
 hs_metal_geometry_limits hs_metal_get_geometry_limits(void) {
   return hs_metal_geometry_limits{
-      HS_METAL_TASK_THREADGROUP_SIZE,
+      HS_METAL_OBJECT_THREADGROUP_SIZE,
       HS_METAL_MESH_THREADGROUP_SIZE,
-      HS_METAL_TASK_MAX_MESHLETS,
-      HS_METAL_TASK_PAYLOAD_BYTES,
+      HS_METAL_MAX_MESH_THREADGROUPS_PER_DRAW,
   };
 }
 
 int hs_metal_context_draw(hs_metal_context *context, uint32_t width,
                           uint32_t height, float clear_r, float clear_g,
                           float clear_b, float clear_a, hs_metal_buffer *glyphs,
+                          hs_metal_buffer *meshlets,
                           hs_metal_buffer *frame_params,
+                          uint32_t frame_params_stride,
                           hs_metal_buffer *glyph_pool,
                           hs_metal_buffer *shader_stats,
                           uint32_t workgroup_count, uint32_t slot_index,
@@ -572,7 +566,7 @@ int hs_metal_context_draw(hs_metal_context *context, uint32_t width,
 #if !HEAVY_SLUG_SHADER_STATS
     (void)shader_stats;
 #endif
-    if (!context || !glyphs || !frame_params || !glyph_pool) {
+    if (!context || !glyphs || !meshlets || !frame_params || !glyph_pool) {
       error.write(@"Metal draw received a null handle");
       return 0;
     }
@@ -594,6 +588,10 @@ int hs_metal_context_draw(hs_metal_context *context, uint32_t width,
     ReservedSlotGuard slot_guard(slot);
     if (workgroup_count == 0) {
       return 1;
+    }
+    if (frame_params_stride == 0) {
+      error.write(@"Metal draw received a zero frame parameter stride");
+      return 0;
     }
     if (context->layer.pixelFormat != context->color_format) {
       error.write(
@@ -634,7 +632,7 @@ int hs_metal_context_draw(hs_metal_context *context, uint32_t width,
 
     bindBuffer(slot.argument_table, glyph_pool, BufferIndex::glyphPool);
     bindBuffer(slot.argument_table, glyphs, BufferIndex::glyphs);
-    bindBuffer(slot.argument_table, frame_params, BufferIndex::frameParams);
+    bindBuffer(slot.argument_table, meshlets, BufferIndex::meshlets);
 #if HEAVY_SLUG_SHADER_STATS
     bindBuffer(slot.argument_table, shader_stats, BufferIndex::shaderStats);
 #endif
@@ -648,14 +646,26 @@ int hs_metal_context_draw(hs_metal_context *context, uint32_t width,
     [encoder setDepthClipMode:MTLDepthClipModeClip];
     [encoder setDepthStencilState:nil];
     [encoder setRenderPipelineState:context->pipeline_state];
-    [encoder setArgumentTable:slot.argument_table
-                     atStages:(MTLRenderStageObject | MTLRenderStageMesh |
-                               MTLRenderStageFragment)];
-    [encoder drawMeshThreadgroups:MTLSizeMake(workgroup_count, 1, 1)
-        threadsPerObjectThreadgroup:MTLSizeMake(HS_METAL_TASK_THREADGROUP_SIZE,
-                                                1, 1)
-          threadsPerMeshThreadgroup:MTLSizeMake(HS_METAL_MESH_THREADGROUP_SIZE,
-                                                1, 1)];
+    uint32_t meshlet_base = 0;
+    uint32_t chunk_index = 0;
+    while (meshlet_base < workgroup_count) {
+      const uint32_t chunk_count =
+          std::min(workgroup_count - meshlet_base,
+                   static_cast<uint32_t>(
+                       HS_METAL_MAX_MESH_THREADGROUPS_PER_DRAW));
+      [slot.argument_table setAddress:(frame_params->buffer.gpuAddress +
+                                       static_cast<NSUInteger>(chunk_index) *
+                                           frame_params_stride)
+                              atIndex:bufferIndex(BufferIndex::frameParams)];
+      [encoder setArgumentTable:slot.argument_table
+                       atStages:(MTLRenderStageMesh | MTLRenderStageFragment)];
+      [encoder drawMeshThreadgroups:MTLSizeMake(chunk_count, 1, 1)
+          threadsPerObjectThreadgroup:MTLSizeMake(0, 0, 0)
+            threadsPerMeshThreadgroup:MTLSizeMake(
+                                        HS_METAL_MESH_THREADGROUP_SIZE, 1, 1)];
+      meshlet_base += chunk_count;
+      chunk_index += 1;
+    }
     [encoder endEncoding];
     [cb endCommandBuffer];
 

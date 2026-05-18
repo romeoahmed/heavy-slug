@@ -8,6 +8,7 @@ pub const renderer_core = @import("renderer_core.zig");
 
 pub const BackendContract = backend_contract.BackendContract;
 pub const GlyphBatch = glyph_batch.GlyphBatch;
+pub const FrameBatch = glyph_batch.FrameBatch;
 pub const GlyphStore = glyph_store.GlyphStore;
 pub const RendererOptions = renderer_core.RendererOptions;
 pub const RendererCore = renderer_core.RendererCore;

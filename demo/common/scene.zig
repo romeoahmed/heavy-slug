@@ -110,21 +110,15 @@ pub const Scene = struct {
         if (input.getKey(.left)) self.view.pan_x += pan_speed * dt64;
         if (input.getKey(.right)) self.view.pan_x -= pan_speed * dt64;
 
-        if (input.getKey(.equal)) self.view.scale *= 1.0 + 2.0 * dt64;
-        if (input.getKey(.minus)) self.view.scale *= 1.0 - 2.0 * dt64;
+        const keyboard_zoom = 2.0 * dt64;
+        if (input.getKey(.equal)) self.zoomAt(width64 * 0.5, height64 * 0.5, 1.0 + keyboard_zoom);
+        if (input.getKey(.minus)) self.zoomAt(width64 * 0.5, height64 * 0.5, @max(1.0 - keyboard_zoom, 0.001));
 
         const scroll = input.consumeScrollDelta();
         if (scroll != 0) {
             const cur = input.cursor;
-            const sx: f64 = cur[0];
-            const sy: f64 = cur[1];
-            const old_scale = self.view.scale;
             const factor: f64 = std.math.pow(f64, 1.1, scroll);
-            self.view.scale *= factor;
-            const inv_new = 1.0 / self.view.scale;
-            const inv_old = 1.0 / old_scale;
-            self.view.pan_x += sx * (inv_new - inv_old);
-            self.view.pan_y += (height64 - sy) * (inv_new - inv_old);
+            self.zoomAt(cur[0], height64 - cur[1], factor);
         }
 
         self.updateMouse(input, now, width, height);
@@ -224,6 +218,18 @@ pub const Scene = struct {
         const total_dy = cursor[1] - self.begin_cursor[1];
         if (total_dx * total_dx + total_dy * total_dy > 25) self.dragged = true;
     }
+
+    fn zoomAt(self: *Scene, screen_x: f64, screen_y_up: f64, factor: f64) void {
+        if (!std.math.isFinite(factor) or factor <= 0) return;
+        const old_scale = self.view.scale;
+        const new_scale = old_scale * factor;
+        if (!std.math.isFinite(new_scale) or new_scale <= 0) return;
+
+        self.view.scale = new_scale;
+        const inv_delta = 1.0 / new_scale - 1.0 / old_scale;
+        self.view.pan_x += screen_x * inv_delta;
+        self.view.pan_y += screen_y_up * inv_delta;
+    }
 };
 
 fn contentFit(width: f64, height: f64) ViewState {
@@ -256,4 +262,22 @@ test "demo scene frame view keeps glyph outlines y-up" {
     const view = contentFit(window_width, window_height);
     const frame_view = (Scene{ .view = view }).frameView(window_width, window_height);
     try std.testing.expect(frame_view.screen_from_world.yy > 0);
+}
+
+test "demo scene zoom keeps the requested screen anchor stable" {
+    var scene = Scene{
+        .view = contentFit(window_width, window_height),
+        .view_initialized = true,
+    };
+    const anchor = [2]f64{
+        @as(f64, @floatFromInt(window_width)) * 0.5,
+        @as(f64, @floatFromInt(window_height)) * 0.5,
+    };
+    const world = viewTransform(scene.view).inverse().?.apply(anchor);
+
+    scene.zoomAt(anchor[0], anchor[1], 0.5);
+
+    const screen = viewTransform(scene.view).apply(world);
+    try std.testing.expectApproxEqAbs(anchor[0], screen[0], 1.0e-9);
+    try std.testing.expectApproxEqAbs(anchor[1], screen[1], 1.0e-9);
 }

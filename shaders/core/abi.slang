@@ -18,23 +18,34 @@ public struct GlyphInstance
     public float4 local_from_screen_2x2;
 };
 
+public struct GlyphMeshlet
+{
+    public uint   glyph_index;
+    public uint   band_start;
+    public uint   band_end;
+    public uint   _pad0;
+    public int2   rect_min_q;
+    public int2   rect_max_q;
+    public int2   mesh_anchor_q;
+    public float2 screen_anchor_px;
+    public float4 local_from_screen_2x2;
+};
+
 public struct FrameParams
 {
     public float2   viewport_size;
+    public float4   screen_from_framebuffer_2x2;
+    public float2   screen_from_framebuffer_offset;
     public uint     glyph_count;
-    public uint     glyph_base;
+    public uint     meshlet_count;
+    public uint     meshlet_base;
     public uint     diagnostic_flags;
+    public uint     abi_version;
 };
 
+public static const uint kHeavySlugAbiVersion = 3;
 public static const uint kTaskGroupSize = 32;
 public static const uint kMeshThreadCount = 32;
 public static const uint kMaxSubdivisionsPerGlyph = 16;
-public static const uint kTaskMaxMeshlets = kTaskGroupSize * kMaxSubdivisionsPerGlyph;
 public static const uint kMeshOutputVertices = 8;
 public static const uint kMeshOutputPrimitives = 6;
-
-public struct TaskPayload
-{
-    public uint glyphIndices[kTaskMaxMeshlets];
-    public uint sliceInfos[kTaskMaxMeshlets];
-};

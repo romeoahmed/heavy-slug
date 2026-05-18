@@ -12,6 +12,16 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Breaking meshlet renderer path:** the required GPU path now uses a
+  CPU-authored `GlyphMeshlet` stream plus mesh/fragment shaders, adds
+  per-frame meshlet buffers to Vulkan and Metal, removes task payload expansion
+  from the build outputs, and reduces mesh-to-fragment varyings to a flat
+  meshlet index.
+- **Vulkan mesh shader requirements narrowed:** the Vulkan backend no longer
+  requires the task shader feature or task payload limits for the default
+  renderer path; mesh workgroup dispatch count now equals the CPU meshlet
+  count.
+
 - **Windows demo host hardened:** the Vulkan Win32 demo now embeds a modern
   Windows manifest for Per-Monitor-V2 DPI, long-path awareness, UTF-8 process
   code page, and Segment Heap, attaches window state during `WM_NCCREATE`,
@@ -51,7 +61,7 @@ implementation notes belong in commits and code review history.
   backend intentionally keeps a mesh render pipeline state rather than adding
   dynamic libraries as a Shader Object analogue.
 - **Breaking Vulkan shader-object backend:** the Vulkan renderer now requires
-  `VK_EXT_shader_object`, creates linked task/mesh/fragment shader objects, and
+  `VK_EXT_shader_object`, creates linked mesh/fragment shader objects, and
   sets the required graphics state dynamically instead of creating a monolithic
   graphics pipeline. `heavy_slug_vulkan.Renderer.init` no longer takes a
   swapchain color format because attachment formats are not baked into shader
@@ -108,6 +118,20 @@ implementation notes belong in commits and code review history.
 
 ### Fixed
 
+- **Renderer viewport meshlet clipping:** CPU-authored meshlet bounds now
+  transform screen-space deltas with only the inverse affine linear part,
+  preventing zoomed-out text from being clipped toward the lower-left viewport
+  quadrant.
+- **Demo zoom anchoring:** keyboard zoom now uses the framebuffer center as its
+  screen-space anchor, and the Cocoa host reports mouse coordinates in backing
+  pixels so scroll zoom matches the Metal drawable viewport.
+- **Metal mesh-only pipeline validation:** the Metal backend now publishes and
+  encodes a zero-sized object threadgroup when no object shader is present,
+  matching Metal 4 mesh pipeline validation.
+- **Fragment coordinate reconstruction fixed:** fragment `SV_Position` /
+  Metal `[[position]]` is now converted from framebuffer coordinates back to
+  the renderer's y-up screen space through explicit `FrameParams` ABI fields
+  before analytic coverage evaluation.
 - **Wayland demo protocol generation fixed:** the Linux Vulkan demo now uses a
   lazy pinned `wayland-protocols` 1.48 source dependency for generated protocol
   XML, generates the stable tablet-v2 stub required by cursor-shape-v1, and no

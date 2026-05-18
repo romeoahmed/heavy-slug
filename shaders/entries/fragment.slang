@@ -14,19 +14,10 @@ import stats;
 struct FragmentInput
 {
     float4 position    : SV_Position;
-    float4 color       : COLOR;
 #if HEAVY_SLUG_METAL
-    nointerpolation uint blobRef : TEXCOORD1;
-    nointerpolation uint flags : TEXCOORD2;
-    nointerpolation int2 meshAnchorQ : TEXCOORD3;
-    nointerpolation float2 screenAnchorPx : TEXCOORD4;
-    nointerpolation float4 localFromScreen : TEXCOORD5;
+    nointerpolation uint meshletIndex : TEXCOORD1;
 #else
-    nointerpolation uint blobRef : TEXCOORD1;
-    nointerpolation uint flags : TEXCOORD2;
-    nointerpolation int2 meshAnchorQ : TEXCOORD3;
-    nointerpolation float2 screenAnchorPx : TEXCOORD4;
-    nointerpolation float4 localFromScreen : TEXCOORD5;
+    nointerpolation uint meshletIndex : TEXCOORD1;
 #endif
 };
 
@@ -328,11 +319,15 @@ float slugRender(BlobReader blob, LocalFrame frame, int2 coordAnchorQ, uint flag
 [shader("fragment")]
 float4 fragmentMain(FragmentInput input) : SV_Target
 {
+    GlyphMeshlet meshlet = meshlets[input.meshletIndex];
+    GlyphInstance glyph = glyphs[meshlet.glyph_index];
+
     BlobReader blob;
     blob.buf = glyphPool;
-    blob.base = input.blobRef;
+    blob.base = glyph.blob_ref;
 
-    LocalFrame frame = localFrameFromPixel(input.position.xy, input.meshAnchorQ, input.screenAnchorPx, input.localFromScreen);
-    float coverage = slugRender(blob, frame, input.meshAnchorQ, input.flags);
-    return input.color * coverage;
+    float2 screen = framebufferToScreenYUp(input.position.xy, pc);
+    LocalFrame frame = localFrameFromScreenYUp(screen, meshlet.mesh_anchor_q, meshlet.screen_anchor_px, meshlet.local_from_screen_2x2);
+    float coverage = slugRender(blob, frame, meshlet.mesh_anchor_q, glyph.flags);
+    return glyph.color * coverage;
 }

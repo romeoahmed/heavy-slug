@@ -42,8 +42,6 @@ pub const Context = struct {
         @memset(&error_buf, 0);
         const handle = c.hs_metal_context_create(
             host.cValue(),
-            msl_shaders.task.ptr,
-            msl_shaders.task.len,
             msl_shaders.mesh.ptr,
             msl_shaders.mesh.len,
             msl_shaders.fragment.ptr,
@@ -107,7 +105,9 @@ pub const DrawInfo = struct {
     viewport: [2]u32,
     clear_color: [4]f32,
     glyphs: Buffer,
+    meshlets: Buffer,
     frame_params: Buffer,
+    frame_params_stride: u32,
     glyph_pool: Buffer,
     shader_stats: ?Buffer,
     workgroup_count: u32,
@@ -129,7 +129,9 @@ pub fn draw(ctx: Context, info: DrawInfo, error_buffer: []u8) Error!void {
         info.clear_color[2],
         info.clear_color[3],
         info.glyphs.handle,
+        info.meshlets.handle,
         info.frame_params.handle,
+        info.frame_params_stride,
         info.glyph_pool.handle,
         shader_stats_handle,
         info.workgroup_count,
@@ -158,9 +160,9 @@ test "Metal context public API compiles" {
 test "Metal context uses translated C bridge ABI" {
     try std.testing.expectEqual(@as(u32, 0), c.HS_METAL_BUFFER_GLYPH_POOL);
     try std.testing.expectEqual(@as(u32, 1), c.HS_METAL_BUFFER_GLYPHS);
-    try std.testing.expectEqual(@as(u32, 2), c.HS_METAL_BUFFER_SHADER_STATS);
-    try std.testing.expectEqual(@as(u32, 32), c.HS_METAL_TASK_THREADGROUP_SIZE);
+    try std.testing.expectEqual(@as(u32, 2), c.HS_METAL_BUFFER_MESHLETS);
+    try std.testing.expectEqual(@as(u32, 3), c.HS_METAL_BUFFER_SHADER_STATS);
+    try std.testing.expectEqual(@as(u32, 0), c.HS_METAL_OBJECT_THREADGROUP_SIZE);
     try std.testing.expectEqual(@as(u32, 32), c.HS_METAL_MESH_THREADGROUP_SIZE);
-    try std.testing.expectEqual(@as(u32, 512), c.HS_METAL_TASK_MAX_MESHLETS);
-    try std.testing.expectEqual(@as(u32, 4096), c.HS_METAL_TASK_PAYLOAD_BYTES);
+    try std.testing.expectEqual(@as(u32, 1024), c.HS_METAL_MAX_MESH_THREADGROUPS_PER_DRAW);
 }

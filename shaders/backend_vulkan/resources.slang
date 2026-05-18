@@ -11,8 +11,11 @@ public ByteAddressBuffer glyphPool;
 [[vk::binding(1, 0)]]
 public StructuredBuffer<GlyphInstance> glyphs;
 
-#if HEAVY_SLUG_SHADER_STATS
 [[vk::binding(2, 0)]]
+public StructuredBuffer<GlyphMeshlet> meshlets;
+
+#if HEAVY_SLUG_SHADER_STATS
+[[vk::binding(3, 0)]]
 public RWStructuredBuffer<uint> shaderStats;
 #endif
 

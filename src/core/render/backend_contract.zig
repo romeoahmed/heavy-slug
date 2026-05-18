@@ -8,6 +8,7 @@ pub fn BackendContract(comptime Backend: type) void {
         requireDecl(Impl, "GlyphBlobRef");
         requireDecl(Impl, "FrameToken");
         requireDecl(Impl, "GlyphInstance");
+        requireDecl(Impl, "GlyphMeshlet");
         requireFn(Impl, "uploadBlob");
         requireFn(Impl, "retireBlob");
     }
@@ -23,6 +24,11 @@ pub fn BackendImpl(comptime Backend: type) type {
 pub fn GlyphInstanceType(comptime Backend: type) type {
     BackendContract(Backend);
     return BackendImpl(Backend).GlyphInstance;
+}
+
+pub fn GlyphMeshletType(comptime Backend: type) type {
+    BackendContract(Backend);
+    return BackendImpl(Backend).GlyphMeshlet;
 }
 
 fn requireDecl(comptime T: type, comptime name: []const u8) void {
@@ -43,6 +49,7 @@ const GoodBackend = struct {
     pub const GlyphBlobRef = u32;
     pub const FrameToken = u64;
     pub const GlyphInstance = extern struct { value: u32 };
+    pub const GlyphMeshlet = extern struct { glyph_index: u32 };
 
     pub fn uploadBlob(_: *@This(), _: anytype, _: []const u8) !GlyphBlobRef {
         return 0;

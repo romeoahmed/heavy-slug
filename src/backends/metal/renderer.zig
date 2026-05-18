@@ -12,8 +12,10 @@ const mesh_limits = heavy_slug.gpu.mesh_limits;
 const shader_stats_mod = heavy_slug.gpu.shader_stats;
 
 const AbiGlyphInstance = gpu_structs.GlyphInstance;
+const AbiGlyphMeshlet = gpu_structs.GlyphMeshlet;
 
 pub const GlyphInstance = AbiGlyphInstance;
+pub const GlyphMeshlet = AbiGlyphMeshlet;
 pub const FrameParams = gpu_structs.FrameParams;
 
 const frames_in_flight = 3;
@@ -40,7 +42,7 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
             const shader_analysis = self.shader.analysis();
             const mesh_cull = self.shader.meshCullBreakdown();
             std.log.scoped(.renderer).debug(
-                "metal stats: wait_ns={d} task_visible={d}/{d} mesh_tiles={d}/{d} tile_culled={d} mesh_cull=empty:{d},invalid:{d},zero_area:{d},clip:{d},nonfinite:{d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
+                "metal stats: wait_ns={d} cpu_visible={d}/{d} mesh_tiles={d}/{d} tile_culled={d} mesh_cull=empty:{d},invalid:{d},zero_area:{d},clip:{d},nonfinite:{d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
                 .{
                     self.frame_slot_wait_ns,
                     self.shader.task_glyphs_visible,
@@ -82,11 +84,22 @@ pub const Target = struct {
     clear_color: [4]f32,
 };
 
-const GlyphBatch = heavy_slug.core.render.GlyphBatch(GlyphInstance);
+const FrameBatch = heavy_slug.core.render.FrameBatch(GlyphInstance, GlyphMeshlet);
 const ShaderStatsBuffer = if (backend_options.shader_stats) metal.Buffer else void;
+const metal_mesh_threadgroups_per_draw: u32 = 1024;
+
+fn frameParamChunkCount(max_glyphs_per_frame: u32) u32 {
+    const max_meshlets = mesh_limits.maxMeshletsForGlyphCapacity(max_glyphs_per_frame);
+    return (max_meshlets / metal_mesh_threadgroups_per_draw) + @intFromBool(max_meshlets % metal_mesh_threadgroups_per_draw != 0);
+}
 
 fn resetShaderStatsBuffer(buffer: metal.Buffer) void {
     shader_stats_mod.clearBytes(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
+}
+
+fn seedShaderStatsBuffer(buffer: metal.Buffer, glyph_count: u32) void {
+    const bytes: []align(@alignOf(u32)) u8 = @alignCast(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
+    shader_stats_mod.seedCpuMeshletPath(bytes, glyph_count);
 }
 
 fn readShaderStatsBuffer(buffer: metal.Buffer) heavy_slug.ShaderStats {
@@ -107,6 +120,27 @@ fn viewportToU32(view: core_types.FrameView2D) ?[2]u32 {
     };
 }
 
+fn writeFrameParams(buffer: metal.Buffer, viewport: [2]u32, glyph_count: u32, meshlet_count: u32) void {
+    var meshlet_base: u32 = 0;
+    var chunk_index: usize = 0;
+    while (meshlet_base < meshlet_count) : (chunk_index += 1) {
+        const chunk_count = @min(meshlet_count - meshlet_base, metal_mesh_threadgroups_per_draw);
+        const params = FrameParams{
+            .viewport_size = .{ @floatFromInt(viewport[0]), @floatFromInt(viewport[1]) },
+            .screen_from_framebuffer_2x2 = .{ 1, 0, 0, -1 },
+            .screen_from_framebuffer_offset = .{ 0, @floatFromInt(viewport[1]) },
+            .glyph_count = glyph_count,
+            .meshlet_count = chunk_count,
+            .meshlet_base = meshlet_base,
+            .diagnostic_flags = 0,
+            .abi_version = 3,
+        };
+        const offset = chunk_index * @sizeOf(FrameParams);
+        @memcpy(buffer.mapped[offset..][0..@sizeOf(FrameParams)], std.mem.asBytes(&params));
+        meshlet_base += chunk_count;
+    }
+}
+
 fn monotonicNs() u64 {
     var ts: std.posix.timespec = undefined;
     switch (std.posix.errno(std.posix.system.clock_gettime(std.posix.CLOCK.MONOTONIC, &ts))) {
@@ -121,19 +155,21 @@ fn monotonicNs() u64 {
 
 const FrameSlot = struct {
     glyphs: metal.Buffer,
+    meshlets: metal.Buffer,
     frame_params: metal.Buffer,
     shader_stats: ShaderStatsBuffer,
 
     fn deinit(self: FrameSlot) void {
         if (backend_options.shader_stats) self.shader_stats.deinit();
         self.frame_params.deinit();
+        self.meshlets.deinit();
         self.glyphs.deinit();
     }
 };
 
 pub const Frame = struct {
     renderer: *Renderer,
-    batch: GlyphBatch,
+    batch: FrameBatch,
     view: core_types.FrameView2D,
     submitted: bool = false,
 
@@ -147,7 +183,7 @@ pub const Frame = struct {
 
     pub fn submit(self: *Frame, target: Target) !render.FrameToken {
         if (self.submitted) return error.FrameAlreadySubmitted;
-        const token = try self.renderer.submitFrame(target, self.view, self.batch.count());
+        const token = try self.renderer.submitFrame(target, self.view, self.batch.glyphCount(), self.batch.meshletCount());
         self.batch.markSubmitted();
         self.submitted = true;
         return token;
@@ -158,6 +194,7 @@ pub const Renderer = struct {
     pub const GlyphBlobRef = render.GlyphBlobRef;
     pub const FrameToken = render.FrameToken;
     pub const GlyphInstance = AbiGlyphInstance;
+    pub const GlyphMeshlet = AbiGlyphMeshlet;
 
     context: Context,
     core: render.RendererCore,
@@ -183,6 +220,7 @@ pub const Renderer = struct {
         errdefer pool_buf.deinit();
 
         const glyph_buffer_size = @as(usize, options.max_glyphs_per_frame) * @sizeOf(AbiGlyphInstance);
+        const meshlet_buffer_size = @as(usize, mesh_limits.maxMeshletsForGlyphCapacity(options.max_glyphs_per_frame)) * @sizeOf(AbiGlyphMeshlet);
         var frame_slots: [frames_in_flight]FrameSlot = undefined;
         var initialized_slots: usize = 0;
         errdefer {
@@ -192,7 +230,10 @@ pub const Renderer = struct {
             const glyph_buffer = try metal.Buffer.init(context, glyph_buffer_size);
             errdefer glyph_buffer.deinit();
 
-            const params_buffer = try metal.Buffer.init(context, @sizeOf(FrameParams));
+            const meshlet_buffer = try metal.Buffer.init(context, meshlet_buffer_size);
+            errdefer meshlet_buffer.deinit();
+
+            const params_buffer = try metal.Buffer.init(context, @as(usize, frameParamChunkCount(options.max_glyphs_per_frame)) * @sizeOf(FrameParams));
             errdefer params_buffer.deinit();
 
             var shader_stats: ShaderStatsBuffer = undefined;
@@ -203,6 +244,7 @@ pub const Renderer = struct {
 
             slot.* = .{
                 .glyphs = glyph_buffer,
+                .meshlets = meshlet_buffer,
                 .frame_params = params_buffer,
                 .shader_stats = shader_stats,
             };
@@ -280,9 +322,11 @@ pub const Renderer = struct {
         try self.reserveFrameSlot();
         const glyphs: [*]AbiGlyphInstance = @ptrCast(@alignCast(self.frame_slots[self.active_frame].glyphs.mapped));
         const glyph_slice = glyphs[0..self.core.max_glyphs_per_frame];
+        const meshlets: [*]AbiGlyphMeshlet = @ptrCast(@alignCast(self.frame_slots[self.active_frame].meshlets.mapped));
+        const meshlet_slice = meshlets[0..mesh_limits.maxMeshletsForGlyphCapacity(self.core.max_glyphs_per_frame)];
         return .{
             .renderer = self,
-            .batch = GlyphBatch.init(glyph_slice),
+            .batch = FrameBatch.init(glyph_slice, meshlet_slice),
             .view = view,
         };
     }
@@ -303,8 +347,8 @@ pub const Renderer = struct {
         return self.completed_frame;
     }
 
-    fn submitFrame(self: *Renderer, target: Target, view: core_types.FrameView2D, glyph_count: u32) Error!render.FrameToken {
-        if (glyph_count == 0) {
+    fn submitFrame(self: *Renderer, target: Target, view: core_types.FrameView2D, glyph_count: u32, meshlet_count: u32) Error!render.FrameToken {
+        if (glyph_count == 0 or meshlet_count == 0) {
             if (self.frame_reserved) {
                 metal.releaseFrameSlot(self.context, self.active_frame);
                 self.frame_reserved = false;
@@ -315,28 +359,24 @@ pub const Renderer = struct {
         const viewport = viewportToU32(view) orelse return Error.InvalidFrameView;
         const clear_color = target.clear_color;
         const frame_slot = &self.frame_slots[self.active_frame];
+        if (backend_options.shader_stats) seedShaderStatsBuffer(frame_slot.shader_stats, glyph_count);
         const shader_stats_buffer: ?metal.Buffer = if (backend_options.shader_stats)
             frame_slot.shader_stats
         else
             null;
 
-        const params = FrameParams{
-            .viewport_size = .{ @floatFromInt(viewport[0]), @floatFromInt(viewport[1]) },
-            .glyph_count = glyph_count,
-            .glyph_base = 0,
-            .diagnostic_flags = 0,
-        };
-        const params_bytes = frame_slot.frame_params.mapped[0..@sizeOf(FrameParams)];
-        @memcpy(params_bytes, std.mem.asBytes(&params));
+        writeFrameParams(frame_slot.frame_params, viewport, glyph_count, meshlet_count);
 
-        const workgroup_count = mesh_limits.taskWorkgroupCount(glyph_count);
+        const workgroup_count = meshlet_count;
         var error_buf: [2048]u8 = undefined;
         @memset(&error_buf, 0);
         metal.draw(self.context, .{
             .viewport = viewport,
             .clear_color = clear_color,
             .glyphs = frame_slot.glyphs,
+            .meshlets = frame_slot.meshlets,
             .frame_params = frame_slot.frame_params,
+            .frame_params_stride = @sizeOf(FrameParams),
             .glyph_pool = self.pool_buffer,
             .shader_stats = shader_stats_buffer,
             .workgroup_count = workgroup_count,
@@ -351,6 +391,7 @@ pub const Renderer = struct {
 
         if (@import("builtin").mode == .Debug) {
             self.core.stats.instances_submitted += glyph_count;
+            self.core.stats.meshlets_submitted += meshlet_count;
             self.core.stats.pool = self.core.poolSnapshot();
         }
         self.last_submitted_frame +%= 1;
@@ -385,52 +426,56 @@ test "Metal renderer public API compiles" {
     heavy_slug.core.render.BackendContract(Renderer);
 }
 
+test "Metal frame params are chunked by mesh threadgroup draw limit" {
+    try std.testing.expectEqual(@as(u32, 0), frameParamChunkCount(0));
+    try std.testing.expectEqual(@as(u32, 1), frameParamChunkCount(1));
+    try std.testing.expectEqual(@as(u32, 2), frameParamChunkCount((metal_mesh_threadgroups_per_draw / mesh_limits.max_subdivisions_per_glyph) + 1));
+}
+
 test "Metal bridge resource indices match generated Slang MSL" {
     const indices = metal.resourceIndices();
     try std.testing.expectEqual(@as(u32, 0), indices.glyph_pool);
     try std.testing.expectEqual(@as(u32, 1), indices.glyphs);
-    const params_index: u32 = if (backend_options.shader_stats) 3 else 2;
+    try std.testing.expectEqual(@as(u32, 2), indices.meshlets);
+    const params_index: u32 = if (backend_options.shader_stats) 4 else 3;
     try std.testing.expectEqual(params_index, indices.frame_params);
-    try std.testing.expectEqual(@as(u32, 2), indices.shader_stats);
+    try std.testing.expectEqual(@as(u32, 3), indices.shader_stats);
 
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.task, "GlyphInstance_0 device* glyphs_1 [[buffer(1)]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.task, "[[buffer(0)]]") == null);
     const params_pattern = if (backend_options.shader_stats)
-        "constant* pc_1 [[buffer(3)]]"
+        "constant* pc_1 [[buffer(4)]]"
     else
-        "constant* pc_1 [[buffer(2)]]";
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.task, params_pattern) != null);
+        "constant* pc_1 [[buffer(3)]]";
     try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "GlyphInstance_0 device* glyphs_1 [[buffer(1)]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "uint32_t device* glyphPool_") != null);
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "[[buffer(0)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "GlyphMeshlet_0 device* meshlets_1 [[buffer(2)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "glyphPool_") == null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "[[buffer(0)]]") == null);
     try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, params_pattern) != null);
     try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "uint32_t device* glyphPool_") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "GlyphInstance_0 device* glyphs_1 [[buffer(1)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "GlyphMeshlet_0 device* meshlets_1 [[buffer(2)]]") != null);
     try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "[[buffer(0)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, params_pattern) != null);
     if (backend_options.shader_stats) {
-        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.task, "shaderStats_") != null);
-        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.task, "[[buffer(2)]]") != null);
         try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "shaderStats_") != null);
-        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "[[buffer(2)]]") != null);
+        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "[[buffer(3)]]") != null);
         try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "shaderStats_") != null);
-        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "[[buffer(2)]]") != null);
+        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "[[buffer(3)]]") != null);
     } else {
-        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.task, "shaderStats_") == null);
         try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "shaderStats_") == null);
         try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "shaderStats_") == null);
     }
     try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "[[user(TEXCOORD_1)]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "[[user(TEXCOORD_5)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "[[user(TEXCOORD_2)]]") == null);
     try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "[[user(TEXCOORD_6)]]") == null);
     try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "[[user(TEXCOORD_1)]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "[[user(TEXCOORD_5)]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "[[user(TEXCOORD_2)]]") == null);
     try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "[[user(TEXCOORD_6)]]") == null);
     try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "user(TEXCOORD__1)") == null);
 }
 
 test "Metal bridge geometry limits match shared mesh ABI" {
     const limits = metal.geometryLimits();
-    try std.testing.expectEqual(mesh_limits.task_group_size, limits.task_threadgroup_size);
+    try std.testing.expectEqual(@as(u32, 0), limits.object_threadgroup_size);
     try std.testing.expectEqual(mesh_limits.mesh_thread_count, limits.mesh_threadgroup_size);
-    try std.testing.expectEqual(mesh_limits.task_max_meshlets, limits.task_max_meshlets);
-    try std.testing.expectEqual(mesh_limits.task_payload_bytes, limits.task_payload_bytes);
+    try std.testing.expectEqual(metal_mesh_threadgroups_per_draw, limits.max_mesh_threadgroups_per_draw);
 }

@@ -51,6 +51,12 @@ public float2 ndcToScreen(float2 ndc, float2 viewportSize)
         (ndc.y + 1.0) * viewportSize.y * 0.5);
 }
 
+public float2 framebufferToScreenYUp(float2 framebuffer, FrameParams params)
+{
+    return mul2x2(params.screen_from_framebuffer_2x2, framebuffer) +
+        params.screen_from_framebuffer_offset;
+}
+
 public float4 screenBoundsForGlyph(GlyphInstance glyph)
 {
     int4 b = glyph.local_bounds_q;
@@ -73,9 +79,9 @@ public float2 visiblePixelExtent(GlyphInstance glyph, float2 viewportSize)
     return max(mx - mn, float2(0.0, 0.0));
 }
 
-public LocalFrame localFrameFromPixel(float2 pixel, int2 meshAnchorQ, float2 screenAnchorPx, float4 localFromScreen)
+public LocalFrame localFrameFromScreenYUp(float2 screen, int2 meshAnchorQ, float2 screenAnchorPx, float4 localFromScreen)
 {
-    float2 d = pixel - screenAnchorPx;
+    float2 d = screen - screenAnchorPx;
     LocalFrame frame;
     frame.coord = mul2x2(localFromScreen, d);
     frame.dx = float2(localFromScreen.x, localFromScreen.y);

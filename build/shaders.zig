@@ -3,13 +3,11 @@
 const std = @import("std");
 
 const Stage = enum {
-    task,
     mesh,
     fragment,
 
     fn source(self: Stage) []const u8 {
         return switch (self) {
-            .task => "shaders/entries/task.slang",
             .mesh => "shaders/entries/mesh.slang",
             .fragment => "shaders/entries/fragment.slang",
         };
@@ -18,12 +16,10 @@ const Stage = enum {
     fn outputName(self: Stage, target: SlangTarget) []const u8 {
         return switch (target) {
             .spirv => switch (self) {
-                .task => "task.spv",
                 .mesh => "mesh.spv",
                 .fragment => "fragment.spv",
             },
             .msl => switch (self) {
-                .task => "task.metal",
                 .mesh => "mesh.metal",
                 .fragment => "fragment.metal",
             },
@@ -36,36 +32,30 @@ const spirv_profile = "spirv_1_6";
 const metal_capability = "metallib_4_0";
 
 pub const SpirvBundle = struct {
-    task: std.Build.LazyPath,
     mesh: std.Build.LazyPath,
     fragment: std.Build.LazyPath,
     module: *std.Build.Module,
 };
 
 pub const MslBundle = struct {
-    task: std.Build.LazyPath,
     mesh: std.Build.LazyPath,
     fragment: std.Build.LazyPath,
     module: *std.Build.Module,
 };
 
 pub fn compileSpirv(b: *std.Build, shader_stats: bool) SpirvBundle {
-    const task_spv = compileStage(b, .spirv, .task, shader_stats);
     const mesh_spv = compileStage(b, .spirv, .mesh, shader_stats);
     const fragment_spv = compileStage(b, .spirv, .fragment, shader_stats);
 
     const files = b.addWriteFiles();
-    _ = files.addCopyFile(task_spv, "task.spv");
     _ = files.addCopyFile(mesh_spv, "mesh.spv");
     _ = files.addCopyFile(fragment_spv, "fragment.spv");
     const module_zig = files.add("spirv_shaders.zig",
-        \\pub const task: []align(4) const u8 = @alignCast(@embedFile("task.spv"));
         \\pub const mesh: []align(4) const u8 = @alignCast(@embedFile("mesh.spv"));
         \\pub const fragment: []align(4) const u8 = @alignCast(@embedFile("fragment.spv"));
     );
 
     return .{
-        .task = task_spv,
         .mesh = mesh_spv,
         .fragment = fragment_spv,
         .module = b.addModule("spirv_shaders", .{ .root_source_file = module_zig }),
@@ -73,22 +63,18 @@ pub fn compileSpirv(b: *std.Build, shader_stats: bool) SpirvBundle {
 }
 
 pub fn compileMsl(b: *std.Build, shader_stats: bool) MslBundle {
-    const task_msl = compileStage(b, .msl, .task, shader_stats);
     const mesh_msl = compileStage(b, .msl, .mesh, shader_stats);
     const fragment_msl = compileStage(b, .msl, .fragment, shader_stats);
 
     const files = b.addWriteFiles();
-    _ = files.addCopyFile(task_msl, "task.metal");
     _ = files.addCopyFile(mesh_msl, "mesh.metal");
     _ = files.addCopyFile(fragment_msl, "fragment.metal");
     const module_zig = files.add("msl_shaders.zig",
-        \\pub const task: []const u8 = @embedFile("task.metal");
         \\pub const mesh: []const u8 = @embedFile("mesh.metal");
         \\pub const fragment: []const u8 = @embedFile("fragment.metal");
     );
 
     return .{
-        .task = task_msl,
         .mesh = mesh_msl,
         .fragment = fragment_msl,
         .module = b.addModule("msl_shaders", .{ .root_source_file = module_zig }),
@@ -100,10 +86,8 @@ pub fn installSpirv(
     step: *std.Build.Step,
     spirv: SpirvBundle,
 ) void {
-    const install_task = b.addInstallFile(spirv.task, "shaders/spirv/task.spv");
     const install_mesh = b.addInstallFile(spirv.mesh, "shaders/spirv/mesh.spv");
     const install_fragment = b.addInstallFile(spirv.fragment, "shaders/spirv/fragment.spv");
-    step.dependOn(&install_task.step);
     step.dependOn(&install_mesh.step);
     step.dependOn(&install_fragment.step);
 }
@@ -113,10 +97,8 @@ pub fn installMsl(
     step: *std.Build.Step,
     msl: MslBundle,
 ) void {
-    const install_task = b.addInstallFile(msl.task, "shaders/msl/task.metal");
     const install_mesh = b.addInstallFile(msl.mesh, "shaders/msl/mesh.metal");
     const install_fragment = b.addInstallFile(msl.fragment, "shaders/msl/fragment.metal");
-    step.dependOn(&install_task.step);
     step.dependOn(&install_mesh.step);
     step.dependOn(&install_fragment.step);
 }
@@ -124,8 +106,8 @@ pub fn installMsl(
 fn generateReflectionJson(b: *std.Build) std.Build.LazyPath {
     const cmd = b.addSystemCommand(&.{"slangc"});
     cmd.setName("slangc reflection");
-    cmd.addFileArg(b.path(Stage.task.source()));
-    addCommonArgs(b, cmd, .spirv, .task, false);
+    cmd.addFileArg(b.path(Stage.mesh.source()));
+    addCommonArgs(b, cmd, .spirv, .mesh, false);
     cmd.addArg("-o");
     _ = cmd.addOutputFileArg("reflection.spv");
     cmd.addArg("-reflection-json");
@@ -211,13 +193,6 @@ fn addCapabilities(cmd: *std.Build.Step.Run, caps: []const []const u8) void {
 
 fn spirvCapabilities(stage: Stage) []const []const u8 {
     return switch (stage) {
-        .task => &.{
-            "SPV_EXT_mesh_shader",
-            "spvMeshShadingEXT",
-            "spvGroupNonUniform",
-            "spvGroupNonUniformBallot",
-            "spvGroupNonUniformArithmetic",
-        },
         .mesh => &.{
             "SPV_EXT_mesh_shader",
             "spvMeshShadingEXT",

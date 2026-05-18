@@ -15,7 +15,7 @@ pub const Error = error{
     NoSuitableMemoryType,
     FrameResourcesInUse,
     InvalidFrameView,
-    MeshTaskWorkgroupLimitExceeded,
+    MeshWorkgroupLimitExceeded,
 };
 
 pub const RendererOptions = render.RendererOptions;
@@ -42,7 +42,7 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
             const shader_analysis = self.shader.analysis();
             const mesh_cull = self.shader.meshCullBreakdown();
             std.log.scoped(.renderer).debug(
-                "vulkan stats: binding_writes={d} binding_pushes={d} frame_busy={d} task_visible={d}/{d} mesh_tiles={d}/{d} tile_culled={d} mesh_cull=empty:{d},invalid:{d},zero_area:{d},clip:{d},nonfinite:{d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
+                "vulkan stats: binding_writes={d} binding_pushes={d} frame_busy={d} cpu_visible={d}/{d} mesh_tiles={d}/{d} tile_culled={d} mesh_cull=empty:{d},invalid:{d},zero_area:{d},clip:{d},nonfinite:{d} fragments={d} frag_per_glyph_milli={d} frag_per_tile_milli={d} fullscan_pm={d} curve_integrations={d}/{d} bbox_reject_pm={d} bbox_empty_pm={d} zero_pm={d}",
                 .{
                     self.binding_writes,
                     self.binding_pushes,
@@ -89,12 +89,12 @@ pub const Target = struct {
     command_buffer: vk.CommandBuffer,
 };
 
-const GlyphBatch = heavy_slug.core.render.GlyphBatch(bindings.GlyphInstance);
+const FrameBatch = heavy_slug.core.render.FrameBatch(bindings.GlyphInstance, bindings.GlyphMeshlet);
 const ShaderStatsBuffers = if (backend_options.shader_stats) [frames_in_flight]MappedBuffer else void;
 
 pub const Frame = struct {
     renderer: *Renderer,
-    batch: GlyphBatch,
+    batch: FrameBatch,
     view: core_types.FrameView2D,
     submitted: bool = false,
 
@@ -108,7 +108,7 @@ pub const Frame = struct {
 
     pub fn submit(self: *Frame, target: Target) !render.FrameToken {
         if (self.submitted) return error.FrameAlreadySubmitted;
-        const token = try self.renderer.submitFrame(target, self.view, self.batch.count());
+        const token = try self.renderer.submitFrame(target, self.view, self.batch.glyphCount(), self.batch.meshletCount());
         self.batch.markSubmitted();
         self.submitted = true;
         return token;
@@ -204,16 +204,20 @@ fn destroyMappedBuffer(self: MappedBuffer, device: vk.Device, dispatch: gpu_cont
     dispatch.freeMemory(device, self.memory, null);
 }
 
-fn validateTaskDrawWorkgroups(
+fn validateMeshDrawWorkgroups(
     props: vk.PhysicalDeviceMeshShaderPropertiesEXT,
     workgroup_count: u32,
 ) Error!void {
     if (workgroup_count == 0) return;
-    if (workgroup_count > props.max_task_work_group_count[0] or
-        workgroup_count > props.max_task_work_group_total_count)
+    if (workgroup_count > props.max_mesh_work_group_count[0] or
+        workgroup_count > props.max_mesh_work_group_total_count)
     {
-        return Error.MeshTaskWorkgroupLimitExceeded;
+        return Error.MeshWorkgroupLimitExceeded;
     }
+}
+
+fn maxMeshWorkgroupsPerDraw(props: vk.PhysicalDeviceMeshShaderPropertiesEXT) u32 {
+    return @min(props.max_mesh_work_group_count[0], props.max_mesh_work_group_total_count);
 }
 
 /// GPU text renderer using the Slug algorithm for exact glyph coverage.
@@ -226,6 +230,7 @@ pub const Renderer = struct {
     pub const GlyphBlobRef = render.GlyphBlobRef;
     pub const FrameToken = render.FrameToken;
     pub const GlyphInstance = bindings.GlyphInstance;
+    pub const GlyphMeshlet = bindings.GlyphMeshlet;
 
     device: vk.Device,
     dispatch: gpu_context.DeviceDispatch,
@@ -238,6 +243,7 @@ pub const Renderer = struct {
     // Host-visible storage buffers.
     pool_buffer: MappedBuffer,
     glyph_buffers: [frames_in_flight]MappedBuffer,
+    meshlet_buffers: [frames_in_flight]MappedBuffer,
     shader_stats_buffers: ShaderStatsBuffers,
     active_frame: u32,
 
@@ -256,11 +262,6 @@ pub const Renderer = struct {
         options: RendererOptions,
     ) !Renderer {
         try gpu_context.validateDeviceProperties(ctx.api_version, ctx.mesh_shader_properties, ctx.vulkan14_properties);
-        try validateTaskDrawWorkgroups(
-            ctx.mesh_shader_properties,
-            mesh_limits.taskWorkgroupCount(options.max_glyphs_per_frame),
-        );
-
         const device = ctx.device;
         const dispatch = ctx.dispatch;
         var frame_bindings = try bindings.FrameBindings.init(ctx);
@@ -302,6 +303,24 @@ pub const Renderer = struct {
             initialized_glyph_buffers += 1;
         }
 
+        const meshlet_buffer_size = @as(vk.DeviceSize, mesh_limits.maxMeshletsForGlyphCapacity(options.max_glyphs_per_frame)) *
+            @sizeOf(bindings.GlyphMeshlet);
+        var meshlet_buffers: [frames_in_flight]MappedBuffer = undefined;
+        var initialized_meshlet_buffers: usize = 0;
+        errdefer {
+            for (meshlet_buffers[0..initialized_meshlet_buffers]) |meshlet_buffer| {
+                destroyMappedBuffer(meshlet_buffer, device, dispatch);
+            }
+        }
+        for (&meshlet_buffers) |*meshlet_buffer| {
+            meshlet_buffer.* = try createMappedBuffer(
+                ctx,
+                meshlet_buffer_size,
+                .{ .storage_buffer_bit = true },
+            );
+            initialized_meshlet_buffers += 1;
+        }
+
         var shader_stats_buffers: ShaderStatsBuffers = undefined;
         if (backend_options.shader_stats) {
             var initialized_shader_stats: usize = 0;
@@ -330,6 +349,7 @@ pub const Renderer = struct {
             .shader_program = shader_program,
             .pool_buffer = pool_buf,
             .glyph_buffers = glyph_buffers,
+            .meshlet_buffers = meshlet_buffers,
             .shader_stats_buffers = shader_stats_buffers,
             .active_frame = frames_in_flight - 1,
             .stats = .{},
@@ -373,9 +393,11 @@ pub const Renderer = struct {
         try self.reserveFrameSlot();
         const glyphs: [*]bindings.GlyphInstance = @ptrCast(@alignCast(self.glyph_buffers[self.active_frame].mapped));
         const glyph_slice = glyphs[0..self.core.max_glyphs_per_frame];
+        const meshlets: [*]bindings.GlyphMeshlet = @ptrCast(@alignCast(self.meshlet_buffers[self.active_frame].mapped));
+        const meshlet_slice = meshlets[0..mesh_limits.maxMeshletsForGlyphCapacity(self.core.max_glyphs_per_frame)];
         return .{
             .renderer = self,
-            .batch = GlyphBatch.init(glyph_slice),
+            .batch = FrameBatch.init(glyph_slice, meshlet_slice),
             .view = view,
         };
     }
@@ -431,11 +453,8 @@ pub const Renderer = struct {
     /// rendering pass. The caller is responsible for starting/ending the
     /// render pass and submitting the command buffer.
     ///
-    fn submitFrame(self: *Renderer, target: Target, view: core_types.FrameView2D, glyph_count: u32) Error!render.FrameToken {
-        if (glyph_count == 0) return self.last_submitted_frame;
-        const workgroup_count = mesh_limits.taskWorkgroupCount(glyph_count);
-        try validateTaskDrawWorkgroups(self.mesh_shader_properties, workgroup_count);
-
+    fn submitFrame(self: *Renderer, target: Target, view: core_types.FrameView2D, glyph_count: u32, meshlet_count: u32) Error!render.FrameToken {
+        if (glyph_count == 0 or meshlet_count == 0) return self.last_submitted_frame;
         const vk_cmd = target.command_buffer;
         const viewport = viewportToF32(view) orelse return Error.InvalidFrameView;
 
@@ -454,6 +473,8 @@ pub const Renderer = struct {
         self.shader_program.bind(vk_cmd);
 
         const glyph_buffer = self.glyph_buffers[self.active_frame];
+        const meshlet_buffer = self.meshlet_buffers[self.active_frame];
+        if (backend_options.shader_stats) seedShaderStatsBuffer(self.shader_stats_buffers[self.active_frame], glyph_count);
         const shader_stats_binding: ?bindings.BufferView = if (backend_options.shader_stats) blk: {
             const stats_buffer = self.shader_stats_buffers[self.active_frame];
             break :blk .{
@@ -475,6 +496,11 @@ pub const Renderer = struct {
                 .offset = 0,
                 .range = glyph_buffer.size,
             },
+            .{
+                .buffer = meshlet_buffer.buffer,
+                .offset = 0,
+                .range = meshlet_buffer.size,
+            },
             shader_stats_binding,
         );
         if (@import("builtin").mode == .Debug) {
@@ -482,24 +508,36 @@ pub const Renderer = struct {
             self.stats.binding_pushes += push_stats.push_calls;
         }
 
-        const params = bindings.FrameParams{
-            .viewport_size = viewport,
-            .glyph_count = glyph_count,
-            .glyph_base = 0,
-            .diagnostic_flags = 0,
-        };
-        self.dispatch.cmdPushConstants(
-            vk_cmd,
-            self.shader_program.pipeline_layout,
-            .{ .task_bit_ext = true, .mesh_bit_ext = true, .fragment_bit = true },
-            0,
-            @sizeOf(bindings.FrameParams),
-            @ptrCast(&params),
-        );
+        var meshlet_base: u32 = 0;
+        while (meshlet_base < meshlet_count) {
+            const workgroup_count = @min(meshlet_count - meshlet_base, maxMeshWorkgroupsPerDraw(self.mesh_shader_properties));
+            try validateMeshDrawWorkgroups(self.mesh_shader_properties, workgroup_count);
 
-        self.dispatch.cmdDrawMeshTasksEXT(vk_cmd, workgroup_count, 1, 1);
+            const params = bindings.FrameParams{
+                .viewport_size = viewport,
+                .screen_from_framebuffer_2x2 = .{ 1, 0, 0, -1 },
+                .screen_from_framebuffer_offset = .{ 0, viewport[1] },
+                .glyph_count = glyph_count,
+                .meshlet_count = workgroup_count,
+                .meshlet_base = meshlet_base,
+                .diagnostic_flags = 0,
+                .abi_version = 3,
+            };
+            self.dispatch.cmdPushConstants(
+                vk_cmd,
+                self.shader_program.pipeline_layout,
+                .{ .mesh_bit_ext = true, .fragment_bit = true },
+                0,
+                @sizeOf(bindings.FrameParams),
+                @ptrCast(&params),
+            );
+
+            self.dispatch.cmdDrawMeshTasksEXT(vk_cmd, workgroup_count, 1, 1);
+            meshlet_base += workgroup_count;
+        }
         if (@import("builtin").mode == .Debug) {
             self.core.stats.instances_submitted += glyph_count;
+            self.core.stats.meshlets_submitted += meshlet_count;
             self.core.stats.pool = self.core.poolSnapshot();
         }
 
@@ -513,6 +551,9 @@ pub const Renderer = struct {
         self.markFrameComplete(std.math.maxInt(render.FrameToken));
         for (self.glyph_buffers) |glyph_buffer| {
             destroyMappedBuffer(glyph_buffer, self.device, self.dispatch);
+        }
+        for (self.meshlet_buffers) |meshlet_buffer| {
+            destroyMappedBuffer(meshlet_buffer, self.device, self.dispatch);
         }
         if (backend_options.shader_stats) {
             for (self.shader_stats_buffers) |stats_buf| {
@@ -531,6 +572,11 @@ pub const Renderer = struct {
 
 fn resetShaderStatsBuffer(buffer: MappedBuffer) void {
     shader_stats_mod.clearBytes(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
+}
+
+fn seedShaderStatsBuffer(buffer: MappedBuffer, glyph_count: u32) void {
+    const bytes: []align(@alignOf(u32)) u8 = @alignCast(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
+    shader_stats_mod.seedCpuMeshletPath(bytes, glyph_count);
 }
 
 fn readShaderStatsBuffer(buffer: MappedBuffer) heavy_slug.ShaderStats {
@@ -567,6 +613,10 @@ fn viewportFramebufferY(viewport: vk.Viewport, ndc_y: f32) f32 {
     return viewport.y + (ndc_y + 1.0) * viewport.height * 0.5;
 }
 
+fn framebufferToScreenYUpForCurrentBackends(framebuffer: [2]f32, viewport: [2]f32) [2]f32 {
+    return .{ framebuffer[0], viewport[1] - framebuffer[1] };
+}
+
 test "RendererOptions has correct defaults" {
     const opts = RendererOptions{};
     try std.testing.expectEqual(@as(u32, 16_384), opts.max_glyphs_per_frame);
@@ -599,16 +649,17 @@ test "findMemoryType selects correct memory type" {
     try std.testing.expectEqual(@as(?u32, null), filtered);
 }
 
-test "task workgroup validation follows Vulkan mesh shader draw limits" {
+test "mesh workgroup validation follows Vulkan mesh shader draw limits" {
     var props = std.mem.zeroes(vk.PhysicalDeviceMeshShaderPropertiesEXT);
-    props.max_task_work_group_total_count = 4;
-    props.max_task_work_group_count = .{ 4, 1, 1 };
+    props.max_mesh_work_group_total_count = 4;
+    props.max_mesh_work_group_count = .{ 4, 1, 1 };
 
-    try validateTaskDrawWorkgroups(props, 4);
-    try std.testing.expectError(Error.MeshTaskWorkgroupLimitExceeded, validateTaskDrawWorkgroups(props, 5));
+    try validateMeshDrawWorkgroups(props, 4);
+    try std.testing.expectError(Error.MeshWorkgroupLimitExceeded, validateMeshDrawWorkgroups(props, 5));
 
-    props.max_task_work_group_total_count = 3;
-    try std.testing.expectError(Error.MeshTaskWorkgroupLimitExceeded, validateTaskDrawWorkgroups(props, 4));
+    props.max_mesh_work_group_total_count = 3;
+    try std.testing.expectError(Error.MeshWorkgroupLimitExceeded, validateMeshDrawWorkgroups(props, 4));
+    try std.testing.expectEqual(@as(u32, 3), maxMeshWorkgroupsPerDraw(props));
 }
 
 test "yUpViewport matches the Metal demo clip-space convention" {
@@ -620,6 +671,28 @@ test "yUpViewport matches the Metal demo clip-space convention" {
     try std.testing.expectEqual(@as(f32, -720), viewport.height);
     try std.testing.expectEqual(@as(f32, 0), viewportFramebufferY(viewport, 1));
     try std.testing.expectEqual(@as(f32, 720), viewportFramebufferY(viewport, -1));
+}
+
+test "fragment framebuffer conversion restores y-up screen coordinates" {
+    const viewport = [2]f32{ 1280, 720 };
+    const samples = [_][2]f32{
+        .{ 0, 720 },
+        .{ 10, 640 },
+        .{ 640, 360 },
+        .{ 1279.5, 0.5 },
+    };
+    const expected = [_][2]f32{
+        .{ 0, 0 },
+        .{ 10, 80 },
+        .{ 640, 360 },
+        .{ 1279.5, 719.5 },
+    };
+
+    for (samples, expected) |framebuffer, screen| {
+        const converted = framebufferToScreenYUpForCurrentBackends(framebuffer, viewport);
+        try std.testing.expectEqual(screen[0], converted[0]);
+        try std.testing.expectEqual(screen[1], converted[1]);
+    }
 }
 
 test "Renderer satisfies core backend contract" {

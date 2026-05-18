@@ -120,7 +120,7 @@ pub const FeatureChain = struct {
         self.vulkan13.dynamic_rendering = .true;
         self.vulkan14.push_descriptor = .true;
         self.shader_object.shader_object = .true;
-        self.mesh_shader.task_shader = .true;
+        self.mesh_shader.task_shader = .false;
         self.mesh_shader.mesh_shader = .true;
     }
 
@@ -132,7 +132,6 @@ pub const FeatureChain = struct {
         return self.vulkan13.dynamic_rendering == .true and
             self.vulkan14.push_descriptor == .true and
             self.shader_object.shader_object == .true and
-            self.mesh_shader.task_shader == .true and
             self.mesh_shader.mesh_shader == .true;
     }
 

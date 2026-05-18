@@ -11,6 +11,7 @@ const backend_contract = @import("backend_contract.zig");
 const glyph_batch_mod = @import("glyph_batch.zig");
 const core_types = @import("../types.zig");
 const units = @import("../units.zig");
+const mesh_limits = @import("../../gpu/mesh_limits.zig");
 const hb = font_mod.hb;
 
 pub const GlyphBlobRef = cache_mod.GlyphBlobRef;
@@ -23,6 +24,7 @@ pub const Error = error{
     InvalidTransform,
     PrecisionUnsupported,
     TextPositionOverflow,
+    MeshletCapacityExceeded,
 };
 
 pub const RendererOptions = struct {
@@ -47,6 +49,7 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
     runs_shaped: u32 = 0,
     glyphs_shaped: u32 = 0,
     instances_written: u32 = 0,
+    meshlets_written: u32 = 0,
     empty_glyphs_skipped: u32 = 0,
     cpu_culled: u32 = 0,
     invalid_affine: u32 = 0,
@@ -63,6 +66,7 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
     retirements_completed: u32 = 0,
     pool_alloc_failures: u32 = 0,
     instances_submitted: u32 = 0,
+    meshlets_submitted: u32 = 0,
     pool: pool_mod.Snapshot = .{},
 
     pub fn reset(self: *@This()) void {
@@ -71,11 +75,12 @@ pub const Stats = if (@import("builtin").mode == .Debug) struct {
 
     pub fn log(self: *const @This(), comptime scope: anytype) void {
         std.log.scoped(scope).debug(
-            "core stats: runs={d} shaped={d} instances={d} empty={d} cpu_culled={d} invalid_affine={d} precision_insufficient={d} tier_promotions={d} hits={d} misses={d} encoded={d} spans={d} upload_bytes={d} evictions={d} retire_q={d} retire_done={d} pool_used={d} pool_free={d} largest_free={d} free_blocks={d}",
+            "core stats: runs={d} shaped={d} instances={d} meshlets={d} empty={d} cpu_culled={d} invalid_affine={d} precision_insufficient={d} tier_promotions={d} hits={d} misses={d} encoded={d} spans={d} upload_bytes={d} evictions={d} retire_q={d} retire_done={d} pool_used={d} pool_free={d} largest_free={d} free_blocks={d}",
             .{
                 self.runs_shaped,
                 self.glyphs_shaped,
                 self.instances_written,
+                self.meshlets_written,
                 self.empty_glyphs_skipped,
                 self.cpu_culled,
                 self.invalid_affine,
@@ -114,6 +119,7 @@ const CachedGlyph = struct {
     em_box: cache_mod.EmBox,
     bounds_q: cache_mod.FixedBounds,
     precision_bits: u8,
+    mesh_metadata: cache_mod.MeshMetadata,
 };
 
 pub fn emBoxFromExtents(ext: hb.GlyphExtents) cache_mod.EmBox {
@@ -270,9 +276,12 @@ pub const RendererCore = struct {
     ) !void {
         comptime backend_contract.BackendContract(@TypeOf(backend));
         comptime {
-            const ExpectedBatch = *glyph_batch_mod.GlyphBatch(backend_contract.GlyphInstanceType(@TypeOf(backend)));
+            const ExpectedBatch = *glyph_batch_mod.FrameBatch(
+                backend_contract.GlyphInstanceType(@TypeOf(backend)),
+                backend_contract.GlyphMeshletType(@TypeOf(backend)),
+            );
             if (@TypeOf(batch) != ExpectedBatch) {
-                @compileError("RendererCore.appendRun requires *GlyphBatch(Backend.GlyphInstance)");
+                @compileError("RendererCore.appendRun requires *FrameBatch(Backend.GlyphInstance, Backend.GlyphMeshlet)");
             }
         }
         if (!view.isFinite()) return Error.InvalidFrameView;
@@ -289,9 +298,10 @@ pub const RendererCore = struct {
         const run_screen_from_text = core_types.Affine2D64.compose(view.screen_from_world, run.transform);
         const color = run.color.rgba;
         const flags = run.fill_rule.shaderFlags();
-        const start_batch_len = batch.len;
+        const start_glyph_len = batch.glyph_len;
+        const start_meshlet_len = batch.meshlet_len;
         errdefer {
-            batch.len = start_batch_len;
+            batch.rollback(start_glyph_len, start_meshlet_len);
         }
 
         var pen_x: i64 = 0;
@@ -342,6 +352,7 @@ pub const RendererCore = struct {
                     .em_box = entry.em_box,
                     .bounds_q = entry.bounds_q,
                     .precision_bits = entry.precision_bits,
+                    .mesh_metadata = entry.mesh_metadata,
                 };
             } else blk: {
                 if (@import("builtin").mode == .Debug) self.stats.cache_misses += 1;
@@ -396,7 +407,8 @@ pub const RendererCore = struct {
                     continue;
                 };
 
-                try batch.append(.{
+                const GlyphInstance = backend_contract.GlyphInstanceType(@TypeOf(backend));
+                const glyph_payload: GlyphInstance = .{
                     .color = color,
                     .blob_ref = cached_glyph.blob_ref.value,
                     .flags = flags,
@@ -412,8 +424,29 @@ pub const RendererCore = struct {
                     .screen_anchor_px = screen_anchor_px,
                     .screen_from_local_2x2 = screen_from_local_2x2,
                     .local_from_screen_2x2 = local_from_screen_2x2,
-                });
-                if (@import("builtin").mode == .Debug) self.stats.instances_written += 1;
+                };
+
+                const glyph_mark = batch.glyph_len;
+                const meshlet_mark = batch.meshlet_len;
+                const glyph_index = try batch.appendGlyph(glyph_payload);
+                try appendGlyphMeshlets(
+                    batch,
+                    glyph_payload,
+                    glyph_index,
+                    cached_glyph.mesh_metadata,
+                    cached_glyph.bounds_q,
+                    cached_glyph.precision_bits,
+                    local_from_screen,
+                    view,
+                    screen_bounds,
+                );
+                if (batch.meshlet_len == meshlet_mark) {
+                    batch.rollback(glyph_mark, meshlet_mark);
+                    if (@import("builtin").mode == .Debug) self.stats.cpu_culled += 1;
+                } else if (@import("builtin").mode == .Debug) {
+                    self.stats.instances_written += 1;
+                    self.stats.meshlets_written += batch.meshlet_len - meshlet_mark;
+                }
             } else {
                 if (@import("builtin").mode == .Debug) self.stats.empty_glyphs_skipped += 1;
             }
@@ -453,11 +486,20 @@ pub const RendererCore = struct {
             const extent_box = emBoxFromExtents(encoded.extents);
             const empty_bounds = cache_mod.FixedBounds{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 };
             try self.store.glyph_cache.insertColdWithBounds(cache_key, GlyphBlobRef.empty, .{ .offset = 0, .size = 0 }, extent_box, empty_bounds);
-            return .{ .blob_ref = GlyphBlobRef.empty, .em_box = extent_box, .bounds_q = empty_bounds, .precision_bits = precision_bits };
+            return .{
+                .blob_ref = GlyphBlobRef.empty,
+                .em_box = extent_box,
+                .bounds_q = empty_bounds,
+                .precision_bits = precision_bits,
+                .mesh_metadata = .empty(),
+            };
         }
 
         const em_box = emBoxFromBlobBounds(encoded.blob);
         const bounds_q = fixedBoundsFromBlob(encoded.blob);
+        var mesh_metadata = try meshMetadataFromBlob(self.allocator, encoded.blob);
+        var owns_mesh_metadata = true;
+        errdefer if (owns_mesh_metadata) mesh_metadata.deinit(self.allocator);
         const pool_alloc = self.store.pool_alloc.alloc(@intCast(encoded.data.len)) orelse {
             if (@import("builtin").mode == .Debug) self.stats.pool_alloc_failures += 1;
             return Error.PoolExhausted;
@@ -471,10 +513,272 @@ pub const RendererCore = struct {
             self.stats.pool = self.store.poolSnapshot();
         }
 
-        try self.store.glyph_cache.insertColdWithBounds(cache_key, blob_ref, pool_alloc, em_box, bounds_q);
-        return .{ .blob_ref = blob_ref, .em_box = em_box, .bounds_q = bounds_q, .precision_bits = precision_bits };
+        owns_mesh_metadata = false;
+        try self.store.glyph_cache.insertColdWithMetadata(cache_key, blob_ref, pool_alloc, em_box, bounds_q, mesh_metadata);
+        return .{
+            .blob_ref = blob_ref,
+            .em_box = em_box,
+            .bounds_q = bounds_q,
+            .precision_bits = precision_bits,
+            .mesh_metadata = mesh_metadata,
+        };
     }
 };
+
+const target_meshlet_extent_px: f64 = 96.0;
+const no_bounds_max_q: i32 = -2147483647;
+
+fn meshMetadataFromBlob(allocator: std.mem.Allocator, blob: blob_format.CoverageBlob) !cache_mod.MeshMetadata {
+    const view = try blob_decode.BlobView.initCoverageBlob(blob);
+    const header = view.header;
+    if (header.band_count == 0) {
+        return .{
+            .curve_count = header.curve_count,
+            .band_min = header.band_min,
+            .band_count = 0,
+            .band_height_q = header.band_height_q,
+            .bands = &.{},
+        };
+    }
+
+    const bands = try allocator.alloc(cache_mod.BandMeshInfo, header.band_count);
+    errdefer allocator.free(bands);
+
+    for (bands, 0..) |*out, band_index| {
+        const band = view.band(@intCast(band_index));
+        var max_x_q = no_bounds_max_q;
+        var i: u32 = 0;
+        while (i < band.id_count) : (i += 1) {
+            const curve_index = view.curveId(band.id_start + i);
+            if (curve_index < header.curve_count) {
+                const curve = view.curve(curve_index);
+                max_x_q = @max(max_x_q, curve.bbox_max_x_q);
+            }
+        }
+        out.* = .{
+            .candidate_count = band.id_count,
+            .max_x_q = max_x_q,
+        };
+    }
+
+    return .{
+        .curve_count = header.curve_count,
+        .band_min = header.band_min,
+        .band_count = header.band_count,
+        .band_height_q = header.band_height_q,
+        .bands = bands,
+    };
+}
+
+fn appendGlyphMeshlets(
+    batch: anytype,
+    glyph: anytype,
+    glyph_index: u32,
+    mesh_metadata: cache_mod.MeshMetadata,
+    bounds: cache_mod.FixedBounds,
+    precision_bits: u8,
+    local_from_screen: core_types.Affine2D64,
+    view: core_types.FrameView2D,
+    screen_bounds: core_types.Rect64,
+) !void {
+    const Batch = @typeInfo(@TypeOf(batch)).pointer.child;
+    const GlyphMeshlet = Batch.GlyphMeshletType;
+
+    if (mesh_metadata.curve_count == 0 or mesh_metadata.band_count == 0) return;
+
+    const visible_extent = visiblePixelExtent(screen_bounds, view);
+    const requested_slices = subdivisionCount(visible_extent);
+    const effective_slices = @min(requested_slices, @max(mesh_metadata.band_count, 1));
+
+    var slice_index: u32 = 0;
+    while (slice_index < effective_slices) : (slice_index += 1) {
+        const band_start = @as(u32, @intCast((@as(u64, slice_index) * mesh_metadata.band_count) / effective_slices));
+        const band_end = @as(u32, @intCast((@as(u64, slice_index + 1) * mesh_metadata.band_count) / effective_slices));
+        if (band_end <= band_start) continue;
+
+        var candidate_count: u32 = 0;
+        var max_x_q = no_bounds_max_q;
+        var band_index = band_start;
+        while (band_index < band_end) : (band_index += 1) {
+            const info = mesh_metadata.bands[band_index];
+            candidate_count +|= info.candidate_count;
+            max_x_q = @max(max_x_q, info.max_x_q);
+        }
+        if (candidate_count == 0) continue;
+
+        const dilate_q = localPixelDilationQ(glyph, precision_bits);
+        const viewport_q = viewportLocalBoundsQ(glyph, precision_bits, local_from_screen, view);
+        var y_min_q = @max(
+            @max(bounds.y_min, saturatingSubQ(viewport_q[1], dilate_q[1])),
+            bandEdgeQ(mesh_metadata.band_min, band_start, mesh_metadata.band_height_q),
+        );
+        var y_max_q = @min(
+            @min(bounds.y_max, saturatingAddQ(viewport_q[3], dilate_q[1])),
+            bandEdgeQ(mesh_metadata.band_min, band_end, mesh_metadata.band_height_q),
+        );
+
+        if (band_start == 0) y_min_q = saturatingSubQ(y_min_q, dilate_q[1]);
+        if (band_end == mesh_metadata.band_count) y_max_q = saturatingAddQ(y_max_q, dilate_q[1]);
+
+        const rect_min_q = [2]i32{
+            @max(bounds.x_min, saturatingSubQ(viewport_q[0], dilate_q[0])),
+            y_min_q,
+        };
+        const rect_max_x_base = @min(bounds.x_max, max_x_q);
+        const rect_max_q = [2]i32{
+            @min(saturatingAddQ(rect_max_x_base, dilate_q[0]), saturatingAddQ(viewport_q[2], dilate_q[0])),
+            y_max_q,
+        };
+
+        if (rect_max_q[0] <= rect_min_q[0] or rect_max_q[1] <= rect_min_q[1]) continue;
+
+        const mesh_anchor_q = [2]i32{
+            midpointQ(rect_min_q[0], rect_max_q[0]),
+            midpointQ(rect_min_q[1], rect_max_q[1]),
+        };
+        const mesh_screen_anchor = glyphLocalQToScreenF64(glyph, precision_bits, mesh_anchor_q);
+        const mesh_screen_anchor_px = castPoint2F32(mesh_screen_anchor) orelse continue;
+
+        const meshlet: GlyphMeshlet = .{
+            .glyph_index = glyph_index,
+            .band_start = band_start,
+            .band_end = band_end,
+            .rect_min_q = rect_min_q,
+            .rect_max_q = rect_max_q,
+            .mesh_anchor_q = mesh_anchor_q,
+            .screen_anchor_px = mesh_screen_anchor_px,
+            .local_from_screen_2x2 = glyph.local_from_screen_2x2,
+        };
+        try batch.appendMeshlet(meshlet);
+    }
+}
+
+fn visiblePixelExtent(screen_bounds: core_types.Rect64, view: core_types.FrameView2D) [2]f64 {
+    const min_x = @max(screen_bounds.x_min, 0.0);
+    const min_y = @max(screen_bounds.y_min, 0.0);
+    const max_x = @min(screen_bounds.x_max, view.viewport_width);
+    const max_y = @min(screen_bounds.y_max, view.viewport_height);
+    return .{ @max(max_x - min_x, 0.0), @max(max_y - min_y, 0.0) };
+}
+
+fn subdivisionCount(visible_extent: [2]f64) u32 {
+    const max_extent = @max(visible_extent[0], visible_extent[1]);
+    var count: u32 = @intFromFloat(@ceil(max_extent / target_meshlet_extent_px));
+    if (max_extent >= 16.0) count = @max(count, 4);
+    return std.math.clamp(count, 1, mesh_limits.max_subdivisions_per_glyph);
+}
+
+fn localPixelDilationQ(glyph: anytype, precision_bits: u8) [2]i32 {
+    const scale = std.math.ldexp(@as(f64, 1.0), precision_bits);
+    const m = glyph.local_from_screen_2x2;
+    const radius_x = (@abs(@as(f64, m[0])) + @abs(@as(f64, m[2]))) * 0.5;
+    const radius_y = (@abs(@as(f64, m[1])) + @abs(@as(f64, m[3]))) * 0.5;
+    return .{
+        boundedQFromFloat(radius_x * scale, true),
+        boundedQFromFloat(radius_y * scale, true),
+    };
+}
+
+fn viewportLocalBoundsQ(
+    glyph: anytype,
+    precision_bits: u8,
+    local_from_screen: core_types.Affine2D64,
+    view: core_types.FrameView2D,
+) [4]i32 {
+    const s0 = [2]f64{ 0.0, 0.0 };
+    const s1 = [2]f64{ view.viewport_width, 0.0 };
+    const s2 = [2]f64{ view.viewport_width, view.viewport_height };
+    const s3 = [2]f64{ 0.0, view.viewport_height };
+
+    const min_x = @min(
+        @min(localScreenToQ(glyph, precision_bits, local_from_screen, s0, 0, false), localScreenToQ(glyph, precision_bits, local_from_screen, s1, 0, false)),
+        @min(localScreenToQ(glyph, precision_bits, local_from_screen, s2, 0, false), localScreenToQ(glyph, precision_bits, local_from_screen, s3, 0, false)),
+    );
+    const max_x = @max(
+        @max(localScreenToQ(glyph, precision_bits, local_from_screen, s0, 0, true), localScreenToQ(glyph, precision_bits, local_from_screen, s1, 0, true)),
+        @max(localScreenToQ(glyph, precision_bits, local_from_screen, s2, 0, true), localScreenToQ(glyph, precision_bits, local_from_screen, s3, 0, true)),
+    );
+    const min_y = @min(
+        @min(localScreenToQ(glyph, precision_bits, local_from_screen, s0, 1, false), localScreenToQ(glyph, precision_bits, local_from_screen, s1, 1, false)),
+        @min(localScreenToQ(glyph, precision_bits, local_from_screen, s2, 1, false), localScreenToQ(glyph, precision_bits, local_from_screen, s3, 1, false)),
+    );
+    const max_y = @max(
+        @max(localScreenToQ(glyph, precision_bits, local_from_screen, s0, 1, true), localScreenToQ(glyph, precision_bits, local_from_screen, s1, 1, true)),
+        @max(localScreenToQ(glyph, precision_bits, local_from_screen, s2, 1, true), localScreenToQ(glyph, precision_bits, local_from_screen, s3, 1, true)),
+    );
+    return .{ min_x, min_y, max_x, max_y };
+}
+
+fn localScreenToQ(
+    glyph: anytype,
+    precision_bits: u8,
+    local_from_screen: core_types.Affine2D64,
+    screen: [2]f64,
+    axis: u1,
+    upper: bool,
+) i32 {
+    const anchor_screen = [2]f64{
+        @floatCast(glyph.screen_anchor_px[0]),
+        @floatCast(glyph.screen_anchor_px[1]),
+    };
+    const local_delta = local_from_screen.applyVector(.{
+        screen[0] - anchor_screen[0],
+        screen[1] - anchor_screen[1],
+    });
+    const scale = std.math.ldexp(@as(f64, 1.0), precision_bits);
+    const anchor = glyph.glyph_anchor_q[axis];
+    const delta_q = boundedQFromFloat(local_delta[axis] * scale, upper);
+    return saturatingAddQ(anchor, delta_q);
+}
+
+fn glyphLocalQToScreenF64(glyph: anytype, precision_bits: u8, local_q: [2]i32) [2]f64 {
+    const inv_scale = std.math.ldexp(@as(f64, 1.0), -@as(i32, precision_bits));
+    const dx = @as(f64, @floatFromInt(saturatingSubQ(local_q[0], glyph.glyph_anchor_q[0]))) * inv_scale;
+    const dy = @as(f64, @floatFromInt(saturatingSubQ(local_q[1], glyph.glyph_anchor_q[1]))) * inv_scale;
+    const m = glyph.screen_from_local_2x2;
+    return .{
+        @as(f64, glyph.screen_anchor_px[0]) + @as(f64, m[0]) * dx + @as(f64, m[2]) * dy,
+        @as(f64, glyph.screen_anchor_px[1]) + @as(f64, m[1]) * dx + @as(f64, m[3]) * dy,
+    };
+}
+
+fn bandEdgeQ(band_min: i32, band_offset: u32, band_height_q: i32) i32 {
+    const band = @as(i64, band_min) + @as(i64, band_offset);
+    const product = std.math.mul(i64, band, band_height_q) catch {
+        if ((band < 0) == (band_height_q > 0)) return std.math.minInt(i32);
+        return std.math.maxInt(i32);
+    };
+    return clampI64ToI32(product);
+}
+
+fn midpointQ(lo: i32, hi: i32) i32 {
+    if ((lo < 0) != (hi < 0)) return @intCast(@divTrunc(@as(i64, lo) + @as(i64, hi), 2));
+    return lo + @divTrunc(hi - lo, 2);
+}
+
+fn boundedQFromFloat(value: f64, upper: bool) i32 {
+    if (!std.math.isFinite(value)) {
+        return if (upper) std.math.maxInt(i32) else std.math.minInt(i32);
+    }
+    const rounded = if (upper) @ceil(value) else @floor(value);
+    if (rounded <= @as(f64, @floatFromInt(std.math.minInt(i32)))) return std.math.minInt(i32);
+    if (rounded >= @as(f64, @floatFromInt(std.math.maxInt(i32)))) return std.math.maxInt(i32);
+    return @intFromFloat(rounded);
+}
+
+fn saturatingAddQ(a: i32, b: i32) i32 {
+    return clampI64ToI32(@as(i64, a) + @as(i64, b));
+}
+
+fn saturatingSubQ(a: i32, b: i32) i32 {
+    return clampI64ToI32(@as(i64, a) - @as(i64, b));
+}
+
+fn clampI64ToI32(value: i64) i32 {
+    if (value <= std.math.minInt(i32)) return std.math.minInt(i32);
+    if (value >= std.math.maxInt(i32)) return std.math.maxInt(i32);
+    return @intCast(value);
+}
 
 fn localRectFromFixed(bounds: cache_mod.FixedBounds, precision_bits: u8) core_types.Rect64 {
     return .{
@@ -567,10 +871,53 @@ const TestGlyphInstance = extern struct {
     local_from_screen_2x2: [4]f32,
 };
 
+const TestGlyphMeshlet = extern struct {
+    glyph_index: u32,
+    band_start: u32,
+    band_end: u32,
+    _pad0: u32 = 0,
+    rect_min_q: [2]i32,
+    rect_max_q: [2]i32,
+    mesh_anchor_q: [2]i32,
+    screen_anchor_px: [2]f32,
+    local_from_screen_2x2: [4]f32,
+};
+
+test "render: viewport local bounds invert screen corners without double translation" {
+    const screen_from_local = core_types.Affine2D64.init(2, 0, 0, 4, 100, 200);
+    const local_from_screen = screen_from_local.inverse().?;
+    const glyph_anchor_q = [2]i32{ 8, -12 };
+    const screen_anchor = screen_from_local.apply(.{
+        @as(f64, @floatFromInt(glyph_anchor_q[0])),
+        @as(f64, @floatFromInt(glyph_anchor_q[1])),
+    });
+
+    var glyph = std.mem.zeroes(TestGlyphInstance);
+    glyph.precision_bits = 0;
+    glyph.glyph_anchor_q = glyph_anchor_q;
+    glyph.screen_anchor_px = .{
+        @floatCast(screen_anchor[0]),
+        @floatCast(screen_anchor[1]),
+    };
+
+    const bounds = viewportLocalBoundsQ(
+        glyph,
+        @intCast(glyph.precision_bits),
+        local_from_screen,
+        core_types.FrameView2D.identity(1280, 720),
+    );
+
+    try std.testing.expectEqual(@as(i32, -50), bounds[0]);
+    try std.testing.expectEqual(@as(i32, -50), bounds[1]);
+    try std.testing.expectEqual(@as(i32, 590), bounds[2]);
+    try std.testing.expectEqual(@as(i32, 130), bounds[3]);
+}
+
 const FakeBackend = struct {
     pub const GlyphBlobRef = cache_mod.GlyphBlobRef;
     pub const FrameToken = glyph_store_mod.FrameToken;
     pub const GlyphInstance = TestGlyphInstance;
+    pub const GlyphMeshlet = TestGlyphMeshlet;
 
     pool: []u8,
     next_ref: u32 = 0,
@@ -623,7 +970,8 @@ test "render: RendererCore appends shaped glyph instances and caches blobs" {
     var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
     var glyphs: [16]TestGlyphInstance = undefined;
-    var batch = glyph_batch_mod.GlyphBatch(TestGlyphInstance).init(&glyphs);
+    var meshlets: [16 * mesh_limits.max_subdivisions_per_glyph]TestGlyphMeshlet = undefined;
+    var batch = glyph_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);
@@ -634,16 +982,23 @@ test "render: RendererCore appends shaped glyph instances and caches blobs" {
         .color = .white,
     });
 
-    try std.testing.expect(batch.count() > 0);
+    try std.testing.expect(batch.glyphCount() > 0);
+    try std.testing.expect(batch.meshletCount() > 0);
     try std.testing.expect(backend.next_ref > 0);
     try std.testing.expect(glyphs[0].blob_ref != GlyphBlobRef.empty.value);
     try std.testing.expect(glyphs[0].precision_bits >= blob_format.min_fraction_bits);
     try std.testing.expect(glyphs[0].local_bounds_q[2] > glyphs[0].local_bounds_q[0]);
     try std.testing.expect(std.math.isFinite(glyphs[0].screen_anchor_px[0]));
+    try std.testing.expect(meshlets[0].glyph_index < batch.glyphCount());
+    try std.testing.expect(meshlets[0].band_end > meshlets[0].band_start);
+    try std.testing.expect(meshlets[0].rect_max_q[0] > meshlets[0].rect_min_q[0]);
+    try std.testing.expect(meshlets[0].rect_max_q[1] > meshlets[0].rect_min_q[1]);
+    try std.testing.expect(std.math.isFinite(meshlets[0].screen_anchor_px[0]));
     if (@import("builtin").mode == .Debug) {
         try std.testing.expectEqual(@as(u32, 1), core.stats.runs_shaped);
-        try std.testing.expect(core.stats.glyphs_shaped >= batch.count());
-        try std.testing.expectEqual(batch.count(), core.stats.instances_written);
+        try std.testing.expect(core.stats.glyphs_shaped >= batch.glyphCount());
+        try std.testing.expectEqual(batch.glyphCount(), core.stats.instances_written);
+        try std.testing.expectEqual(batch.meshletCount(), core.stats.meshlets_written);
         try std.testing.expect(core.stats.cache_misses > 0);
         try std.testing.expect(core.stats.glyphs_encoded > 0);
         try std.testing.expect(core.stats.outline_segments > 0);
@@ -662,7 +1017,7 @@ test "render: RendererCore appends shaped glyph instances and caches blobs" {
     try std.testing.expectEqual(refs_after_first, backend.next_ref);
     if (@import("builtin").mode == .Debug) {
         try std.testing.expect(core.stats.cache_hits > 0);
-        try std.testing.expectEqual(batch.count(), core.stats.instances_written);
+        try std.testing.expectEqual(batch.glyphCount(), core.stats.instances_written);
     }
 }
 
@@ -673,7 +1028,8 @@ test "render: RendererCore skips empty glyph instances while preserving cache en
     var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
     var glyphs: [4]TestGlyphInstance = undefined;
-    var batch = glyph_batch_mod.GlyphBatch(TestGlyphInstance).init(&glyphs);
+    var meshlets: [4 * mesh_limits.max_subdivisions_per_glyph]TestGlyphMeshlet = undefined;
+    var batch = glyph_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);
@@ -683,7 +1039,8 @@ test "render: RendererCore skips empty glyph instances while preserving cache en
         .color = .white,
     });
 
-    try std.testing.expectEqual(@as(u32, 0), batch.count());
+    try std.testing.expectEqual(@as(u32, 0), batch.glyphCount());
+    try std.testing.expectEqual(@as(u32, 0), batch.meshletCount());
     try std.testing.expectEqual(@as(u32, 0), backend.next_ref);
     try std.testing.expect(core.store.glyph_cache.count() > 0);
     if (@import("builtin").mode == .Debug) {
@@ -701,7 +1058,8 @@ test "render: RendererCore enforces instance capacity after skipping empty glyph
     var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
     var glyphs: [1]TestGlyphInstance = undefined;
-    var batch = glyph_batch_mod.GlyphBatch(TestGlyphInstance).init(&glyphs);
+    var meshlets: [1 * mesh_limits.max_subdivisions_per_glyph]TestGlyphMeshlet = undefined;
+    var batch = glyph_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);
@@ -713,7 +1071,8 @@ test "render: RendererCore enforces instance capacity after skipping empty glyph
             .color = .white,
         }),
     );
-    try std.testing.expectEqual(@as(u32, 0), batch.count());
+    try std.testing.expectEqual(@as(u32, 0), batch.glyphCount());
+    try std.testing.expectEqual(@as(u32, 0), batch.meshletCount());
 }
 
 test "render: RendererCore writes fill-rule flags into glyph instances" {
@@ -723,7 +1082,8 @@ test "render: RendererCore writes fill-rule flags into glyph instances" {
     var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
     var glyphs: [4]TestGlyphInstance = undefined;
-    var batch = glyph_batch_mod.GlyphBatch(TestGlyphInstance).init(&glyphs);
+    var meshlets: [4 * mesh_limits.max_subdivisions_per_glyph]TestGlyphMeshlet = undefined;
+    var batch = glyph_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);
@@ -734,7 +1094,8 @@ test "render: RendererCore writes fill-rule flags into glyph instances" {
         .fill_rule = .even_odd,
     });
 
-    try std.testing.expect(batch.count() > 0);
+    try std.testing.expect(batch.glyphCount() > 0);
+    try std.testing.expect(batch.meshletCount() > 0);
     try std.testing.expectEqual(core_types.FillRule.even_odd.shaderFlags(), glyphs[0].flags);
 }
 
@@ -745,7 +1106,8 @@ test "render: RendererCore emits finite chart payload after large pan cancellati
     var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
     var glyphs: [4]TestGlyphInstance = undefined;
-    var batch = glyph_batch_mod.GlyphBatch(TestGlyphInstance).init(&glyphs);
+    var meshlets: [4 * mesh_limits.max_subdivisions_per_glyph]TestGlyphMeshlet = undefined;
+    var batch = glyph_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     const world = core_types.Affine2D64.translation(-1.0e12, -1.0e12);
@@ -758,7 +1120,8 @@ test "render: RendererCore emits finite chart payload after large pan cancellati
         .color = .white,
     });
 
-    try std.testing.expect(batch.count() > 0);
+    try std.testing.expect(batch.glyphCount() > 0);
+    try std.testing.expect(batch.meshletCount() > 0);
     try std.testing.expect(std.math.isFinite(glyphs[0].screen_anchor_px[0]));
     try std.testing.expect(std.math.isFinite(glyphs[0].screen_anchor_px[1]));
     try std.testing.expect(@abs(glyphs[0].screen_anchor_px[0]) < 4096);
@@ -772,7 +1135,8 @@ test "render: RendererCore reports unsupported precision instead of emitting uns
     var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
     var glyphs: [4]TestGlyphInstance = undefined;
-    var batch = glyph_batch_mod.GlyphBatch(TestGlyphInstance).init(&glyphs);
+    var meshlets: [4 * mesh_limits.max_subdivisions_per_glyph]TestGlyphMeshlet = undefined;
+    var batch = glyph_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);
@@ -783,7 +1147,8 @@ test "render: RendererCore reports unsupported precision instead of emitting uns
         .color = .white,
     });
 
-    try std.testing.expectEqual(@as(u32, 0), batch.count());
+    try std.testing.expectEqual(@as(u32, 0), batch.glyphCount());
+    try std.testing.expectEqual(@as(u32, 0), batch.meshletCount());
     if (@import("builtin").mode == .Debug) {
         try std.testing.expect(core.stats.precision_insufficient > 0);
     }
@@ -800,7 +1165,8 @@ test "render: RendererCore defers evicted glyph retirement until frame token com
     var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
     var glyphs: [4]TestGlyphInstance = undefined;
-    var batch = glyph_batch_mod.GlyphBatch(TestGlyphInstance).init(&glyphs);
+    var meshlets: [4 * mesh_limits.max_subdivisions_per_glyph]TestGlyphMeshlet = undefined;
+    var batch = glyph_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.setRetireAfterToken(7);
@@ -844,7 +1210,8 @@ test "render: RendererCore unloadFont removes handle and defers cached glyph ret
     var pool: [16 * 1024]u8 = undefined;
     var backend = FakeBackend{ .pool = &pool };
     var glyphs: [4]TestGlyphInstance = undefined;
-    var batch = glyph_batch_mod.GlyphBatch(TestGlyphInstance).init(&glyphs);
+    var meshlets: [4 * mesh_limits.max_subdivisions_per_glyph]TestGlyphMeshlet = undefined;
+    var batch = glyph_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);

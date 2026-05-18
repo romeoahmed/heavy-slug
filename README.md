@@ -8,8 +8,9 @@
 
 `heavy-slug` is a Zig 0.16 GPU text rendering library for analytic,
 resolution-independent text. It shapes Unicode with HarfBuzz, captures native
-font outlines through FreeType, encodes compact cubic coverage blobs, and draws
-them with task, mesh, and fragment shaders on Vulkan 1.4 and Metal 4.
+font outlines through FreeType, encodes compact cubic coverage blobs, expands
+visible strips into a CPU-authored meshlet stream, and draws them with mesh and
+fragment shaders on Vulkan 1.4 and Metal 4.
 
 The project is inspired by the
 [Slug algorithm](https://jcgt.org/published/0006/02/02/), but the implementation
@@ -18,7 +19,7 @@ host-owned graphics lifetimes, generated GPU ABI structs, and shared Slang 2026
 shader sources.
 
 ```text
-UTF-8 text -> HarfBuzz shaping -> font outlines -> precision blobs -> GPU culling -> analytic coverage
+UTF-8 text -> HarfBuzz shaping -> font outlines -> precision blobs -> CPU meshlets -> analytic coverage
 ```
 
 | Design promise | Practical effect |
@@ -96,7 +97,7 @@ that cannot affect a pixel, and evaluate coverage analytically at the end.
 | --- | --- | --- |
 | Raster atlas | Scale artifacts and atlas churn | Reusable outline blobs. |
 | SDF/MSDF | Reconstruction artifacts | Direct analytic coverage. |
-| Tessellated outlines | More geometry and MSAA pressure | Mesh/task culling plus fragment integration. |
+| Tessellated outlines | More geometry and MSAA pressure | CPU meshlets plus mesh clipping and fragment integration. |
 
 The core library focuses on text preparation and cache ownership. It does not
 try to be a windowing toolkit, application framework, or GPU device manager.
@@ -116,8 +117,8 @@ Core module: heavy_slug
   shapes text, encodes glyphs, manages cache metadata, emits draw batches
       |
       v
-Task -> Mesh -> Fragment shaders
-  cull glyph work, emit compact meshlets, integrate analytic coverage
+CPU meshlets -> Mesh -> Fragment shaders
+  emit compact strips, clip meshlets, integrate analytic coverage
 ```
 
 | Layer | Owns | Does not own |
@@ -212,8 +213,9 @@ TextRun
   -> cubic normalization and regularization
   -> precision-tiered CoverageBlob cache entry
   -> GlyphInstance batch
+  -> GlyphMeshlet stream
   -> backend frame submission
-  -> task/mesh/fragment shaders
+  -> mesh/fragment shaders
 ```
 
 | Stage | Key invariant |
@@ -222,22 +224,23 @@ TextRun
 | Outline capture | Glyphs stay as outline data; there is no CPU raster pass. |
 | Cubic encoding | Lines, quadratics, and cubics share one tiered fixed-point GPU representation. |
 | Cache | Glyph blobs are reused through a backend-owned byte pool. |
-| GPU culling | Work is rejected only when it is conservatively safe. |
+| CPU meshlet stream | Visible glyphs are expanded into bounded h-band strips before submission. |
+| GPU culling | Mesh shaders still reject clipped or degenerate strips conservatively. |
 | Fragment coverage | Coverage is integrated analytically from the encoded curves. |
 
 ## Backend Notes
 
 | Backend | Resource model | Host responsibility |
 | --- | --- | --- |
-| Vulkan | One glyph blob buffer, one per-frame glyph instance buffer, shader objects, optional stats buffer. | Provide Vulkan objects, command buffers, render targets, and completed frame tokens. |
-| Metal | Bridge-owned buffers, Metal 4 mesh pipeline state, argument tables, and per-command residency. | Provide borrowed Metal 4 device, command queue, layer, and app lifecycle. |
+| Vulkan | One glyph blob buffer, per-frame glyph and meshlet buffers, shader objects, optional stats buffer. | Provide Vulkan objects, command buffers, render targets, and completed frame tokens. |
+| Metal | Bridge-owned glyph and meshlet buffers, Metal 4 mesh pipeline state, argument tables, and per-command residency. | Provide borrowed Metal 4 device, command queue, layer, and app lifecycle. |
 
 Frame lifetime is explicit. Backends return `FrameToken` values on submit, and
 cached GPU storage is retired only after the host reports completed work.
 
 The Vulkan backend intentionally uses byte-offset `GlyphBlobRef` values rather
-than per-glyph descriptor slots and binds task, mesh, and fragment stages as
-linked `VK_EXT_shader_object` shader objects. The Metal backend follows the
+than per-glyph descriptor slots and binds mesh and fragment stages as linked
+`VK_EXT_shader_object` shader objects. The Metal backend follows the
 Metal 4 command and argument-table path exposed through the Objective-C++
 bridge; it keeps a mesh `MTLRenderPipelineState` because Metal dynamic
 libraries and pipeline dynamic linking do not replace the render pipeline state
@@ -250,8 +253,7 @@ model for this renderer.
 | `shaders/core/` | Shared ABI, coverage, h-band, chart mapping, and stats logic. |
 | `shaders/backend_vulkan/` | Vulkan resource binding shim. |
 | `shaders/backend_metal/` | Metal resource binding shim. |
-| `shaders/entries/task.slang` | Task shader entry. |
-| `shaders/entries/mesh.slang` | Mesh shader entry. |
+| `shaders/entries/mesh.slang` | Mesh shader entry for CPU-authored glyph meshlets. |
 | `shaders/entries/fragment.slang` | Fragment shader entry. |
 
 Shader sources use explicit Slang 2026 modules. `build/shaders.zig` compiles
@@ -263,10 +265,8 @@ Language for Metal. GPU ABI structs are generated from Slang reflection by
 <summary>Shader output paths</summary>
 
 ```text
-zig-out/shaders/spirv/task.spv
 zig-out/shaders/spirv/mesh.spv
 zig-out/shaders/spirv/fragment.spv
-zig-out/shaders/msl/task.metal
 zig-out/shaders/msl/mesh.metal
 zig-out/shaders/msl/fragment.metal
 ```
@@ -310,7 +310,7 @@ zig build test -Dmetal=true -Dshader-stats=true
 | Core boundary | Core is backend-neutral and window-system-free. |
 | Host boundary | Applications own graphics/device/window lifetimes. |
 | Frame math | Draw submission uses a CPU f64 affine `FrameView2D`; backends no longer accept f32 projection matrices. |
-| Glyph resources | Cached glyph blobs live in a backend-owned byte pool. |
+| Glyph resources | Cached glyph blobs live in a backend-owned byte pool; visible strips live in per-frame meshlet buffers. |
 | Blob precision | Glyph blobs are 32-bit fixed-point and keyed by precision tier. |
 | Blob references | `GlyphBlobRef` values are byte offsets. |
 | GPU ABI | Layouts are generated from Slang reflection. |
@@ -350,9 +350,9 @@ from `build.zig.zon`.
 
 `heavy-slug` would not exist without Slug. Slug established the practical value
 of GPU-side analytic glyph coverage and compact outline data. This project
-keeps that foundation while exploring native cubic coverage blobs, mesh/task
-shader culling, generated GPU ABI, and explicit Vulkan 1.4 / Metal 4 backend
-boundaries.
+keeps that foundation while exploring native cubic coverage blobs, CPU-authored
+meshlets, mesh shader clipping, generated GPU ABI, and explicit Vulkan 1.4 /
+Metal 4 backend boundaries.
 
 ## License
 

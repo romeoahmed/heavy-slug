@@ -116,6 +116,15 @@ pub const Affine2D64 = extern struct {
         };
     }
 
+    pub fn applyVector(self: Affine2D64, vector: anytype) [2]f64 {
+        const x: f64 = @floatCast(vector[0]);
+        const y: f64 = @floatCast(vector[1]);
+        return .{
+            self.xx * x + self.yx * y,
+            self.xy * x + self.yy * y,
+        };
+    }
+
     pub fn applyPoint(self: Affine2D64, point: Point2D64) Point2D64 {
         const out = self.apply(.{ point.x, point.y });
         return .{ .x = out[0], .y = out[1] };
@@ -359,6 +368,18 @@ test "Transform aliases the f64 affine frame transform" {
     const q = r.apply(.{ 1, 0 });
     try std.testing.expectApproxEqAbs(@as(f64, 0), q[0], 1.0e-12);
     try std.testing.expectApproxEqAbs(@as(f64, 1), q[1], 1.0e-12);
+}
+
+test "Affine2D64 applies points and vectors with distinct affine semantics" {
+    const t = Affine2D64.init(2, 3, 5, 7, 11, 13);
+
+    const point = t.apply(.{ 17, 19 });
+    try std.testing.expectApproxEqAbs(@as(f64, 140), point[0], 1.0e-12);
+    try std.testing.expectApproxEqAbs(@as(f64, 197), point[1], 1.0e-12);
+
+    const vector = t.applyVector(.{ 17, 19 });
+    try std.testing.expectApproxEqAbs(@as(f64, 129), vector[0], 1.0e-12);
+    try std.testing.expectApproxEqAbs(@as(f64, 184), vector[1], 1.0e-12);
 }
 
 test "Affine2D64 composes, inverts, and transforms bounds" {

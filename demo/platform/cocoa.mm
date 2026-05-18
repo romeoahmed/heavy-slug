@@ -207,6 +207,26 @@ void updateDrawableSize(hs_demo_cocoa_window *host) {
   host->framebuffer_height = pixel_height;
 }
 
+void updateCursorFromViewPoint(hs_demo_cocoa_window *host, NSView *view,
+                               NSPoint point) {
+  if (!host || !view)
+    return;
+  NSRect bounds = view.bounds;
+  if (bounds.size.width <= 0 || bounds.size.height <= 0 ||
+      host->framebuffer_width == 0 || host->framebuffer_height == 0) {
+    host->cursor_x = 0;
+    host->cursor_y = 0;
+    return;
+  }
+
+  host->cursor_x = point.x *
+                   (static_cast<double>(host->framebuffer_width) /
+                    static_cast<double>(bounds.size.width));
+  host->cursor_y = point.y *
+                   (static_cast<double>(host->framebuffer_height) /
+                    static_cast<double>(bounds.size.height));
+}
+
 [[nodiscard]] std::optional<DemoKey> keyForCharacter(unichar character) {
   switch (character) {
   case 0x1b:
@@ -428,8 +448,7 @@ void installMainMenu(void) {
   if (!self.host)
     return;
   NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
-  self.host->cursor_x = point.x;
-  self.host->cursor_y = point.y;
+  updateCursorFromViewPoint(self.host, self, point);
 }
 
 - (void)keyDown:(NSEvent *)event {
