@@ -12,6 +12,15 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **CI workflow architecture refactored:** the public GitHub Actions entrypoint
+  now delegates to smaller reusable workflows for quality, core, shaders,
+  Vulkan, and Metal; shared Zig/Slang setup and cache policy moved into local
+  composite actions, and backend variants are grouped by platform to reduce
+  check noise while preserving coverage.
+- **CI dependency prefetch generalized:** Zig dependency prefetch now uses
+  shared Bash and PowerShell retry scripts on every build runner image, while
+  Windows-specific CI setup was reduced to enabling long paths before the
+  normal cross-platform toolchain path.
 - **Swift bridge style and linting tightened:** Swift/Metal bridge compilation
   now invokes `swiftc` through `xcrun --sdk macosx`, the build graph exposes
   `zig build swift-format-lint`, CI runs that strict Swift format lint on
@@ -133,9 +142,9 @@ implementation notes belong in commits and code review history.
   Zig/Slang tool caches are exact-version caches, Zig package caches are
   restored separately from build artifacts, and cache saves are limited to
   non-PR runs.
-- **Windows CI hardened:** Windows jobs prepare short Zig cache/temp paths,
-  enable long paths, and prefetch Zig dependencies through a bounded retry
-  wrapper for transient network/archive failures before running tests normally.
+- **Windows CI hardened:** Windows jobs enable long paths before running tests,
+  and Zig dependency prefetch uses the same bounded retry wrapper as the other
+  runner images.
 - **Documentation refreshed:** `README.md`, `AGENTS.md`, and `CHANGELOG.md`
   now describe the current native-demo-host architecture at a higher level and
   remove stale or overly specific platform implementation notes.

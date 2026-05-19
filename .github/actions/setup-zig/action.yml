@@ -1,0 +1,143 @@
+name: Setup Zig
+description: Resolve, cache, and install the repository Zig toolchain.
+
+inputs:
+  version:
+    description: "Zig version: from-zon, stable/latest, master, or an explicit version."
+    required: false
+    default: from-zon
+  package-cache:
+    description: Restore the Zig global package cache.
+    required: false
+    default: "true"
+
+outputs:
+  version:
+    description: Resolved Zig version.
+    value: ${{ steps.zig_posix.outputs.version || steps.zig_windows.outputs.version }}
+  target:
+    description: Resolved Zig archive target.
+    value: ${{ steps.zig_posix.outputs.target || steps.zig_windows.outputs.target }}
+  install_dir:
+    description: Installed Zig directory.
+    value: ${{ steps.zig_posix.outputs.install_dir || steps.zig_windows.outputs.install_dir }}
+  package_cache_hit:
+    description: Whether the Zig package cache was an exact hit.
+    value: ${{ steps.zig_pkg_cache.outputs.cache-hit || 'false' }}
+  package_cache_key:
+    description: Zig package cache key.
+    value: ${{ steps.zig_pkg_posix.outputs.key || steps.zig_pkg_windows.outputs.key }}
+  package_cache_path:
+    description: Zig package cache path.
+    value: ${{ steps.zig_pkg_posix.outputs.path || steps.zig_pkg_windows.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Enable Windows long paths
+      if: ${{ runner.os == 'Windows' }}
+      shell: pwsh
+      run: ./.github/scripts/enable-windows-long-paths.ps1
+
+    - name: Resolve Zig
+      if: ${{ runner.os != 'Windows' }}
+      id: zig_posix
+      shell: bash
+      run: ./.github/scripts/setup-zig.sh --resolve-only
+      env:
+        ZIG_VERSION: ${{ inputs.version }}
+
+    - name: Resolve Zig
+      if: ${{ runner.os == 'Windows' }}
+      id: zig_windows
+      shell: pwsh
+      run: ./.github/scripts/setup-zig.ps1 -ResolveOnly
+      env:
+        ZIG_VERSION: ${{ inputs.version }}
+
+    - name: Restore Zig tool cache
+      id: zig_tool_cache
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ steps.zig_posix.outputs.install_dir || steps.zig_windows.outputs.install_dir }}
+        key: zig-tool-${{ runner.os }}-${{ runner.arch }}-${{ steps.zig_posix.outputs.target || steps.zig_windows.outputs.target }}-${{ steps.zig_posix.outputs.version || steps.zig_windows.outputs.version }}
+
+    - name: Setup Zig
+      if: ${{ runner.os != 'Windows' }}
+      shell: bash
+      run: ./.github/scripts/setup-zig.sh
+      env:
+        ZIG_VERSION: ${{ steps.zig_posix.outputs.version }}
+        ZIG_DOWNLOAD_URL: ${{ steps.zig_posix.outputs.url }}
+        ZIG_DOWNLOAD_SHA256: ${{ steps.zig_posix.outputs.sha256 }}
+
+    - name: Setup Zig
+      if: ${{ runner.os == 'Windows' }}
+      shell: pwsh
+      run: ./.github/scripts/setup-zig.ps1
+      env:
+        ZIG_VERSION: ${{ steps.zig_windows.outputs.version }}
+        ZIG_DOWNLOAD_URL: ${{ steps.zig_windows.outputs.url }}
+        ZIG_DOWNLOAD_SHA256: ${{ steps.zig_windows.outputs.sha256 }}
+
+    - name: Save Zig tool cache
+      if: ${{ github.event_name != 'pull_request' && steps.zig_tool_cache.outputs.cache-hit != 'true' }}
+      continue-on-error: true
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ steps.zig_posix.outputs.install_dir || steps.zig_windows.outputs.install_dir }}
+        key: zig-tool-${{ runner.os }}-${{ runner.arch }}-${{ steps.zig_posix.outputs.target || steps.zig_windows.outputs.target }}-${{ steps.zig_posix.outputs.version || steps.zig_windows.outputs.version }}
+
+    - name: Resolve Zig package cache
+      if: ${{ inputs.package-cache == 'true' && runner.os != 'Windows' }}
+      id: zig_pkg_posix
+      shell: bash
+      run: |
+        cache_path="$(
+          zig env \
+            | sed -n 's/.*"global_cache_dir"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+            | head -n 1
+        )"
+        if [[ -z "$cache_path" ]]; then
+          echo "::error::could not resolve Zig global_cache_dir from zig env" >&2
+          exit 1
+        fi
+        echo "ZIG_GLOBAL_CACHE_DIR=$cache_path" >> "$GITHUB_ENV"
+        echo "path=$cache_path" >> "$GITHUB_OUTPUT"
+        echo "key=zig-pkg-${RUNNER_OS}-${RUNNER_ARCH}-${BUILD_ZIG_ZON_HASH}" >> "$GITHUB_OUTPUT"
+        {
+          echo "restore_keys<<EOF"
+          echo "zig-pkg-${RUNNER_OS}-${RUNNER_ARCH}-"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+      env:
+        BUILD_ZIG_ZON_HASH: ${{ hashFiles('build.zig.zon') }}
+
+    - name: Resolve Zig package cache
+      if: ${{ inputs.package-cache == 'true' && runner.os == 'Windows' }}
+      id: zig_pkg_windows
+      shell: pwsh
+      run: |
+        $zigEnv = zig env | ConvertFrom-Json
+        $cachePath = $zigEnv.global_cache_dir
+        if ([string]::IsNullOrWhiteSpace($cachePath)) {
+            Write-Error 'could not resolve Zig global_cache_dir from zig env'
+            exit 1
+        }
+        Add-Content -Path $env:GITHUB_ENV -Value "ZIG_GLOBAL_CACHE_DIR=$cachePath"
+        Add-Content -Path $env:GITHUB_OUTPUT -Value "path=$cachePath"
+        Add-Content -Path $env:GITHUB_OUTPUT -Value "key=zig-pkg-$env:RUNNER_OS-$env:RUNNER_ARCH-$env:BUILD_ZIG_ZON_HASH"
+        Add-Content -Path $env:GITHUB_OUTPUT -Value "restore_keys<<EOF"
+        Add-Content -Path $env:GITHUB_OUTPUT -Value "zig-pkg-$env:RUNNER_OS-$env:RUNNER_ARCH-"
+        Add-Content -Path $env:GITHUB_OUTPUT -Value "EOF"
+      env:
+        BUILD_ZIG_ZON_HASH: ${{ hashFiles('build.zig.zon') }}
+
+    - name: Restore Zig package cache
+      if: ${{ inputs.package-cache == 'true' }}
+      id: zig_pkg_cache
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ steps.zig_pkg_posix.outputs.path || steps.zig_pkg_windows.outputs.path }}
+        key: ${{ steps.zig_pkg_posix.outputs.key || steps.zig_pkg_windows.outputs.key }}
+        restore-keys: ${{ steps.zig_pkg_posix.outputs.restore_keys || steps.zig_pkg_windows.outputs.restore_keys }}

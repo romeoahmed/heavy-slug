@@ -1,0 +1,24 @@
+name: Save Zig Package Cache
+description: Save the Zig global package cache after a successful build.
+
+inputs:
+  cache-hit:
+    description: Exact-hit result from the setup-zig restore step.
+    required: true
+  key:
+    description: Cache key to save.
+    required: true
+  path:
+    description: Cache path to save.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Save Zig package cache
+      if: ${{ github.event_name != 'pull_request' && inputs.cache-hit != 'true' }}
+      continue-on-error: true
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ inputs.path }}
+        key: ${{ inputs.key }}

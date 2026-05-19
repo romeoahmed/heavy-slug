@@ -366,20 +366,24 @@ Generated local outputs use the usual Zig paths: `zig-out/`, `.zig-cache/`, and
 
 ## CI
 
-GitHub Actions are verification-only. The workflow keeps formatting, core
-library tests, shader compilation, backend tests, shader-stat variants, and
-native demo build tests as separate quality gates so failures identify the
-broken contract directly. Workflow dispatch can override Zig and Slang
-versions; normal CI reads Zig from `build.zig.zon` and pins Slang to the
-repository-supported `2026.9` release.
+GitHub Actions are verification-only. The public `ci.yml` workflow is a small
+orchestrator that calls reusable workflows for quality, core, shader, Vulkan,
+and Metal verification. Local composite actions own Zig and Slang resolution,
+tool caching, and Zig package cache restore/save behavior, so platform jobs do
+not duplicate toolchain setup details. Zig package dependencies are prefetched
+with the same bounded exponential-backoff wrapper on Ubuntu, macOS, and
+Windows; the only Windows-specific setup left is enabling long paths for the
+runner job. Workflow dispatch can override Zig and Slang versions; normal CI
+reads Zig from `build.zig.zon` and pins Slang to the repository-supported
+`2026.9` release.
 
 | Job family | Coverage |
 | --- | --- |
 | Format and Script Syntax | Zig formatting plus POSIX shell syntax checks. |
-| Swift Format | `zig build swift-format-lint` on the selected Apple Swift toolchain. |
 | Core | Core library and build-tool tests on Ubuntu, macOS, and Windows. |
-| Shaders | `zig build spirv` and `zig build msl`. |
-| Backend | Vulkan, Metal, shader-stat variants, and native demo host build tests. |
+| Shaders | `zig build spirv` and `zig build msl` in one shader toolchain job. |
+| Vulkan | Ubuntu and Windows Vulkan backend, shader-stat, and native demo build tests. |
+| Metal | Swift formatting plus Metal backend, shader-stat, and native demo build tests on macOS. |
 
 ## Credit
 

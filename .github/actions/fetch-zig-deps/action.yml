@@ -1,0 +1,24 @@
+name: Fetch Zig Dependencies
+description: Prefetch Zig package dependencies with bounded exponential backoff.
+
+inputs:
+  build-args:
+    description: Arguments passed after `zig build`; `--fetch=needed` is appended.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Fetch Zig dependencies
+      if: ${{ runner.os != 'Windows' }}
+      shell: bash
+      run: ./.github/scripts/fetch-zig-deps.sh
+      env:
+        ZIG_FETCH_BUILD_ARGS: ${{ inputs.build-args }}
+
+    - name: Fetch Zig dependencies
+      if: ${{ runner.os == 'Windows' }}
+      shell: pwsh
+      run: ./.github/scripts/fetch-zig-deps.ps1
+      env:
+        ZIG_FETCH_BUILD_ARGS: ${{ inputs.build-args }}

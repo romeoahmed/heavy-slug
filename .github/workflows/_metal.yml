@@ -1,0 +1,70 @@
+name: Reusable Metal
+
+"on":
+  workflow_call:
+    inputs:
+      zig_version:
+        required: false
+        default: from-zon
+        type: string
+      slang_version:
+        required: false
+        default: "2026.9"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  metal:
+    name: Metal
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Zig
+        id: zig
+        uses: ./.github/actions/setup-zig
+        with:
+          version: ${{ inputs.zig_version }}
+
+      - name: Show Apple Swift toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-path
+          xcrun --sdk macosx --find swiftc
+          xcrun --sdk macosx swiftc --version
+          xcrun --sdk macosx swift format --version
+
+      - name: Lint Swift formatting
+        run: zig build swift-format-lint
+
+      - name: Setup Slang
+        uses: ./.github/actions/setup-slang
+        with:
+          version: ${{ inputs.slang_version }}
+
+      - name: Fetch Zig dependencies
+        uses: ./.github/actions/fetch-zig-deps
+        with:
+          build-args: test -Ddemo=true -Ddemo-backend=metal
+
+      - name: Run Metal backend tests
+        run: zig build test -Dmetal=true
+
+      - name: Run Metal shader-stat tests
+        run: zig build test -Dmetal=true -Dshader-stats=true
+
+      - name: Run Metal demo build tests
+        run: zig build test -Ddemo=true -Ddemo-backend=metal
+
+      - name: Save Zig package cache
+        uses: ./.github/actions/save-zig-package-cache
+        with:
+          cache-hit: ${{ steps.zig.outputs.package_cache_hit }}
+          key: ${{ steps.zig.outputs.package_cache_key }}
+          path: ${{ steps.zig.outputs.package_cache_path }}

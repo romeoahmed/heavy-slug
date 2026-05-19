@@ -1,0 +1,39 @@
+name: Reusable Quality
+
+"on":
+  workflow_call:
+    inputs:
+      zig_version:
+        required: false
+        default: from-zon
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Zig
+        uses: ./.github/actions/setup-zig
+        with:
+          version: ${{ inputs.zig_version }}
+          package-cache: "false"
+
+      - name: Check Zig formatting
+        run: zig fmt --check build.zig build/ demo/ src/ tools/
+
+      - name: Check POSIX shell syntax
+        shell: bash
+        run: |
+          bash -n .github/scripts/fetch-zig-deps.sh
+          bash -n .github/scripts/setup-zig.sh
+          bash -n .github/scripts/setup-slang.sh

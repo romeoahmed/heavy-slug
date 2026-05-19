@@ -1,0 +1,56 @@
+name: Reusable Shaders
+
+"on":
+  workflow_call:
+    inputs:
+      zig_version:
+        required: false
+        default: from-zon
+        type: string
+      slang_version:
+        required: false
+        default: "2026.9"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  shaders:
+    name: Shaders
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Zig
+        id: zig
+        uses: ./.github/actions/setup-zig
+        with:
+          version: ${{ inputs.zig_version }}
+
+      - name: Setup Slang
+        uses: ./.github/actions/setup-slang
+        with:
+          version: ${{ inputs.slang_version }}
+
+      - name: Fetch Zig dependencies
+        uses: ./.github/actions/fetch-zig-deps
+        with:
+          build-args: spirv msl
+
+      - name: Compile SPIR-V shaders
+        run: zig build spirv
+
+      - name: Compile Metal shaders
+        run: zig build msl
+
+      - name: Save Zig package cache
+        uses: ./.github/actions/save-zig-package-cache
+        with:
+          cache-hit: ${{ steps.zig.outputs.package_cache_hit }}
+          key: ${{ steps.zig.outputs.package_cache_key }}
+          path: ${{ steps.zig.outputs.package_cache_path }}

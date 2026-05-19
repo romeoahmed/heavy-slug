@@ -1,0 +1,75 @@
+name: Reusable Vulkan
+
+"on":
+  workflow_call:
+    inputs:
+      zig_version:
+        required: false
+        default: from-zon
+        type: string
+      slang_version:
+        required: false
+        default: "2026.9"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  vulkan:
+    name: Vulkan (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu
+            os: ubuntu-24.04
+            install_wayland: true
+          - name: Windows
+            os: windows-2025-vs2026
+            install_wayland: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Zig
+        id: zig
+        uses: ./.github/actions/setup-zig
+        with:
+          version: ${{ inputs.zig_version }}
+
+      - name: Setup Slang
+        uses: ./.github/actions/setup-slang
+        with:
+          version: ${{ inputs.slang_version }}
+
+      - name: Install Wayland demo packages
+        if: ${{ matrix.install_wayland }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libwayland-bin libwayland-dev libxkbcommon-dev wayland-protocols
+
+      - name: Fetch Zig dependencies
+        uses: ./.github/actions/fetch-zig-deps
+        with:
+          build-args: test -Ddemo=true -Ddemo-backend=vulkan
+
+      - name: Run Vulkan backend tests
+        run: zig build test -Dvulkan=true
+
+      - name: Run Vulkan shader-stat tests
+        run: zig build test -Dvulkan=true -Dshader-stats=true
+
+      - name: Run Vulkan demo build tests
+        run: zig build test -Ddemo=true -Ddemo-backend=vulkan
+
+      - name: Save Zig package cache
+        uses: ./.github/actions/save-zig-package-cache
+        with:
+          cache-hit: ${{ steps.zig.outputs.package_cache_hit }}
+          key: ${{ steps.zig.outputs.package_cache_key }}
+          path: ${{ steps.zig.outputs.package_cache_path }}

@@ -1,0 +1,71 @@
+name: Setup Slang
+description: Resolve, cache, and install the repository Slang toolchain.
+
+inputs:
+  version:
+    description: Slang release version or tag.
+    required: false
+    default: "2026.9"
+
+outputs:
+  version:
+    description: Resolved Slang version.
+    value: ${{ steps.slang_posix.outputs.version || steps.slang_windows.outputs.version }}
+  platform:
+    description: Resolved Slang release platform.
+    value: ${{ steps.slang_posix.outputs.platform || steps.slang_windows.outputs.platform }}
+  install_dir:
+    description: Installed Slang directory.
+    value: ${{ steps.slang_posix.outputs.install_dir || steps.slang_windows.outputs.install_dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve Slang
+      if: ${{ runner.os != 'Windows' }}
+      id: slang_posix
+      shell: bash
+      run: ./.github/scripts/setup-slang.sh --resolve-only
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SLANG_VERSION: ${{ inputs.version }}
+
+    - name: Resolve Slang
+      if: ${{ runner.os == 'Windows' }}
+      id: slang_windows
+      shell: pwsh
+      run: ./.github/scripts/setup-slang.ps1 -ResolveOnly
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SLANG_VERSION: ${{ inputs.version }}
+
+    - name: Restore Slang tool cache
+      id: slang_tool_cache
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ steps.slang_posix.outputs.install_dir || steps.slang_windows.outputs.install_dir }}
+        key: slang-tool-${{ runner.os }}-${{ runner.arch }}-${{ steps.slang_posix.outputs.platform || steps.slang_windows.outputs.platform }}-${{ steps.slang_posix.outputs.version || steps.slang_windows.outputs.version }}
+
+    - name: Setup Slang
+      if: ${{ runner.os != 'Windows' }}
+      shell: bash
+      run: ./.github/scripts/setup-slang.sh
+      env:
+        SLANG_VERSION: ${{ steps.slang_posix.outputs.version }}
+        SLANG_DOWNLOAD_URL: ${{ steps.slang_posix.outputs.url }}
+
+    - name: Setup Slang
+      if: ${{ runner.os == 'Windows' }}
+      shell: pwsh
+      run: ./.github/scripts/setup-slang.ps1
+      env:
+        SLANG_VERSION: ${{ steps.slang_windows.outputs.version }}
+        SLANG_DOWNLOAD_URL: ${{ steps.slang_windows.outputs.url }}
+
+    - name: Save Slang tool cache
+      if: ${{ github.event_name != 'pull_request' && steps.slang_tool_cache.outputs.cache-hit != 'true' }}
+      continue-on-error: true
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ steps.slang_posix.outputs.install_dir || steps.slang_windows.outputs.install_dir }}
+        key: slang-tool-${{ runner.os }}-${{ runner.arch }}-${{ steps.slang_posix.outputs.platform || steps.slang_windows.outputs.platform }}-${{ steps.slang_posix.outputs.version || steps.slang_windows.outputs.version }}
