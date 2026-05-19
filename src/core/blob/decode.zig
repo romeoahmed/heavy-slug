@@ -8,6 +8,7 @@ pub const Error = error{
     BlobMisaligned,
     BadMagic,
     BadFractionBits,
+    BadHeader,
     BadOffsets,
 };
 
@@ -21,31 +22,17 @@ pub const BlobView = struct {
 
     pub fn init(bytes: []const u8) Error!BlobView {
         if (bytes.len % @sizeOf(u32) != 0) return error.BlobMisaligned;
-        if (bytes.len < @sizeOf(format.Header)) return error.BlobTooSmall;
+        if (bytes.len < format.header_word_len * @sizeOf(u32)) return error.BlobTooSmall;
         if (@intFromPtr(bytes.ptr) % @alignOf(u32) != 0) return error.BlobMisaligned;
 
         const aligned_bytes: []align(@alignOf(u32)) const u8 = @alignCast(bytes);
         const words = format.wordsFromBytes(aligned_bytes);
-        const header = std.mem.bytesToValue(format.Header, aligned_bytes[0..@sizeOf(format.Header)]);
-        if (header.magic_version != format.magic_version) return error.BadMagic;
-        if (header.fraction_bits < format.min_fraction_bits or header.fraction_bits > format.max_fraction_bits) {
-            return error.BadFractionBits;
-        }
-        if (header.word_count != words.len) return error.BadOffsets;
-        if (header.curve_base_words != format.header_word_len) return error.BadOffsets;
+        const header = format.readHeader(words);
 
-        const curve_end = addMul(header.curve_base_words, header.curve_count, format.curve_word_len) orelse
-            return error.BadOffsets;
-        const band_end = addMul(header.band_base_words, header.band_count, format.band_word_len) orelse
-            return error.BadOffsets;
-        const id_end = std.math.add(u32, header.id_base_words, header.id_count) catch
-            return error.BadOffsets;
-
-        if (header.band_base_words != curve_end or header.id_base_words != band_end) return error.BadOffsets;
-        if (id_end != header.word_count) return error.BadOffsets;
-
+        try validateHeader(header, words.len);
         const view = BlobView{ .words = words, .header = header };
-        try view.validateTables();
+        try view.validateCurves();
+        try view.validateCandidateIndex();
         return view;
     }
 
@@ -61,50 +48,88 @@ pub const BlobView = struct {
 
     pub fn curveId(self: BlobView, index: u32) u32 {
         std.debug.assert(index < self.header.id_count);
-        return self.words[self.header.id_base_words + index];
+        return self.words[@as(usize, @intCast(self.header.id_base_words + index))];
     }
 
-    fn validateTables(self: BlobView) Error!void {
+    fn validateCurves(self: BlobView) Error!void {
+        var curve_index: u32 = 0;
+        while (curve_index < self.header.curve_count) : (curve_index += 1) {
+            const curve_value = self.curveUnchecked(curve_index);
+            if (!curve_value.boundsValid()) return error.BadHeader;
+            if (!curve_value.controlPointsInsideBounds()) return error.BadHeader;
+            if (curve_value.bbox_min_x_q < self.header.bounds_min_x_q or
+                curve_value.bbox_min_y_q < self.header.bounds_min_y_q or
+                curve_value.bbox_max_x_q > self.header.bounds_max_x_q or
+                curve_value.bbox_max_y_q > self.header.bounds_max_y_q)
+            {
+                return error.BadHeader;
+            }
+        }
+    }
+
+    fn validateCandidateIndex(self: BlobView) Error!void {
+        var cursor: u32 = 0;
         var band_index: u32 = 0;
         while (band_index < self.header.band_count) : (band_index += 1) {
             const band_value = self.bandUnchecked(band_index);
-            const id_end = std.math.add(u32, band_value.id_start, band_value.id_count) catch
-                return error.BadOffsets;
-            if (id_end > self.header.id_count) return error.BadOffsets;
+            if (band_value.id_start != cursor) return error.BadOffsets;
+            cursor = std.math.add(u32, cursor, band_value.id_count) catch return error.BadOffsets;
+            if (cursor > self.header.id_count) return error.BadOffsets;
+            try self.validateBandIdsSortedAndInRange(band_value);
         }
+        if (cursor != self.header.id_count) return error.BadOffsets;
+    }
 
-        const id_start: usize = @intCast(self.header.id_base_words);
-        const id_end: usize = id_start + @as(usize, @intCast(self.header.id_count));
-        for (self.words[id_start..id_end]) |curve_id| {
+    fn validateBandIdsSortedAndInRange(self: BlobView, band_value: format.Band) Error!void {
+        var previous: u32 = 0;
+        var have_previous = false;
+        var local_index: u32 = 0;
+        while (local_index < band_value.id_count) : (local_index += 1) {
+            const curve_id = self.curveId(band_value.id_start + local_index);
             if (curve_id >= self.header.curve_count) return error.BadOffsets;
+            if (have_previous and curve_id < previous) return error.BadOffsets;
+            previous = curve_id;
+            have_previous = true;
         }
     }
 
     fn curveUnchecked(self: BlobView, index: u32) format.Curve {
-        return self.readValue(
-            format.Curve,
+        return format.readCurve(
+            self.words,
             self.header.curve_base_words + index * format.curve_word_len,
         );
     }
 
     fn bandUnchecked(self: BlobView, index: u32) format.Band {
-        return self.readValue(
-            format.Band,
+        return format.readBand(
+            self.words,
             self.header.band_base_words + index * format.band_word_len,
         );
     }
-
-    fn readValue(self: BlobView, comptime T: type, word_offset: u32) T {
-        const off_words: usize = @intCast(word_offset);
-        const off_bytes = off_words * @sizeOf(u32);
-        const bytes = std.mem.sliceAsBytes(self.words);
-        return std.mem.bytesToValue(T, bytes[off_bytes..][0..@sizeOf(T)]);
-    }
 };
 
-fn addMul(a: u32, b: u32, c: u32) ?u32 {
-    const product = std.math.mul(u32, b, c) catch return null;
-    return std.math.add(u32, a, product) catch null;
+fn validateHeader(header: format.Header, actual_word_count: usize) Error!void {
+    if (header.magic_version != format.magic_version) return error.BadMagic;
+    if (header.fraction_bits < format.min_fraction_bits or header.fraction_bits > format.max_fraction_bits) {
+        return error.BadFractionBits;
+    }
+    if (header.flags & ~format.supported_flags != 0) return error.BadHeader;
+    if (header.fill_sign != -1 and header.fill_sign != 1) return error.BadHeader;
+    if (header.band_height_q <= 0) return error.BadHeader;
+    if (header.bounds_min_x_q > header.bounds_max_x_q or header.bounds_min_y_q > header.bounds_max_y_q) {
+        return error.BadHeader;
+    }
+    if (@as(usize, @intCast(header.word_count)) != actual_word_count) return error.BadOffsets;
+
+    const layout = format.Layout.init(header.curve_count, header.band_count, header.id_count) catch
+        return error.BadOffsets;
+    if (header.curve_base_words != layout.curve_base_words or
+        header.band_base_words != layout.band_base_words or
+        header.id_base_words != layout.id_base_words or
+        header.word_count != layout.word_count)
+    {
+        return error.BadOffsets;
+    }
 }
 
 test "BlobView rejects short blobs" {
@@ -112,39 +137,24 @@ test "BlobView rejects short blobs" {
 }
 
 test "BlobView rejects misaligned word storage" {
-    var bytes: [@sizeOf(format.Header) + 1]u8 align(@alignOf(u32)) = undefined;
+    var bytes: [@as(usize, format.header_word_len) * @sizeOf(u32) + 1]u8 align(@alignOf(u32)) = undefined;
     try std.testing.expectError(
         Error.BlobMisaligned,
-        BlobView.init(bytes[1 .. @sizeOf(format.Header) + 1]),
+        BlobView.init(bytes[1 .. @as(usize, format.header_word_len) * @sizeOf(u32) + 1]),
     );
 }
 
-test "BlobView decodes v2 header and curve" {
-    const total_words = format.header_word_len + format.curve_word_len;
-    const words = try std.testing.allocator.alloc(u32, total_words);
+test "BlobView decodes v3 header and curve" {
+    const layout = try format.Layout.init(1, 0, 0);
+    const words = try std.testing.allocator.alloc(u32, layout.word_count);
     defer std.testing.allocator.free(words);
     @memset(words, 0);
 
-    const header = format.Header{
-        .magic_version = format.magic_version,
-        .fraction_bits = format.default_fraction_bits,
-        .flags = 0,
-        .fill_sign = 1,
+    const header = testHeader(.{
         .curve_count = 1,
-        .band_min = 0,
-        .band_count = 0,
-        .band_height_q = format.hbandHeightQ(format.default_fraction_bits),
-        .id_count = 0,
-        .word_count = total_words,
-        .bounds_min_x_q = 0,
-        .bounds_min_y_q = 0,
-        .bounds_max_x_q = 4,
-        .bounds_max_y_q = 4,
-        .curve_base_words = format.header_word_len,
-        .band_base_words = format.header_word_len + format.curve_word_len,
-        .id_base_words = format.header_word_len + format.curve_word_len,
-    };
-    @memcpy(std.mem.sliceAsBytes(words)[0..@sizeOf(format.Header)], std.mem.asBytes(&header));
+        .word_count = layout.word_count,
+    });
+    format.writeHeader(words, header);
 
     const curve = format.Curve{
         .p0_x_q = 1,
@@ -160,8 +170,7 @@ test "BlobView decodes v2 header and curve" {
         .bbox_max_x_q = 7,
         .bbox_max_y_q = 8,
     };
-    const off = @as(usize, format.header_word_len) * @sizeOf(u32);
-    @memcpy(std.mem.sliceAsBytes(words)[off..][0..@sizeOf(format.Curve)], std.mem.asBytes(&curve));
+    format.writeCurve(words, header.curve_base_words, curve);
 
     const view = try BlobView.init(std.mem.sliceAsBytes(words));
     try std.testing.expectEqual(@as(u32, 1), view.header.curveCount());
@@ -169,9 +178,26 @@ test "BlobView decodes v2 header and curve" {
     try std.testing.expectEqual(@as(i32, 7), view.curve(0).p3_x_q);
 }
 
-test "BlobView rejects band candidate ranges outside the id table" {
-    const total_words = format.header_word_len + format.curve_word_len + format.band_word_len + 1;
-    const words = try std.testing.allocator.alloc(u32, total_words);
+test "BlobView rejects invalid header fields" {
+    const layout = try format.Layout.init(0, 0, 0);
+    const words = try std.testing.allocator.alloc(u32, layout.word_count);
+    defer std.testing.allocator.free(words);
+    @memset(words, 0);
+
+    var header = testHeader(.{ .word_count = layout.word_count });
+    header.flags = 1;
+    format.writeHeader(words, header);
+    try std.testing.expectError(error.BadHeader, BlobView.init(std.mem.sliceAsBytes(words)));
+
+    header.flags = 0;
+    header.fill_sign = 0;
+    format.writeHeader(words, header);
+    try std.testing.expectError(error.BadHeader, BlobView.init(std.mem.sliceAsBytes(words)));
+}
+
+test "BlobView rejects band candidate ranges outside the CSR table" {
+    const layout = try format.Layout.init(1, 1, 1);
+    const words = try std.testing.allocator.alloc(u32, layout.word_count);
     defer std.testing.allocator.free(words);
     @memset(words, 0);
 
@@ -179,10 +205,11 @@ test "BlobView rejects band candidate ranges outside the id table" {
         .curve_count = 1,
         .band_count = 1,
         .id_count = 1,
-        .word_count = total_words,
+        .word_count = layout.word_count,
     });
-    writeTestValue(words, 0, header);
-    writeTestValue(words, header.band_base_words, format.Band{
+    format.writeHeader(words, header);
+    format.writeCurve(words, header.curve_base_words, testCurve());
+    format.writeBand(words, header.band_base_words, .{
         .id_start = 1,
         .id_count = 1,
     });
@@ -191,8 +218,8 @@ test "BlobView rejects band candidate ranges outside the id table" {
 }
 
 test "BlobView rejects candidate curve ids outside the curve table" {
-    const total_words = format.header_word_len + format.curve_word_len + format.band_word_len + 1;
-    const words = try std.testing.allocator.alloc(u32, total_words);
+    const layout = try format.Layout.init(1, 1, 1);
+    const words = try std.testing.allocator.alloc(u32, layout.word_count);
     defer std.testing.allocator.free(words);
     @memset(words, 0);
 
@@ -200,16 +227,57 @@ test "BlobView rejects candidate curve ids outside the curve table" {
         .curve_count = 1,
         .band_count = 1,
         .id_count = 1,
-        .word_count = total_words,
+        .word_count = layout.word_count,
     });
-    writeTestValue(words, 0, header);
-    writeTestValue(words, header.band_base_words, format.Band{
+    format.writeHeader(words, header);
+    format.writeCurve(words, header.curve_base_words, testCurve());
+    format.writeBand(words, header.band_base_words, .{
         .id_start = 0,
         .id_count = 1,
     });
     words[header.id_base_words] = 7;
 
     try std.testing.expectError(error.BadOffsets, BlobView.init(std.mem.sliceAsBytes(words)));
+}
+
+test "BlobView rejects unsorted per-band curve ids" {
+    const layout = try format.Layout.init(2, 1, 2);
+    const words = try std.testing.allocator.alloc(u32, layout.word_count);
+    defer std.testing.allocator.free(words);
+    @memset(words, 0);
+
+    const header = testHeader(.{
+        .curve_count = 2,
+        .band_count = 1,
+        .id_count = 2,
+        .word_count = layout.word_count,
+    });
+    format.writeHeader(words, header);
+    format.writeCurve(words, header.curve_base_words, testCurve());
+    format.writeCurve(words, header.curve_base_words + format.curve_word_len, testCurve());
+    format.writeBand(words, header.band_base_words, .{ .id_start = 0, .id_count = 2 });
+    words[header.id_base_words] = 1;
+    words[header.id_base_words + 1] = 0;
+
+    try std.testing.expectError(error.BadOffsets, BlobView.init(std.mem.sliceAsBytes(words)));
+}
+
+test "BlobView rejects curves whose controls escape encoded bounds" {
+    const layout = try format.Layout.init(1, 0, 0);
+    const words = try std.testing.allocator.alloc(u32, layout.word_count);
+    defer std.testing.allocator.free(words);
+    @memset(words, 0);
+
+    const header = testHeader(.{
+        .curve_count = 1,
+        .word_count = layout.word_count,
+    });
+    format.writeHeader(words, header);
+    var curve = testCurve();
+    curve.p3_x_q = 9;
+    format.writeCurve(words, header.curve_base_words, curve);
+
+    try std.testing.expectError(error.BadHeader, BlobView.init(std.mem.sliceAsBytes(words)));
 }
 
 const TestHeaderOverrides = struct {
@@ -220,9 +288,7 @@ const TestHeaderOverrides = struct {
 };
 
 fn testHeader(overrides: TestHeaderOverrides) format.Header {
-    const curve_base = format.header_word_len;
-    const band_base = curve_base + overrides.curve_count * format.curve_word_len;
-    const id_base = band_base + overrides.band_count * format.band_word_len;
+    const layout = format.Layout.init(overrides.curve_count, overrides.band_count, overrides.id_count) catch unreachable;
     return .{
         .magic_version = format.magic_version,
         .fraction_bits = format.default_fraction_bits,
@@ -236,18 +302,27 @@ fn testHeader(overrides: TestHeaderOverrides) format.Header {
         .word_count = overrides.word_count,
         .bounds_min_x_q = 0,
         .bounds_min_y_q = 0,
-        .bounds_max_x_q = 0,
-        .bounds_max_y_q = 0,
-        .curve_base_words = curve_base,
-        .band_base_words = band_base,
-        .id_base_words = id_base,
+        .bounds_max_x_q = 8,
+        .bounds_max_y_q = 8,
+        .curve_base_words = layout.curve_base_words,
+        .band_base_words = layout.band_base_words,
+        .id_base_words = layout.id_base_words,
     };
 }
 
-fn writeTestValue(words: []u32, word_offset: u32, value: anytype) void {
-    const start = @as(usize, @intCast(word_offset)) * @sizeOf(u32);
-    @memcpy(
-        std.mem.sliceAsBytes(words)[start..][0..@sizeOf(@TypeOf(value))],
-        std.mem.asBytes(&value),
-    );
+fn testCurve() format.Curve {
+    return .{
+        .p0_x_q = 1,
+        .p0_y_q = 1,
+        .p1_x_q = 2,
+        .p1_y_q = 2,
+        .p2_x_q = 3,
+        .p2_y_q = 3,
+        .p3_x_q = 4,
+        .p3_y_q = 4,
+        .bbox_min_x_q = 1,
+        .bbox_min_y_q = 1,
+        .bbox_max_x_q = 4,
+        .bbox_max_y_q = 4,
+    };
 }

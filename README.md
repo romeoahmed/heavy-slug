@@ -346,7 +346,8 @@ Backend debug counters are exposed through `Renderer.stats()` in Debug builds.
 | Host boundary | Applications own graphics/device/window lifetimes. |
 | Frame math | Draw submission uses a CPU f64 affine `View`; backends no longer accept f32 projection matrices. |
 | Glyph resources | Cached glyph blobs live in a backend-owned, storage-aligned byte pool; visible strips live in per-frame meshlet buffers. |
-| Blob precision | Glyph blobs are 32-bit fixed-point and keyed by precision tier. |
+| Blob ABI | `CoverageBlob` v3 is an explicit 32-bit word stream, not a serialized Zig struct; CPU decode validates the header, curve table, and CSR h-band candidate index before upload. |
+| Blob precision | Glyph blobs are 32-bit fixed-point and keyed by precision tier. Unsupported precision tiers are rejected before outline regularization. |
 | Blob references | `GlyphBlobRef` values are byte offsets. |
 | GPU ABI | Layouts are generated from Slang reflection. |
 | C bindings | C declarations are translated by the build graph, not by source-level `@cImport`. |

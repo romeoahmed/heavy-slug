@@ -21,13 +21,15 @@ pub fn heightInBlobUnits(view: decode.BlobView) i32 {
 }
 
 pub fn bandIndex(y_q: i32, band_height_q: i32) i32 {
+    std.debug.assert(band_height_q > 0);
     return @divFloor(y_q, band_height_q);
 }
 
 pub fn anchoredBandIndex(anchor_q: i32, delta_q: i32, band_height_q: i32) i32 {
     const k = bandIndex(anchor_q, band_height_q);
-    const r = anchor_q - k * band_height_q;
-    return k + bandIndex(r + delta_q, band_height_q);
+    const r64 = @as(i64, anchor_q) - @as(i64, k) * @as(i64, band_height_q);
+    const r: i32 = @intCast(r64);
+    return saturatingAddI32(k, bandIndex(saturatingAddI32(r, delta_q), band_height_q));
 }
 
 pub fn readBand(view: decode.BlobView, band_index: u32) ?Band {
@@ -54,6 +56,13 @@ pub fn candidateIds(
     return ids;
 }
 
+fn saturatingAddI32(a: i32, b: i32) i32 {
+    const sum = @as(i64, a) + @as(i64, b);
+    if (sum <= std.math.minInt(i32)) return std.math.minInt(i32);
+    if (sum >= std.math.maxInt(i32)) return std.math.maxInt(i32);
+    return @intCast(sum);
+}
+
 test "hband: anchored band lookup matches absolute floor division" {
     const h = 16;
     const anchors = [_]i32{ -33, -16, -1, 0, 1, 15, 16, 33 };
@@ -71,10 +80,8 @@ test "hband: anchored band lookup matches absolute floor division" {
 test "hband: reads candidate ids" {
     const format = @import("format.zig");
     const curve_count = 10;
-    const band_base = format.header_word_len + curve_count * format.curve_word_len;
-    const id_base = band_base + format.band_word_len;
-    const total_words = id_base + 2;
-    const words = try std.testing.allocator.alloc(u32, total_words);
+    const layout = try format.Layout.init(curve_count, 1, 2);
+    const words = try std.testing.allocator.alloc(u32, layout.word_count);
     defer std.testing.allocator.free(words);
     @memset(words, 0);
 
@@ -88,22 +95,39 @@ test "hband: reads candidate ids" {
         .band_count = 1,
         .band_height_q = format.hbandHeightQ(format.default_fraction_bits),
         .id_count = 2,
-        .word_count = total_words,
+        .word_count = layout.word_count,
         .bounds_min_x_q = 0,
         .bounds_min_y_q = 0,
-        .bounds_max_x_q = 0,
-        .bounds_max_y_q = 0,
-        .curve_base_words = format.header_word_len,
-        .band_base_words = band_base,
-        .id_base_words = id_base,
+        .bounds_max_x_q = 9,
+        .bounds_max_y_q = 9,
+        .curve_base_words = layout.curve_base_words,
+        .band_base_words = layout.band_base_words,
+        .id_base_words = layout.id_base_words,
     };
-    @memcpy(std.mem.sliceAsBytes(words)[0..@sizeOf(format.Header)], std.mem.asBytes(&header));
+    format.writeHeader(words, header);
+
+    var curve_index: u32 = 0;
+    while (curve_index < curve_count) : (curve_index += 1) {
+        format.writeCurve(words, header.curve_base_words + curve_index * format.curve_word_len, .{
+            .p0_x_q = @intCast(curve_index),
+            .p0_y_q = 0,
+            .p1_x_q = @intCast(curve_index),
+            .p1_y_q = 1,
+            .p2_x_q = @intCast(curve_index),
+            .p2_y_q = 2,
+            .p3_x_q = @intCast(curve_index),
+            .p3_y_q = 3,
+            .bbox_min_x_q = @intCast(curve_index),
+            .bbox_min_y_q = 0,
+            .bbox_max_x_q = @intCast(curve_index),
+            .bbox_max_y_q = 3,
+        });
+    }
 
     const band = format.Band{ .id_start = 0, .id_count = 2 };
-    const band_off = @as(usize, band_base) * @sizeOf(u32);
-    @memcpy(std.mem.sliceAsBytes(words)[band_off..][0..@sizeOf(format.Band)], std.mem.asBytes(&band));
-    words[id_base] = 7;
-    words[id_base + 1] = 9;
+    format.writeBand(words, header.band_base_words, band);
+    words[header.id_base_words] = 7;
+    words[header.id_base_words + 1] = 9;
 
     const view = try decode.BlobView.init(std.mem.sliceAsBytes(words));
     const ids = try candidateIds(std.testing.allocator, view, 0);

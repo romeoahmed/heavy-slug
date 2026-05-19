@@ -12,6 +12,11 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Coverage blob ABI rewritten:** glyph coverage blobs now use an explicit
+  v3 32-bit word layout instead of serializing Zig struct memory, CPU decoding
+  validates header invariants, curve bounds, contiguous CSR h-band tables, and
+  sorted candidate IDs, and shader blob reads use the same named word offsets
+  with an unsupported-magic guard.
 - **Core byte pool allocator rewritten:** glyph blob pool metadata now uses
   stable free-block nodes, address-ordered coalescing, and power-of-two size
   bins instead of a single linear best-fit list; pool buffer sizes must now be

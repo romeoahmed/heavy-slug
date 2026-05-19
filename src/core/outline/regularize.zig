@@ -6,6 +6,7 @@ const blob_format = @import("../blob/format.zig");
 
 pub const Error = error{
     GlyphTooLarge,
+    PrecisionUnsupported,
     OutOfMemory,
 };
 
@@ -77,6 +78,8 @@ pub fn appendRegularized(
     outline: []const stream.Segment,
     fraction_bits: u8,
 ) Error!void {
+    try blob_format.validateFractionBits(fraction_bits);
+
     var current = Point{ .x = 0, .y = 0 };
     var start = current;
     var open = false;
@@ -310,6 +313,20 @@ test "regularize raises lines and quadratics into cubic spans" {
     try std.testing.expectEqual(@as(usize, 4), spans.items.len);
     try std.testing.expectApproxEqAbs(@as(f64, 1), spans.items[0].p1.x, 1.0e-9);
     try std.testing.expect(spans.items[1].p3.x > spans.items[1].p0.x);
+}
+
+test "regularize rejects unsupported blob precision before quantization" {
+    var outline = stream.OutlineStream.init(std.testing.allocator);
+    defer outline.deinit();
+    try outline.moveTo(.{ .x = 0, .y = 0 });
+    try outline.lineTo(.{ .x = 1, .y = 1 });
+
+    var spans: std.ArrayList(RegularizedCubicSpan) = .empty;
+    defer spans.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.PrecisionUnsupported,
+        appendRegularized(&spans, std.testing.allocator, outline.segments.items, blob_format.max_fraction_bits + 1),
+    );
 }
 
 test "regularize prepares cubic spans at axis extrema" {
