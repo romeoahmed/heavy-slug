@@ -126,7 +126,7 @@ pub fn buildMetal(
         .target = target,
         .optimize = optimize,
     }));
-    swift.linkRuntime(b, exe.root_module, .{ .optimize = optimize, .swiftui = true });
+    swift.linkRuntime(b, exe.root_module, .{ .target = target, .optimize = optimize, .swiftui = true });
 
     deps.enableThinLtoAll(thin_lto, &.{exe});
     return exe;

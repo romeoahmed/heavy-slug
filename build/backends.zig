@@ -83,7 +83,7 @@ pub fn buildMetal(
         .optimize = optimize,
         .extra_flags = if (shader_stats) &.{"-DHEAVY_SLUG_SHADER_STATS"} else &.{},
     }));
-    swift.linkRuntime(b, mod, .{ .optimize = optimize });
+    swift.linkRuntime(b, mod, .{ .target = target, .optimize = optimize });
 
     return .{ .module = mod };
 }

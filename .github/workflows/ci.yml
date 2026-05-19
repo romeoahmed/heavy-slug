@@ -311,6 +311,7 @@ jobs:
             os: macos-26
             windows: false
             needs_slang: true
+            needs_swift: true
             install_wayland: false
             setup_zig: ./.github/scripts/setup-zig.sh
             resolve_zig: ./.github/scripts/setup-zig.sh --resolve-only
@@ -322,6 +323,7 @@ jobs:
             os: macos-26
             windows: false
             needs_slang: true
+            needs_swift: true
             install_wayland: false
             setup_zig: ./.github/scripts/setup-zig.sh
             resolve_zig: ./.github/scripts/setup-zig.sh --resolve-only
@@ -333,6 +335,7 @@ jobs:
             os: macos-26
             windows: false
             needs_slang: true
+            needs_swift: true
             install_wayland: false
             setup_zig: ./.github/scripts/setup-zig.sh
             resolve_zig: ./.github/scripts/setup-zig.sh --resolve-only
@@ -424,6 +427,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y libwayland-bin libwayland-dev libxkbcommon-dev wayland-protocols
+
+      - name: Show Apple Swift toolchain
+        if: ${{ matrix.needs_swift == true }}
+        run: |
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-path
+          xcrun --sdk macosx --find swiftc
+          xcrun --sdk macosx swiftc --version
 
       - name: Setup Zig
         run: ${{ matrix.setup_zig }}

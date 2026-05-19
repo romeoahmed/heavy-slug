@@ -12,6 +12,10 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Swift build toolchain resolution tightened:** Metal and Cocoa bridge builds
+  now resolve `swiftc` and the macOS SDK through `xcrun --sdk macosx`, pass the
+  SDK explicitly to Swift, fail early when the selected Swift compiler is older
+  than `6.3`, and print the selected Apple Swift toolchain in CI Metal jobs.
 - **Demo appearance policy unified:** all native demos now start from an
   explicit light color scheme and switch both rendered content and available
   native window chrome/client decorations only from the shared `B` key toggle

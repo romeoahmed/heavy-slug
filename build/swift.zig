@@ -11,19 +11,44 @@ pub const ObjectOptions = struct {
 };
 
 pub const RuntimeOptions = struct {
+    target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     swiftui: bool = false,
 };
 
+const macos_sdk = "macosx";
+const swift_language_version = "6";
+const min_swift_version = std.SemanticVersion{ .major = 6, .minor = 3, .patch = 0 };
+
+const Toolchain = struct {
+    swiftc_path: []const u8,
+    sdk_path: []const u8,
+    runtime_library_paths: []const []const u8,
+};
+
+const SwiftTargetInfo = struct {
+    compilerVersion: []const u8,
+    paths: SwiftTargetPaths,
+};
+
+const SwiftTargetPaths = struct {
+    runtimeLibraryPaths: []const []const u8 = &.{},
+};
+
 pub fn addObject(b: *std.Build, options: ObjectOptions) std.Build.LazyPath {
-    const cmd = b.addSystemCommand(&.{"swiftc"});
+    const target_triple = swiftTargetTriple(b, options.target.result);
+    const toolchain = resolveToolchain(b, target_triple);
+    const cmd = b.addSystemCommand(&.{toolchain.swiftc_path});
+    cmd.setName(b.fmt("swiftc {s}", .{options.name}));
     cmd.addArgs(&.{
         "-parse-as-library",
         "-emit-object",
         "-swift-version",
-        "6",
+        swift_language_version,
         "-target",
-        swiftTargetTriple(b, options.target.result),
+        target_triple,
+        "-sdk",
+        toolchain.sdk_path,
         "-module-name",
         options.name,
         "-module-cache-path",
@@ -38,7 +63,8 @@ pub fn addObject(b: *std.Build, options: ObjectOptions) std.Build.LazyPath {
 }
 
 pub fn linkRuntime(b: *std.Build, module: *std.Build.Module, options: RuntimeOptions) void {
-    addRuntimeLibraryPaths(b, module);
+    const target_triple = swiftTargetTriple(b, options.target.result);
+    addRuntimeLibraryPaths(b, module, resolveToolchain(b, target_triple));
 
     for (swift_libraries) |library| {
         module.linkSystemLibrary(library, .{});
@@ -113,21 +139,99 @@ fn macosVersionString(b: *std.Build, version: std.SemanticVersion) []const u8 {
     return b.fmt("{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
 }
 
-fn addRuntimeLibraryPaths(b: *std.Build, module: *std.Build.Module) void {
-    const sdk_path = trimCommandOutput(b.run(&.{ "xcrun", "--show-sdk-path" }));
-    module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk_path, "usr/lib/swift" }) });
-    module.addLibraryPath(.{ .cwd_relative = "/usr/lib/swift" });
+fn resolveToolchain(b: *std.Build, target_triple: []const u8) Toolchain {
+    const swiftc_path = trimCommandOutput(b.run(&.{ "xcrun", "--sdk", macos_sdk, "--find", "swiftc" }));
+    const sdk_path = trimCommandOutput(b.run(&.{ "xcrun", "--sdk", macos_sdk, "--show-sdk-path" }));
+    const target_info = parseSwiftTargetInfo(b, b.run(&.{
+        swiftc_path,
+        "-print-target-info",
+        "-target",
+        target_triple,
+        "-sdk",
+        sdk_path,
+    }));
+    const swift_version = parseSwiftCompilerVersion(target_info.compilerVersion) orelse std.process.fatal(
+        "could not parse Apple Swift compiler version from: {s}",
+        .{target_info.compilerVersion},
+    );
+    if (swift_version.order(min_swift_version) == .lt) {
+        std.process.fatal(
+            "Swift bridge objects require Swift {f} or newer for @c C interoperability; xcrun selected {s} ({f})",
+            .{ min_swift_version, swiftc_path, swift_version },
+        );
+    }
 
-    const swiftc_path = trimCommandOutput(b.run(&.{ "xcrun", "--find", "swiftc" }));
-    if (std.fs.path.dirname(swiftc_path)) |bin_dir| {
-        if (std.fs.path.dirname(bin_dir)) |usr_dir| {
-            module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ usr_dir, "lib/swift/macosx" }) });
-        }
+    return .{
+        .swiftc_path = swiftc_path,
+        .sdk_path = sdk_path,
+        .runtime_library_paths = target_info.paths.runtimeLibraryPaths,
+    };
+}
+
+fn addRuntimeLibraryPaths(b: *std.Build, module: *std.Build.Module, toolchain: Toolchain) void {
+    module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ toolchain.sdk_path, "usr/lib/swift" }) });
+    for (toolchain.runtime_library_paths) |path| {
+        module.addLibraryPath(.{ .cwd_relative = path });
     }
 }
 
 fn trimCommandOutput(output: []const u8) []const u8 {
     return std.mem.trim(u8, output, " \t\r\n");
+}
+
+fn parseSwiftTargetInfo(b: *std.Build, output: []const u8) SwiftTargetInfo {
+    return parseSwiftTargetInfoWithAllocator(b.allocator, output) catch |err| std.process.fatal(
+        "could not parse `swiftc -print-target-info` JSON: {s}: {s}",
+        .{ @errorName(err), trimCommandOutput(output) },
+    );
+}
+
+fn parseSwiftTargetInfoWithAllocator(allocator: std.mem.Allocator, output: []const u8) !SwiftTargetInfo {
+    return std.json.parseFromSliceLeaky(SwiftTargetInfo, allocator, output, .{
+        .ignore_unknown_fields = true,
+    });
+}
+
+fn parseSwiftCompilerVersion(output: []const u8) ?std.SemanticVersion {
+    const marker = "Swift version ";
+    const start = std.mem.indexOf(u8, output, marker) orelse return null;
+    const tail = output[start + marker.len ..];
+    const version_text = numericVersionPrefix(tail) orelse return null;
+    return parseNumericVersion(version_text);
+}
+
+fn numericVersionPrefix(text: []const u8) ?[]const u8 {
+    var end: usize = 0;
+    while (end < text.len) : (end += 1) {
+        switch (text[end]) {
+            '0'...'9', '.' => {},
+            else => break,
+        }
+    }
+    if (end == 0) {
+        return null;
+    }
+    return text[0..end];
+}
+
+fn parseNumericVersion(text: []const u8) ?std.SemanticVersion {
+    var parts = std.mem.splitScalar(u8, text, '.');
+    const major = parseVersionPart(parts.next() orelse return null) orelse return null;
+    const minor = parseVersionPart(parts.next() orelse return null) orelse return null;
+    const patch = if (parts.next()) |part| parseVersionPart(part) orelse return null else 0;
+    return .{ .major = major, .minor = minor, .patch = patch };
+}
+
+fn parseVersionPart(text: []const u8) ?usize {
+    if (text.len == 0) {
+        return null;
+    }
+    for (text) |byte| {
+        if (!std.ascii.isDigit(byte)) {
+            return null;
+        }
+    }
+    return std.fmt.parseInt(usize, text, 10) catch null;
 }
 
 // Swift object files record these in LC_LINKER_OPTION, but Zig 0.16 does not
@@ -218,4 +322,47 @@ test "Swift optimize flags match Zig optimize modes" {
 test "Swift target triples use Apple Swift arch and macOS spelling" {
     try std.testing.expectEqualStrings("arm64", swiftArchName(.aarch64));
     try std.testing.expectEqualStrings("x86_64", swiftArchName(.x86_64));
+}
+
+test "Swift compiler version parser accepts Apple and upstream output" {
+    const apple = parseSwiftCompilerVersion(
+        "swift-driver version: 1.148.6 Apple Swift version 6.3.2 (swiftlang-6.3.2.1.108 clang-2100.1.1.101)",
+    ).?;
+    try std.testing.expectEqual(@as(usize, 6), apple.major);
+    try std.testing.expectEqual(@as(usize, 3), apple.minor);
+    try std.testing.expectEqual(@as(usize, 2), apple.patch);
+
+    const upstream = parseSwiftCompilerVersion("Swift version 6.4-dev (LLVM abcdef)") orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, 6), upstream.major);
+    try std.testing.expectEqual(@as(usize, 4), upstream.minor);
+    try std.testing.expectEqual(@as(usize, 0), upstream.patch);
+
+    try std.testing.expect(parseSwiftCompilerVersion("clang version 18.0.0") == null);
+}
+
+test "Swift target info parser keeps compiler version and runtime paths" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    const info = try parseSwiftTargetInfoWithAllocator(arena.allocator(),
+        \\{
+        \\  "compilerVersion": "Apple Swift version 6.3.2 (swiftlang-6.3.2.1.108 clang-2100.1.1.101)",
+        \\  "target": { "triple": "arm64-apple-macosx26.0" },
+        \\  "paths": {
+        \\    "runtimeLibraryPaths": [
+        \\      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx",
+        \\      "/usr/lib/swift"
+        \\    ]
+        \\  }
+        \\}
+    );
+    try std.testing.expectEqualStrings(
+        "Apple Swift version 6.3.2 (swiftlang-6.3.2.1.108 clang-2100.1.1.101)",
+        info.compilerVersion,
+    );
+    try std.testing.expectEqual(@as(usize, 2), info.paths.runtimeLibraryPaths.len);
+    try std.testing.expectEqualStrings(
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx",
+        info.paths.runtimeLibraryPaths[0],
+    );
 }
