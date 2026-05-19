@@ -41,14 +41,10 @@ pub fn main() !void {
         const dt: f32 = @floatCast(now - last_time);
         last_time = now;
 
-        const fb_size = window.framebufferSize();
-        if (fb_size[0] == 0 or fb_size[1] == 0) {
-            if (host.swapchain != .null_handle) try host.recreateSwapchain(&window);
-            continue;
-        }
-        if (fb_size[0] != host.swapchain_extent.width or fb_size[1] != host.swapchain_extent.height) {
+        if (host.needsResize(window.framebufferSize())) {
             try host.recreateSwapchain(&window);
         }
+        if (!host.hasDrawableSwapchain()) continue;
 
         const w: f32 = @floatFromInt(host.swapchain_extent.width);
         const h: f32 = @floatFromInt(host.swapchain_extent.height);
@@ -76,5 +72,5 @@ pub fn main() !void {
             try host.recreateSwapchain(&window);
         }
     }
-    host.demo_ddisp.deviceWaitIdle(host.device) catch {};
+    host.waitIdle();
 }

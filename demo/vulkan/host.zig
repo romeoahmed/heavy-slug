@@ -1,4 +1,4 @@
-//! Demo-only Vulkan bootstrap: instance, device, swapchain, and frame management.
+//! Demo-only Vulkan bootstrap: instance, device, swapchain, and frame pacing.
 
 const std = @import("std");
 const vk = @import("vulkan");
@@ -6,6 +6,8 @@ const demo_platform = @import("demo_platform");
 const heavy_slug_vulkan = @import("heavy_slug_vulkan");
 const gpu_context = heavy_slug_vulkan.context;
 const vk_chains = heavy_slug_vulkan.chains;
+
+const log = std.log.scoped(.demo_vulkan);
 
 const device_extensions = [_][*:0]const u8{
     "VK_KHR_swapchain",
@@ -19,14 +21,14 @@ fn getInstanceProcAddress(instance: vk.Instance, name: [*:0]const u8) vk.PfnVoid
     return demo_platform.getInstanceProcAddress(instance, name);
 }
 
-/// Pre-instance Vulkan functions (loaded with null instance).
+/// Pre-instance Vulkan functions loaded through the platform Vulkan loader.
 const BaseDispatchTable = struct {
     vkCreateInstance: ?vk.PfnCreateInstance = null,
     vkEnumerateInstanceExtensionProperties: ?vk.PfnEnumerateInstanceExtensionProperties = null,
 };
 const BaseDispatch = vk.BaseWrapperWithCustomDispatch(BaseDispatchTable);
 
-/// Instance-level functions for the demo (surface queries, device creation).
+/// Instance-level commands owned by the demo host.
 const DemoInstanceTable = struct {
     vkDestroyInstance: ?vk.PfnDestroyInstance = null,
     vkEnumeratePhysicalDevices: ?vk.PfnEnumeratePhysicalDevices = null,
@@ -44,43 +46,68 @@ const DemoInstanceTable = struct {
 };
 const DemoInstanceDispatch = vk.InstanceWrapperWithCustomDispatch(DemoInstanceTable);
 
-/// Device-level functions for the demo (swapchain, command buffers, sync, rendering).
+/// Device-level commands owned by the demo host.
 const DemoDeviceTable = struct {
     vkDestroyDevice: ?vk.PfnDestroyDevice = null,
     vkDeviceWaitIdle: ?vk.PfnDeviceWaitIdle = null,
-    // Swapchain
     vkCreateSwapchainKHR: ?vk.PfnCreateSwapchainKHR = null,
     vkDestroySwapchainKHR: ?vk.PfnDestroySwapchainKHR = null,
     vkGetSwapchainImagesKHR: ?vk.PfnGetSwapchainImagesKHR = null,
     vkAcquireNextImageKHR: ?vk.PfnAcquireNextImageKHR = null,
-    // Image views
     vkCreateImageView: ?vk.PfnCreateImageView = null,
     vkDestroyImageView: ?vk.PfnDestroyImageView = null,
-    // Command buffers
     vkCreateCommandPool: ?vk.PfnCreateCommandPool = null,
     vkDestroyCommandPool: ?vk.PfnDestroyCommandPool = null,
     vkAllocateCommandBuffers: ?vk.PfnAllocateCommandBuffers = null,
     vkResetCommandBuffer: ?vk.PfnResetCommandBuffer = null,
     vkBeginCommandBuffer: ?vk.PfnBeginCommandBuffer = null,
     vkEndCommandBuffer: ?vk.PfnEndCommandBuffer = null,
-    // Sync
     vkCreateFence: ?vk.PfnCreateFence = null,
     vkDestroyFence: ?vk.PfnDestroyFence = null,
     vkWaitForFences: ?vk.PfnWaitForFences = null,
     vkResetFences: ?vk.PfnResetFences = null,
     vkCreateSemaphore: ?vk.PfnCreateSemaphore = null,
     vkDestroySemaphore: ?vk.PfnDestroySemaphore = null,
-    // Queue
     vkGetDeviceQueue: ?vk.PfnGetDeviceQueue = null,
     vkQueueSubmit2: ?vk.PfnQueueSubmit2 = null,
     vkQueuePresentKHR: ?vk.PfnQueuePresentKHR = null,
-    // Dynamic rendering
     vkCmdBeginRendering: ?vk.PfnCmdBeginRendering = null,
     vkCmdEndRendering: ?vk.PfnCmdEndRendering = null,
-    // Barriers
     vkCmdPipelineBarrier2: ?vk.PfnCmdPipelineBarrier2 = null,
 };
 pub const DemoDeviceDispatch = vk.DeviceWrapperWithCustomDispatch(DemoDeviceTable);
+
+const QueueFamilies = struct {
+    graphics: u32,
+    present: u32,
+
+    fn isUnified(self: QueueFamilies) bool {
+        return self.graphics == self.present;
+    }
+};
+
+const QueueFamilySupport = struct {
+    graphics: bool,
+    present: bool,
+};
+
+const DeviceSelection = struct {
+    physical_device: vk.PhysicalDevice,
+    queues: QueueFamilies,
+    surface_format: vk.SurfaceFormatKHR,
+};
+
+const SurfaceConfig = struct {
+    caps: vk.SurfaceCapabilitiesKHR,
+    format: vk.SurfaceFormatKHR,
+    present_mode: vk.PresentModeKHR,
+};
+
+const FrameSlot = struct {
+    command_buffer: vk.CommandBuffer = .null_handle,
+    image_available: vk.Semaphore = .null_handle,
+    in_flight: vk.Fence = .null_handle,
+};
 
 /// Owns demo-only Vulkan state: instance, device, swapchain, sync, and frames.
 pub const Host = struct {
@@ -104,17 +131,15 @@ pub const Host = struct {
     swapchain_extent: vk.Extent2D = .{ .width = 0, .height = 0 },
 
     command_pool: vk.CommandPool = .null_handle,
-    command_buffers: [frames_in_flight]vk.CommandBuffer = .{.null_handle} ** frames_in_flight,
-    image_available: [frames_in_flight]vk.Semaphore = .{.null_handle} ** frames_in_flight,
+    frames: [frames_in_flight]FrameSlot = .{FrameSlot{}} ** frames_in_flight,
     submit_finished: []vk.Semaphore = &.{},
-    in_flight_fences: [frames_in_flight]vk.Fence = .{.null_handle} ** frames_in_flight,
-    frame_index: u32 = 0,
+    frame_index: usize = 0,
     /// Linear RGBA clear color. Vulkan converts to sRGB on write for sRGB swapchain formats.
     clear_color: [4]f32 = .{ 1.0, 1.0, 1.0, 1.0 },
 
     allocator: std.mem.Allocator,
 
-    pub const frames_in_flight = 2;
+    pub const frames_in_flight = heavy_slug_vulkan.renderer.max_frames_in_flight;
 
     pub fn init(window: *demo_platform.Window, allocator: std.mem.Allocator) !Host {
         const base = BaseDispatch.load(getInstanceProcAddress);
@@ -133,228 +158,165 @@ pub const Host = struct {
         }, null);
 
         const demo_idisp = DemoInstanceDispatch.load(instance, getInstanceProcAddress);
+        var instance_alive = true;
+        errdefer if (instance_alive) demo_idisp.destroyInstance(instance, null);
+
         const lib_idisp = gpu_context.InstanceDispatch.load(instance, getInstanceProcAddress);
-
         const surface = try window.createSurface(instance, demo_idisp);
+        var surface_alive = true;
+        errdefer if (surface_alive) demo_idisp.destroySurfaceKHR(instance, surface, null);
 
-        var dev_count: u32 = 0;
-        _ = try demo_idisp.enumeratePhysicalDevices(instance, &dev_count, null);
-        const devices = try allocator.alloc(vk.PhysicalDevice, dev_count);
-        defer allocator.free(devices);
-        _ = try demo_idisp.enumeratePhysicalDevices(instance, &dev_count, devices.ptr);
+        const selection = try choosePhysicalDevice(instance, surface, demo_idisp, lib_idisp, allocator);
+        const logical_device = try createLogicalDevice(selection.physical_device, selection.queues, demo_idisp);
+        const device = logical_device.device;
+        const demo_ddisp = logical_device.dispatch;
+        var device_alive = true;
+        errdefer if (device_alive) demo_ddisp.destroyDevice(device, null);
 
-        var chosen_pdev: ?vk.PhysicalDevice = null;
-        var chosen_gfx: u32 = undefined;
-        var chosen_present: u32 = undefined;
-        for (devices[0..dev_count]) |pdev| {
-            if (!try supportsDeviceExtensions(pdev, lib_idisp, allocator, &device_extensions)) continue;
-            gpu_context.Context.checkDeviceSupport(pdev, lib_idisp, allocator) catch continue;
-            if (!supportsRequiredDemoFeatures(pdev, lib_idisp)) continue;
-
-            const families = findQueueFamilies(pdev, surface, demo_idisp, allocator) catch continue;
-            chosen_gfx = families[0];
-            chosen_present = families[1];
-            chosen_pdev = pdev;
-            break;
-        }
-        const physical_device = chosen_pdev orelse return error.NoSuitableDevice;
-
-        const unique_families = if (chosen_gfx == chosen_present)
-            &[_]u32{chosen_gfx}
-        else
-            &[_]u32{ chosen_gfx, chosen_present };
-
-        var queue_cis: [2]vk.DeviceQueueCreateInfo = undefined;
-        const priority = [_]f32{1.0};
-        for (unique_families, 0..) |fam, i| {
-            queue_cis[i] = .{
-                .queue_family_index = fam,
-                .queue_count = 1,
-                .p_queue_priorities = &priority,
-            };
-        }
-
-        var enabled_features = gpu_context.Context.requiredFeatureChain();
-        enabled_features.enableSynchronization2();
-
-        // pp_enabled_layer_names is *const *const u8 (non-optional in this vk.zig version).
-        // We pass 0 layers; the pointer is never dereferenced by the driver when count=0.
-        const empty_layers = [0][*:0]const u8{};
-        const device = try demo_idisp.createDevice(physical_device, &.{
-            .p_next = @ptrCast(enabled_features.rootInfo()),
-            .queue_create_info_count = @intCast(unique_families.len),
-            .p_queue_create_infos = &queue_cis,
-            .enabled_layer_count = 0,
-            .pp_enabled_layer_names = @ptrCast(&empty_layers),
-            .enabled_extension_count = device_extensions.len,
-            .pp_enabled_extension_names = &device_extensions,
-            .p_enabled_features = null,
-        }, null);
-
-        const get_device_proc_addr: vk.PfnGetDeviceProcAddr = @ptrCast(
-            demo_idisp.dispatch.vkGetDeviceProcAddr orelse return error.MissingFunction,
-        );
-        const demo_ddisp = DemoDeviceDispatch.load(device, get_device_proc_addr);
         const renderer_context = try gpu_context.Context.init(
-            physical_device,
+            selection.physical_device,
             device,
             lib_idisp,
-            get_device_proc_addr,
+            logical_device.get_device_proc_addr,
         );
-        const gfx_queue = demo_ddisp.getDeviceQueue(device, chosen_gfx, 0);
-        const present_queue = demo_ddisp.getDeviceQueue(device, chosen_present, 0);
-
-        var fmt_count: u32 = 0;
-        _ = try demo_idisp.getPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &fmt_count, null);
-        const formats = try allocator.alloc(vk.SurfaceFormatKHR, fmt_count);
-        defer allocator.free(formats);
-        _ = try demo_idisp.getPhysicalDeviceSurfaceFormatsKHR(physical_device, surface, &fmt_count, formats.ptr);
-
-        var surface_format = formats[0];
-        for (formats[0..fmt_count]) |fmt| {
-            if (fmt.format == .b8g8r8a8_srgb and fmt.color_space == .srgb_nonlinear_khr) {
-                surface_format = fmt;
-                break;
-            }
-        }
 
         var host = Host{
             .instance = instance,
             .surface = surface,
-            .physical_device = physical_device,
+            .physical_device = selection.physical_device,
             .device = device,
-            .graphics_queue = gfx_queue,
-            .present_queue = present_queue,
-            .graphics_family = chosen_gfx,
-            .present_family = chosen_present,
+            .graphics_queue = demo_ddisp.getDeviceQueue(device, selection.queues.graphics, 0),
+            .present_queue = demo_ddisp.getDeviceQueue(device, selection.queues.present, 0),
+            .graphics_family = selection.queues.graphics,
+            .present_family = selection.queues.present,
             .demo_idisp = demo_idisp,
             .demo_ddisp = demo_ddisp,
             .lib_idisp = lib_idisp,
             .renderer_context = renderer_context,
-            .surface_format = surface_format,
+            .surface_format = selection.surface_format,
             .allocator = allocator,
         };
 
+        instance_alive = false;
+        surface_alive = false;
+        device_alive = false;
         errdefer host.deinit();
-        try host.createSyncObjects();
 
+        try host.createFrameResources();
         return host;
     }
 
-    fn createSyncObjects(self: *Host) !void {
+    fn createFrameResources(self: *Host) !void {
         self.command_pool = try self.demo_ddisp.createCommandPool(self.device, &.{
             .flags = .{ .reset_command_buffer_bit = true },
             .queue_family_index = self.graphics_family,
         }, null);
+        errdefer self.destroyFrameResources();
 
+        var command_buffers: [frames_in_flight]vk.CommandBuffer = undefined;
         try self.demo_ddisp.allocateCommandBuffers(self.device, &.{
             .command_pool = self.command_pool,
             .level = .primary,
-            .command_buffer_count = frames_in_flight,
-        }, &self.command_buffers);
+            .command_buffer_count = @intCast(frames_in_flight),
+        }, &command_buffers);
+        for (&self.frames, command_buffers) |*slot, command_buffer| {
+            slot.command_buffer = command_buffer;
+        }
 
-        for (0..frames_in_flight) |i| {
-            self.image_available[i] = try self.demo_ddisp.createSemaphore(self.device, &.{}, null);
-            self.in_flight_fences[i] = try self.demo_ddisp.createFence(self.device, &.{
+        for (&self.frames) |*slot| {
+            slot.image_available = try self.demo_ddisp.createSemaphore(self.device, &.{}, null);
+            slot.in_flight = try self.demo_ddisp.createFence(self.device, &.{
                 .flags = .{ .signaled_bit = true },
             }, null);
         }
     }
 
+    fn destroyFrameResources(self: *Host) void {
+        for (&self.frames) |*slot| {
+            if (slot.image_available != .null_handle) {
+                self.demo_ddisp.destroySemaphore(self.device, slot.image_available, null);
+            }
+            if (slot.in_flight != .null_handle) {
+                self.demo_ddisp.destroyFence(self.device, slot.in_flight, null);
+            }
+            slot.image_available = .null_handle;
+            slot.in_flight = .null_handle;
+            slot.command_buffer = .null_handle;
+        }
+        if (self.command_pool != .null_handle) {
+            self.demo_ddisp.destroyCommandPool(self.device, self.command_pool, null);
+            self.command_pool = .null_handle;
+        }
+    }
+
     pub const SwapchainFrame = struct {
         cmd: vk.CommandBuffer,
-        image_view: vk.ImageView,
         image: vk.Image,
         image_index: u32,
-        frame_index: u32,
+        frame_index: usize,
         submit_finished: vk.Semaphore,
         suboptimal: bool,
     };
 
     pub fn createSwapchain(self: *Host, window: *const demo_platform.Window) !void {
-        const caps = try self.demo_idisp.getPhysicalDeviceSurfaceCapabilitiesKHR(
+        const surface_config = try querySurfaceConfig(
             self.physical_device,
             self.surface,
+            self.demo_idisp,
+            self.allocator,
         );
-
-        const extent = chooseSwapchainExtent(caps, window.framebufferSize());
+        const extent = chooseSwapchainExtent(surface_config.caps, window.framebufferSize());
         if (extent.width == 0 or extent.height == 0) {
             self.destroySwapchain();
+            self.surface_format = surface_config.format;
             self.swapchain_extent = extent;
             return;
         }
-        if (!caps.supported_usage_flags.color_attachment_bit) return error.SurfaceColorAttachmentUnsupported;
+        if (!surface_config.caps.supported_usage_flags.color_attachment_bit) {
+            return error.SurfaceColorAttachmentUnsupported;
+        }
+        if (surface_config.caps.max_image_array_layers < 1) {
+            return error.SurfaceImageArrayUnsupported;
+        }
 
-        const image_count = chooseSwapchainImageCount(caps);
-
+        const image_count = chooseSwapchainImageCount(surface_config.caps);
+        const queue_families = [_]u32{ self.graphics_family, self.present_family };
         const same_family = self.graphics_family == self.present_family;
-        const families = [_]u32{ self.graphics_family, self.present_family };
-
         const old_swapchain = self.swapchain;
-        const new_swapchain = try self.demo_ddisp.createSwapchainKHR(self.device, &.{
+
+        const new_swapchain = self.demo_ddisp.createSwapchainKHR(self.device, &.{
             .surface = self.surface,
             .min_image_count = image_count,
-            .image_format = self.surface_format.format,
-            .image_color_space = self.surface_format.color_space,
+            .image_format = surface_config.format.format,
+            .image_color_space = surface_config.format.color_space,
             .image_extent = extent,
             .image_array_layers = 1,
             .image_usage = .{ .color_attachment_bit = true },
             .image_sharing_mode = if (same_family) .exclusive else .concurrent,
-            .queue_family_index_count = if (same_family) 0 else 2,
-            .p_queue_family_indices = if (same_family) null else &families,
-            .pre_transform = caps.current_transform,
-            .composite_alpha = chooseCompositeAlpha(caps.supported_composite_alpha),
-            .present_mode = .fifo_khr,
+            .queue_family_index_count = if (same_family) 0 else queue_families.len,
+            .p_queue_family_indices = if (same_family) null else &queue_families,
+            .pre_transform = surface_config.caps.current_transform,
+            .composite_alpha = chooseCompositeAlpha(surface_config.caps.supported_composite_alpha),
+            .present_mode = surface_config.present_mode,
             .clipped = .true,
             .old_swapchain = old_swapchain,
-        }, null);
-        errdefer self.demo_ddisp.destroySwapchainKHR(self.device, new_swapchain, null);
-
-        var img_count: u32 = 0;
-        _ = try self.demo_ddisp.getSwapchainImagesKHR(self.device, new_swapchain, &img_count, null);
-        const images = try self.allocator.alloc(vk.Image, img_count);
+        }, null) catch |err| {
+            if (old_swapchain != .null_handle) self.destroySwapchain();
+            return err;
+        };
         errdefer {
-            self.allocator.free(images);
-        }
-        _ = try self.demo_ddisp.getSwapchainImagesKHR(self.device, new_swapchain, &img_count, images.ptr);
-
-        const views = try self.allocator.alloc(vk.ImageView, img_count);
-        var views_created: usize = 0;
-        errdefer {
-            for (views[0..views_created]) |view| {
-                self.demo_ddisp.destroyImageView(self.device, view, null);
-            }
-            self.allocator.free(views);
-        }
-        for (images, 0..) |img, i| {
-            views[i] = try self.demo_ddisp.createImageView(self.device, &.{
-                .image = img,
-                .view_type = .@"2d",
-                .format = self.surface_format.format,
-                .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
-                .subresource_range = .{
-                    .aspect_mask = .{ .color_bit = true },
-                    .base_mip_level = 0,
-                    .level_count = 1,
-                    .base_array_layer = 0,
-                    .layer_count = 1,
-                },
-            }, null);
-            views_created += 1;
+            self.demo_ddisp.destroySwapchainKHR(self.device, new_swapchain, null);
+            if (old_swapchain != .null_handle) self.destroySwapchain();
         }
 
-        const submit_finished = try self.allocator.alloc(vk.Semaphore, img_count);
-        var semaphores_created: usize = 0;
-        errdefer {
-            for (submit_finished[0..semaphores_created]) |semaphore| {
-                self.demo_ddisp.destroySemaphore(self.device, semaphore, null);
-            }
-            self.allocator.free(submit_finished);
-        }
-        for (submit_finished) |*semaphore| {
-            semaphore.* = try self.demo_ddisp.createSemaphore(self.device, &.{}, null);
-            semaphores_created += 1;
-        }
+        const images = try getSwapchainImages(self, new_swapchain);
+        errdefer self.allocator.free(images);
+
+        const views = try createSwapchainViews(self, images, surface_config.format.format);
+        errdefer destroyImageViews(self.demo_ddisp, self.device, views, self.allocator);
+
+        const present_semaphores = try createPresentSemaphores(self, images.len);
+        errdefer destroySemaphores(self.demo_ddisp, self.device, present_semaphores, self.allocator);
 
         self.destroySwapchainResources();
         if (old_swapchain != .null_handle) {
@@ -364,20 +326,26 @@ pub const Host = struct {
         self.swapchain = new_swapchain;
         self.swapchain_images = images;
         self.swapchain_views = views;
-        self.submit_finished = submit_finished;
+        self.submit_finished = present_semaphores;
         self.swapchain_extent = extent;
+        self.surface_format = surface_config.format;
+    }
+
+    fn getSwapchainImages(self: *Host, swapchain: vk.SwapchainKHR) ![]vk.Image {
+        var image_count: u32 = 0;
+        _ = try self.demo_ddisp.getSwapchainImagesKHR(self.device, swapchain, &image_count, null);
+        if (image_count == 0) return error.SwapchainImageUnavailable;
+
+        const images = try self.allocator.alloc(vk.Image, image_count);
+        errdefer self.allocator.free(images);
+        _ = try self.demo_ddisp.getSwapchainImagesKHR(self.device, swapchain, &image_count, images.ptr);
+        return images;
     }
 
     fn destroySwapchainResources(self: *Host) void {
-        for (self.swapchain_views) |view| {
-            self.demo_ddisp.destroyImageView(self.device, view, null);
-        }
-        for (self.submit_finished) |semaphore| {
-            self.demo_ddisp.destroySemaphore(self.device, semaphore, null);
-        }
-        if (self.swapchain_views.len > 0) self.allocator.free(self.swapchain_views);
+        destroyImageViews(self.demo_ddisp, self.device, self.swapchain_views, self.allocator);
+        destroySemaphores(self.demo_ddisp, self.device, self.submit_finished, self.allocator);
         if (self.swapchain_images.len > 0) self.allocator.free(self.swapchain_images);
-        if (self.submit_finished.len > 0) self.allocator.free(self.submit_finished);
         self.swapchain_views = &.{};
         self.swapchain_images = &.{};
         self.submit_finished = &.{};
@@ -392,36 +360,45 @@ pub const Host = struct {
         self.swapchain_extent = .{ .width = 0, .height = 0 };
     }
 
+    pub fn hasDrawableSwapchain(self: *const Host) bool {
+        return self.swapchain != .null_handle and
+            self.swapchain_extent.width > 0 and
+            self.swapchain_extent.height > 0;
+    }
+
+    pub fn needsResize(self: *const Host, framebuffer_size: [2]u32) bool {
+        if (framebuffer_size[0] == 0 or framebuffer_size[1] == 0) return self.swapchain != .null_handle;
+        return !self.hasDrawableSwapchain() or
+            framebuffer_size[0] != self.swapchain_extent.width or
+            framebuffer_size[1] != self.swapchain_extent.height;
+    }
+
     pub fn beginFrame(self: *Host) !?SwapchainFrame {
-        // Window minimization can leave swapchain creation deferred.
-        if (self.swapchain == .null_handle) return null;
+        if (!self.hasDrawableSwapchain()) return null;
 
-        const fi = self.frame_index;
+        const slot_index = self.frame_index;
+        const slot = &self.frames[slot_index];
+        _ = try self.demo_ddisp.waitForFences(self.device, self.fenceSlice(slot), .true, std.math.maxInt(u64));
 
-        _ = try self.demo_ddisp.waitForFences(self.device, self.in_flight_fences[fi .. fi + 1], .true, std.math.maxInt(u64));
-
-        var image_index: u32 = undefined;
         const acquire_result = self.demo_ddisp.acquireNextImageKHR(
             self.device,
             self.swapchain,
             std.math.maxInt(u64),
-            self.image_available[fi],
+            slot.image_available,
             .null_handle,
         ) catch |err| switch (err) {
             error.OutOfDateKHR => return null,
             else => return err,
         };
-        image_index = acquire_result.image_index;
 
-        try self.demo_ddisp.resetFences(self.device, self.in_flight_fences[fi .. fi + 1]);
-
-        const cmd = self.command_buffers[fi];
+        const image_index = acquire_result.image_index;
+        const cmd = slot.command_buffer;
         try self.demo_ddisp.resetCommandBuffer(cmd, .{});
         try self.demo_ddisp.beginCommandBuffer(cmd, &.{
             .flags = .{ .one_time_submit_bit = true },
         });
 
-        self.transitionImage(cmd, self.swapchain_images[image_index], .undefined, .color_attachment_optimal);
+        self.transitionImage(cmd, colorAttachmentAcquireBarrier(self.swapchain_images[image_index]));
 
         const clear_value = vk.ClearValue{ .color = .{ .float_32 = self.clear_color } };
         const color_attachment = vk.RenderingAttachmentInfo{
@@ -446,28 +423,27 @@ pub const Host = struct {
 
         return .{
             .cmd = cmd,
-            .image_view = self.swapchain_views[image_index],
             .image = self.swapchain_images[image_index],
             .image_index = image_index,
-            .frame_index = fi,
+            .frame_index = slot_index,
             .submit_finished = self.submit_finished[image_index],
             .suboptimal = acquire_result.result == .suboptimal_khr,
         };
     }
 
-    /// Returns true if the swapchain needs recreation (out-of-date).
+    /// Returns true when the swapchain should be recreated before the next frame.
     pub fn endFrame(self: *Host, frame: SwapchainFrame) !bool {
-        const fi = self.frame_index;
+        const slot = &self.frames[frame.frame_index];
         const cmd = frame.cmd;
 
         self.demo_ddisp.cmdEndRendering(cmd);
-
-        self.transitionImage(cmd, frame.image, .color_attachment_optimal, .present_src_khr);
-
+        self.transitionImage(cmd, presentReleaseBarrier(frame.image));
         try self.demo_ddisp.endCommandBuffer(cmd);
 
+        try self.demo_ddisp.resetFences(self.device, self.fenceSlice(slot));
+
         const wait_info = vk.SemaphoreSubmitInfo{
-            .semaphore = self.image_available[fi],
+            .semaphore = slot.image_available,
             .stage_mask = .{ .color_attachment_output_bit = true },
             .value = 0,
             .device_index = 0,
@@ -490,7 +466,8 @@ pub const Host = struct {
             .signal_semaphore_info_count = 1,
             .p_signal_semaphore_infos = @ptrCast(&signal_info),
         };
-        try self.demo_ddisp.queueSubmit2(self.graphics_queue, &[_]vk.SubmitInfo2{submit_info}, self.in_flight_fences[fi]);
+        try self.demo_ddisp.queueSubmit2(self.graphics_queue, &[_]vk.SubmitInfo2{submit_info}, slot.in_flight);
+        errdefer self.advanceFrame();
 
         var needs_recreate = frame.suboptimal;
         const present_result = self.demo_ddisp.queuePresentKHR(self.present_queue, &vk.PresentInfoKHR{
@@ -506,56 +483,21 @@ pub const Host = struct {
             },
             else => return err,
         };
-        if (present_result == .suboptimal_khr) {
-            needs_recreate = true;
-        }
+        if (present_result == .suboptimal_khr) needs_recreate = true;
 
-        self.frame_index = (fi + 1) % frames_in_flight;
+        self.advanceFrame();
         return needs_recreate;
     }
 
-    fn transitionImage(
-        self: *Host,
-        cmd: vk.CommandBuffer,
-        image: vk.Image,
-        old_layout: vk.ImageLayout,
-        new_layout: vk.ImageLayout,
-    ) void {
-        const src_stage: vk.PipelineStageFlags2 = if (old_layout == .undefined)
-            .{ .top_of_pipe_bit = true }
-        else
-            .{ .color_attachment_output_bit = true };
-        const src_access: vk.AccessFlags2 = if (old_layout == .undefined)
-            .{}
-        else
-            .{ .color_attachment_write_bit = true };
-        const dst_stage: vk.PipelineStageFlags2 = if (new_layout == .color_attachment_optimal)
-            .{ .color_attachment_output_bit = true }
-        else
-            .{ .bottom_of_pipe_bit = true };
-        const dst_access: vk.AccessFlags2 = if (new_layout == .color_attachment_optimal)
-            .{ .color_attachment_write_bit = true }
-        else
-            .{};
+    fn advanceFrame(self: *Host) void {
+        self.frame_index = (self.frame_index + 1) % frames_in_flight;
+    }
 
-        const barrier = vk.ImageMemoryBarrier2{
-            .src_stage_mask = src_stage,
-            .src_access_mask = src_access,
-            .dst_stage_mask = dst_stage,
-            .dst_access_mask = dst_access,
-            .old_layout = old_layout,
-            .new_layout = new_layout,
-            .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-            .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
-            .image = image,
-            .subresource_range = .{
-                .aspect_mask = .{ .color_bit = true },
-                .base_mip_level = 0,
-                .level_count = 1,
-                .base_array_layer = 0,
-                .layer_count = 1,
-            },
-        };
+    fn fenceSlice(_: *Host, slot: *FrameSlot) []const vk.Fence {
+        return @as(*const [1]vk.Fence, @ptrCast(&slot.in_flight))[0..1];
+    }
+
+    fn transitionImage(self: *Host, cmd: vk.CommandBuffer, barrier: vk.ImageMemoryBarrier2) void {
         self.demo_ddisp.cmdPipelineBarrier2(cmd, &.{
             .image_memory_barrier_count = 1,
             .p_image_memory_barriers = @ptrCast(&barrier),
@@ -567,30 +509,212 @@ pub const Host = struct {
         try self.createSwapchain(window);
     }
 
+    pub fn waitIdle(self: *Host) void {
+        self.demo_ddisp.deviceWaitIdle(self.device) catch |err| {
+            log.debug("vkDeviceWaitIdle during shutdown failed: {}", .{err});
+        };
+    }
+
     pub fn deinit(self: *Host) void {
-        self.demo_ddisp.deviceWaitIdle(self.device) catch {};
-
-        for (0..frames_in_flight) |i| {
-            if (self.image_available[i] != .null_handle)
-                self.demo_ddisp.destroySemaphore(self.device, self.image_available[i], null);
-            if (self.in_flight_fences[i] != .null_handle)
-                self.demo_ddisp.destroyFence(self.device, self.in_flight_fences[i], null);
-        }
-        if (self.command_pool != .null_handle)
-            self.demo_ddisp.destroyCommandPool(self.device, self.command_pool, null);
-
+        self.waitIdle();
         self.destroySwapchain();
-
+        self.destroyFrameResources();
         self.demo_ddisp.destroyDevice(self.device, null);
-
         self.demo_idisp.destroySurfaceKHR(self.instance, self.surface, null);
         self.demo_idisp.destroyInstance(self.instance, null);
     }
 };
 
+const LogicalDevice = struct {
+    device: vk.Device,
+    dispatch: DemoDeviceDispatch,
+    get_device_proc_addr: vk.PfnGetDeviceProcAddr,
+};
+
+fn createLogicalDevice(
+    physical_device: vk.PhysicalDevice,
+    queues: QueueFamilies,
+    idisp: DemoInstanceDispatch,
+) !LogicalDevice {
+    var queue_family_indices: [2]u32 = .{ queues.graphics, queues.present };
+    const queue_family_count: usize = if (queues.isUnified()) 1 else 2;
+    const priority = [_]f32{1.0};
+    var queue_cis: [2]vk.DeviceQueueCreateInfo = undefined;
+    for (queue_family_indices[0..queue_family_count], 0..) |family, i| {
+        queue_cis[i] = .{
+            .queue_family_index = family,
+            .queue_count = 1,
+            .p_queue_priorities = &priority,
+        };
+    }
+
+    var enabled_features = gpu_context.Context.requiredFeatureChain();
+    enabled_features.enableSynchronization2();
+
+    // pp_enabled_layer_names is *const *const u8 in this vk.zig version. With
+    // count=0 the Vulkan implementation must not dereference the pointer.
+    const empty_layers = [0][*:0]const u8{};
+    const device = try idisp.createDevice(physical_device, &.{
+        .p_next = @ptrCast(enabled_features.rootInfo()),
+        .queue_create_info_count = @intCast(queue_family_count),
+        .p_queue_create_infos = &queue_cis,
+        .enabled_layer_count = 0,
+        .pp_enabled_layer_names = @ptrCast(&empty_layers),
+        .enabled_extension_count = @intCast(device_extensions.len),
+        .pp_enabled_extension_names = &device_extensions,
+        .p_enabled_features = null,
+    }, null);
+
+    const get_device_proc_addr: vk.PfnGetDeviceProcAddr = @ptrCast(
+        idisp.dispatch.vkGetDeviceProcAddr orelse return error.MissingFunction,
+    );
+    return .{
+        .device = device,
+        .dispatch = DemoDeviceDispatch.load(device, get_device_proc_addr),
+        .get_device_proc_addr = get_device_proc_addr,
+    };
+}
+
+fn choosePhysicalDevice(
+    instance: vk.Instance,
+    surface: vk.SurfaceKHR,
+    idisp: DemoInstanceDispatch,
+    lib_idisp: gpu_context.InstanceDispatch,
+    allocator: std.mem.Allocator,
+) !DeviceSelection {
+    var device_count: u32 = 0;
+    _ = try idisp.enumeratePhysicalDevices(instance, &device_count, null);
+    if (device_count == 0) return error.NoPhysicalDevices;
+
+    const devices = try allocator.alloc(vk.PhysicalDevice, device_count);
+    defer allocator.free(devices);
+    _ = try idisp.enumeratePhysicalDevices(instance, &device_count, devices.ptr);
+
+    for (devices[0..device_count]) |pdev| {
+        if (!try supportsDeviceExtensions(pdev, lib_idisp, allocator, &device_extensions)) continue;
+        gpu_context.Context.checkDeviceSupport(pdev, lib_idisp, allocator) catch continue;
+        if (!supportsRequiredDemoFeatures(pdev, lib_idisp)) continue;
+
+        const queues = findQueueFamilies(pdev, surface, idisp, allocator) catch continue;
+        const surface_config = querySurfaceConfig(pdev, surface, idisp, allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => continue,
+        };
+
+        return .{
+            .physical_device = pdev,
+            .queues = queues,
+            .surface_format = surface_config.format,
+        };
+    }
+    return error.NoSuitableDevice;
+}
+
+fn querySurfaceConfig(
+    pdev: vk.PhysicalDevice,
+    surface: vk.SurfaceKHR,
+    idisp: DemoInstanceDispatch,
+    allocator: std.mem.Allocator,
+) !SurfaceConfig {
+    const caps = try idisp.getPhysicalDeviceSurfaceCapabilitiesKHR(pdev, surface);
+
+    var format_count: u32 = 0;
+    _ = try idisp.getPhysicalDeviceSurfaceFormatsKHR(pdev, surface, &format_count, null);
+    if (format_count == 0) return error.SurfaceFormatUnavailable;
+    const formats = try allocator.alloc(vk.SurfaceFormatKHR, format_count);
+    defer allocator.free(formats);
+    _ = try idisp.getPhysicalDeviceSurfaceFormatsKHR(pdev, surface, &format_count, formats.ptr);
+
+    var present_mode_count: u32 = 0;
+    _ = try idisp.getPhysicalDeviceSurfacePresentModesKHR(pdev, surface, &present_mode_count, null);
+    if (present_mode_count == 0) return error.SurfacePresentModeUnavailable;
+    const present_modes = try allocator.alloc(vk.PresentModeKHR, present_mode_count);
+    defer allocator.free(present_modes);
+    _ = try idisp.getPhysicalDeviceSurfacePresentModesKHR(pdev, surface, &present_mode_count, present_modes.ptr);
+
+    return .{
+        .caps = caps,
+        .format = chooseSurfaceFormat(formats) orelse return error.SurfaceFormatUnavailable,
+        .present_mode = choosePresentMode(present_modes) orelse return error.SurfaceFifoPresentModeMissing,
+    };
+}
+
+fn createSwapchainViews(
+    self: *Host,
+    images: []const vk.Image,
+    format: vk.Format,
+) ![]vk.ImageView {
+    const views = try self.allocator.alloc(vk.ImageView, images.len);
+    errdefer self.allocator.free(views);
+
+    var created: usize = 0;
+    errdefer {
+        for (views[0..created]) |view| {
+            self.demo_ddisp.destroyImageView(self.device, view, null);
+        }
+    }
+    for (images, 0..) |image, i| {
+        views[i] = try self.demo_ddisp.createImageView(self.device, &.{
+            .image = image,
+            .view_type = .@"2d",
+            .format = format,
+            .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
+            .subresource_range = colorSubresourceRange(),
+        }, null);
+        created += 1;
+    }
+    return views;
+}
+
+fn createPresentSemaphores(self: *Host, count: usize) ![]vk.Semaphore {
+    const semaphores = try self.allocator.alloc(vk.Semaphore, count);
+    errdefer self.allocator.free(semaphores);
+
+    var created: usize = 0;
+    errdefer {
+        for (semaphores[0..created]) |semaphore| {
+            self.demo_ddisp.destroySemaphore(self.device, semaphore, null);
+        }
+    }
+    for (semaphores) |*semaphore| {
+        semaphore.* = try self.demo_ddisp.createSemaphore(self.device, &.{}, null);
+        created += 1;
+    }
+    return semaphores;
+}
+
+fn destroyImageViews(
+    ddisp: DemoDeviceDispatch,
+    device: vk.Device,
+    views: []vk.ImageView,
+    allocator: std.mem.Allocator,
+) void {
+    for (views) |view| {
+        ddisp.destroyImageView(device, view, null);
+    }
+    if (views.len > 0) allocator.free(views);
+}
+
+fn destroySemaphores(
+    ddisp: DemoDeviceDispatch,
+    device: vk.Device,
+    semaphores: []vk.Semaphore,
+    allocator: std.mem.Allocator,
+) void {
+    for (semaphores) |semaphore| {
+        ddisp.destroySemaphore(device, semaphore, null);
+    }
+    if (semaphores.len > 0) allocator.free(semaphores);
+}
+
 fn chooseSwapchainExtent(caps: vk.SurfaceCapabilitiesKHR, framebuffer_size: [2]u32) vk.Extent2D {
-    if (caps.current_extent.width != std.math.maxInt(u32)) return caps.current_extent;
+    const variable_extent = caps.current_extent.width == std.math.maxInt(u32) and
+        caps.current_extent.height == std.math.maxInt(u32);
+    if (!variable_extent) return caps.current_extent;
     if (framebuffer_size[0] == 0 or framebuffer_size[1] == 0) {
+        return .{ .width = 0, .height = 0 };
+    }
+    if (caps.max_image_extent.width == 0 or caps.max_image_extent.height == 0) {
         return .{ .width = 0, .height = 0 };
     }
     return .{
@@ -620,6 +744,30 @@ fn chooseCompositeAlpha(supported: vk.CompositeAlphaFlagsKHR) vk.CompositeAlphaF
     return .{ .inherit_bit_khr = true };
 }
 
+fn chooseSurfaceFormat(formats: []const vk.SurfaceFormatKHR) ?vk.SurfaceFormatKHR {
+    if (formats.len == 0) return null;
+
+    const preferred = vk.SurfaceFormatKHR{
+        .format = .b8g8r8a8_srgb,
+        .color_space = .srgb_nonlinear_khr,
+    };
+    if (formats.len == 1 and formats[0].format == .undefined) return preferred;
+
+    for (formats) |format| {
+        if (format.format == preferred.format and format.color_space == preferred.color_space) {
+            return format;
+        }
+    }
+    return formats[0];
+}
+
+fn choosePresentMode(modes: []const vk.PresentModeKHR) ?vk.PresentModeKHR {
+    for (modes) |mode| {
+        if (mode == .fifo_khr) return .fifo_khr;
+    }
+    return null;
+}
+
 fn supportsDeviceExtensions(
     pdev: vk.PhysicalDevice,
     idisp: gpu_context.InstanceDispatch,
@@ -637,11 +785,11 @@ fn supportsDeviceExtensions(
     defer allocator.free(available);
 
     for (required_extensions) |required| {
-        const req_name = std.mem.span(required);
+        const required_name = std.mem.span(required);
         var found = false;
-        for (available) |ext| {
-            const ext_name = std.mem.sliceTo(&ext.extension_name, 0);
-            if (std.mem.eql(u8, ext_name, req_name)) {
+        for (available) |extension| {
+            const available_name = std.mem.sliceTo(&extension.extension_name, 0);
+            if (std.mem.eql(u8, available_name, required_name)) {
                 found = true;
                 break;
             }
@@ -657,7 +805,6 @@ fn supportsRequiredDemoFeatures(
 ) bool {
     var features = vk_chains.FeatureChain.init();
     idisp.getPhysicalDeviceFeatures2(pdev, features.rootInfo());
-
     return features.hasRendererFeatures() and features.hasSynchronization2();
 }
 
@@ -666,23 +813,104 @@ fn findQueueFamilies(
     surface: vk.SurfaceKHR,
     idisp: DemoInstanceDispatch,
     allocator: std.mem.Allocator,
-) !struct { u32, u32 } {
+) !QueueFamilies {
     var family_count: u32 = 0;
     idisp.getPhysicalDeviceQueueFamilyProperties(pdev, &family_count, null);
+    if (family_count == 0) return error.NoQueueFamilies;
+
     const families = try allocator.alloc(vk.QueueFamilyProperties, family_count);
     defer allocator.free(families);
     idisp.getPhysicalDeviceQueueFamilyProperties(pdev, &family_count, families.ptr);
 
-    var gfx: ?u32 = null;
-    var present: ?u32 = null;
-    for (families[0..family_count], 0..) |fam, i| {
-        const idx: u32 = @intCast(i);
-        if (fam.queue_flags.graphics_bit) gfx = gfx orelse idx;
-        const present_support = try idisp.getPhysicalDeviceSurfaceSupportKHR(pdev, idx, surface);
-        if (present_support == .true) present = present orelse idx;
-        if (gfx != null and present != null) break;
+    const support = try allocator.alloc(QueueFamilySupport, family_count);
+    defer allocator.free(support);
+
+    for (families[0..family_count], 0..) |family, i| {
+        const index: u32 = @intCast(i);
+        support[i] = .{
+            .graphics = family.queue_flags.graphics_bit,
+            .present = try idisp.getPhysicalDeviceSurfaceSupportKHR(pdev, index, surface) == .true,
+        };
     }
-    return .{ gfx orelse return error.NoGraphicsQueue, present orelse return error.NoPresentQueue };
+    return chooseQueueFamilies(support) orelse error.NoSuitableQueueFamilies;
+}
+
+fn chooseQueueFamilies(support: []const QueueFamilySupport) ?QueueFamilies {
+    for (support, 0..) |family, i| {
+        if (family.graphics and family.present) {
+            const index: u32 = @intCast(i);
+            return .{ .graphics = index, .present = index };
+        }
+    }
+
+    var graphics: ?u32 = null;
+    var present: ?u32 = null;
+    for (support, 0..) |family, i| {
+        const index: u32 = @intCast(i);
+        if (family.graphics) graphics = graphics orelse index;
+        if (family.present) present = present orelse index;
+    }
+    return .{
+        .graphics = graphics orelse return null,
+        .present = present orelse return null,
+    };
+}
+
+fn colorAttachmentAcquireBarrier(image: vk.Image) vk.ImageMemoryBarrier2 {
+    return imageBarrier(
+        image,
+        .undefined,
+        .color_attachment_optimal,
+        .{ .color_attachment_output_bit = true },
+        .{},
+        .{ .color_attachment_output_bit = true },
+        .{ .color_attachment_write_bit = true },
+    );
+}
+
+fn presentReleaseBarrier(image: vk.Image) vk.ImageMemoryBarrier2 {
+    return imageBarrier(
+        image,
+        .color_attachment_optimal,
+        .present_src_khr,
+        .{ .color_attachment_output_bit = true },
+        .{ .color_attachment_write_bit = true },
+        .{},
+        .{},
+    );
+}
+
+fn imageBarrier(
+    image: vk.Image,
+    old_layout: vk.ImageLayout,
+    new_layout: vk.ImageLayout,
+    src_stage: vk.PipelineStageFlags2,
+    src_access: vk.AccessFlags2,
+    dst_stage: vk.PipelineStageFlags2,
+    dst_access: vk.AccessFlags2,
+) vk.ImageMemoryBarrier2 {
+    return .{
+        .src_stage_mask = src_stage,
+        .src_access_mask = src_access,
+        .dst_stage_mask = dst_stage,
+        .dst_access_mask = dst_access,
+        .old_layout = old_layout,
+        .new_layout = new_layout,
+        .src_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .dst_queue_family_index = vk.QUEUE_FAMILY_IGNORED,
+        .image = image,
+        .subresource_range = colorSubresourceRange(),
+    };
+}
+
+fn colorSubresourceRange() vk.ImageSubresourceRange {
+    return .{
+        .aspect_mask = .{ .color_bit = true },
+        .base_mip_level = 0,
+        .level_count = 1,
+        .base_array_layer = 0,
+        .layer_count = 1,
+    };
 }
 
 fn testSurfaceCapabilities() vk.SurfaceCapabilitiesKHR {
@@ -695,9 +923,14 @@ fn testSurfaceCapabilities() vk.SurfaceCapabilitiesKHR {
     caps.max_image_extent = .{ .width = 4096, .height = 2160 };
     caps.min_image_count = 2;
     caps.max_image_count = 3;
+    caps.max_image_array_layers = 1;
     caps.supported_composite_alpha = .{ .opaque_bit_khr = true };
     caps.supported_usage_flags = .{ .color_attachment_bit = true };
     return caps;
+}
+
+test "Vulkan demo frames align with renderer frame resources" {
+    try std.testing.expectEqual(@as(usize, heavy_slug_vulkan.renderer.max_frames_in_flight), Host.frames_in_flight);
 }
 
 test "Vulkan demo swapchain extent follows fixed surface extent" {
@@ -711,7 +944,7 @@ test "Vulkan demo swapchain extent follows fixed surface extent" {
 }
 
 test "Vulkan demo swapchain extent clamps framebuffer size and preserves minimization" {
-    const caps = testSurfaceCapabilities();
+    var caps = testSurfaceCapabilities();
 
     try std.testing.expectEqual(
         vk.Extent2D{ .width = 64, .height = 32 },
@@ -724,6 +957,12 @@ test "Vulkan demo swapchain extent clamps framebuffer size and preserves minimiz
     try std.testing.expectEqual(
         vk.Extent2D{ .width = 0, .height = 0 },
         chooseSwapchainExtent(caps, .{ 0, 720 }),
+    );
+
+    caps.max_image_extent = .{ .width = 0, .height = 0 };
+    try std.testing.expectEqual(
+        vk.Extent2D{ .width = 0, .height = 0 },
+        chooseSwapchainExtent(caps, .{ 1280, 720 }),
     );
 }
 
@@ -752,4 +991,66 @@ test "Vulkan demo composite alpha prefers opaque and falls back deterministicall
         vk.CompositeAlphaFlagsKHR{ .inherit_bit_khr = true },
         chooseCompositeAlpha(.{ .inherit_bit_khr = true }),
     );
+}
+
+test "Vulkan demo surface format prefers sRGB B8G8R8A8 and handles unrestricted surfaces" {
+    const preferred = vk.SurfaceFormatKHR{
+        .format = .b8g8r8a8_srgb,
+        .color_space = .srgb_nonlinear_khr,
+    };
+    const fallback = vk.SurfaceFormatKHR{
+        .format = .a8b8g8r8_srgb_pack32,
+        .color_space = .srgb_nonlinear_khr,
+    };
+
+    try std.testing.expectEqual(preferred, chooseSurfaceFormat(&.{ fallback, preferred }).?);
+    try std.testing.expectEqual(fallback, chooseSurfaceFormat(&.{fallback}).?);
+    try std.testing.expectEqual(preferred, chooseSurfaceFormat(&.{.{
+        .format = .undefined,
+        .color_space = .srgb_nonlinear_khr,
+    }}).?);
+    try std.testing.expect(chooseSurfaceFormat(&.{}) == null);
+}
+
+test "Vulkan demo present mode uses required FIFO mode" {
+    try std.testing.expectEqual(vk.PresentModeKHR.fifo_khr, choosePresentMode(&.{ .immediate_khr, .fifo_khr }).?);
+    try std.testing.expectEqual(vk.PresentModeKHR.fifo_khr, choosePresentMode(&.{.fifo_khr}).?);
+    try std.testing.expect(choosePresentMode(&.{.immediate_khr}) == null);
+}
+
+test "Vulkan demo queue selection prefers a unified graphics-present family" {
+    const unified = chooseQueueFamilies(&.{
+        .{ .graphics = true, .present = false },
+        .{ .graphics = true, .present = true },
+        .{ .graphics = false, .present = true },
+    }).?;
+    try std.testing.expectEqual(@as(u32, 1), unified.graphics);
+    try std.testing.expectEqual(@as(u32, 1), unified.present);
+
+    const split = chooseQueueFamilies(&.{
+        .{ .graphics = true, .present = false },
+        .{ .graphics = false, .present = true },
+    }).?;
+    try std.testing.expectEqual(@as(u32, 0), split.graphics);
+    try std.testing.expectEqual(@as(u32, 1), split.present);
+
+    try std.testing.expect(chooseQueueFamilies(&.{.{ .graphics = true, .present = false }}) == null);
+}
+
+test "Vulkan demo swapchain barriers synchronize acquire and present layouts explicitly" {
+    const acquire = colorAttachmentAcquireBarrier(.null_handle);
+    try std.testing.expect(acquire.src_stage_mask.color_attachment_output_bit);
+    try std.testing.expect(acquire.dst_stage_mask.color_attachment_output_bit);
+    try std.testing.expect(!acquire.src_access_mask.color_attachment_write_bit);
+    try std.testing.expect(acquire.dst_access_mask.color_attachment_write_bit);
+    try std.testing.expectEqual(vk.ImageLayout.undefined, acquire.old_layout);
+    try std.testing.expectEqual(vk.ImageLayout.color_attachment_optimal, acquire.new_layout);
+
+    const release = presentReleaseBarrier(.null_handle);
+    try std.testing.expect(release.src_stage_mask.color_attachment_output_bit);
+    try std.testing.expect(release.src_access_mask.color_attachment_write_bit);
+    try std.testing.expectEqual(@as(vk.PipelineStageFlags2, .{}), release.dst_stage_mask);
+    try std.testing.expectEqual(@as(vk.AccessFlags2, .{}), release.dst_access_mask);
+    try std.testing.expectEqual(vk.ImageLayout.color_attachment_optimal, release.old_layout);
+    try std.testing.expectEqual(vk.ImageLayout.present_src_khr, release.new_layout);
 }

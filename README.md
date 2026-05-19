@@ -289,7 +289,11 @@ than per-glyph descriptor slots and binds mesh and fragment stages as linked
 `VK_EXT_shader_object` shader objects. Each draw bind explicitly clears unused
 vertex, tessellation, geometry, and task shader-object stages before binding
 the no-task mesh/fragment pair, then records all required dynamic graphics
-state before `vkCmdDrawMeshTasksEXT`. The Metal backend follows the
+state before `vkCmdDrawMeshTasksEXT`. The Vulkan demo host keeps swapchain
+ownership outside the library, uses renderer-aligned frame slots, per-image
+present semaphores, FIFO presentation, dynamic rendering, and synchronization2
+image barriers for acquire-to-color-attachment and color-attachment-to-present
+transitions. The Metal backend follows the
 Metal 4 command and argument-table path exposed through the Swift bridge; Zig
 submits one validated draw-request block per frame slot, while Swift decodes it
 before binding `MTL4ArgumentTable` GPU addresses and encoding chunked mesh

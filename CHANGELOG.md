@@ -12,6 +12,12 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Vulkan demo host rewritten:** the Windows/Linux demo host now uses a
+  renderer-aligned frame ring, unified graphics/present queue selection when
+  available, explicit surface-format and FIFO present-mode selection, per-image
+  present semaphores, and synchronization2 swapchain image barriers that keep
+  acquire, dynamic rendering, and present transitions in one explicit frame
+  state machine.
 - **Metal demo host rewritten:** the macOS demo now uses protocol-versioned
   create, snapshot, and Metal-host ABI blocks between Zig and Swift; the
   SwiftUI surface uses Observation instead of Combine/`ObservableObject`,
