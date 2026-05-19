@@ -160,7 +160,7 @@ fn fixedBoundsFromBlobView(view: blob_decode.BlobView) cache_mod.FixedBounds {
 pub const RendererCore = struct {
     store: glyph_store_mod.GlyphStore,
     font_system: font_mod.FontSystem,
-    fonts: std.AutoHashMap(u32, *FontEntry),
+    fonts: std.AutoHashMapUnmanaged(u32, *FontEntry) = .empty,
     next_font_id: u32,
     max_glyphs_per_frame: u32,
     precision_policy: core_types.PrecisionPolicy,
@@ -183,7 +183,6 @@ pub const RendererCore = struct {
         return .{
             .store = store,
             .font_system = font_system,
-            .fonts = std.AutoHashMap(u32, *FontEntry).init(allocator),
             .next_font_id = 0,
             .max_glyphs_per_frame = options.max_glyphs_per_frame,
             .precision_policy = options.precision_policy,
@@ -199,7 +198,7 @@ pub const RendererCore = struct {
             entry_ptr.*.loaded.deinit();
             self.allocator.destroy(entry_ptr.*);
         }
-        self.fonts.deinit();
+        self.fonts.deinit(self.allocator);
         self.shape_plan.deinit();
         self.font_system.deinit();
         self.store.deinit();
@@ -221,7 +220,7 @@ pub const RendererCore = struct {
         errdefer entry.loaded.deinit();
 
         const id = self.next_font_id;
-        try self.fonts.put(id, entry);
+        try self.fonts.putNoClobber(self.allocator, id, entry);
         self.next_font_id += 1;
         return .{ .id = id };
     }
@@ -478,7 +477,12 @@ pub const RendererCore = struct {
         if (encoded.data.len == 0) {
             const extent_box = emBoxFromExtents(encoded.extents);
             const empty_bounds = cache_mod.FixedBounds{ .x_min = 0, .y_min = 0, .x_max = 0, .y_max = 0 };
-            try self.store.glyph_cache.insertColdWithBounds(cache_key, GlyphBlobRef.empty, .{ .offset = 0, .size = 0 }, extent_box, empty_bounds);
+            try self.store.glyph_cache.insert(.cold, cache_key, .{
+                .blob_ref = GlyphBlobRef.empty,
+                .pool_alloc = .{ .offset = 0, .size = 0 },
+                .em_box = extent_box,
+                .bounds_q = empty_bounds,
+            });
             return .{
                 .blob_ref = GlyphBlobRef.empty,
                 .bounds_q = empty_bounds,
@@ -507,7 +511,13 @@ pub const RendererCore = struct {
         }
 
         owns_mesh_metadata = false;
-        try self.store.glyph_cache.insertColdWithMetadata(cache_key, blob_ref, pool_alloc, em_box, bounds_q, mesh_metadata);
+        try self.store.glyph_cache.insert(.cold, cache_key, .{
+            .blob_ref = blob_ref,
+            .pool_alloc = pool_alloc,
+            .em_box = em_box,
+            .bounds_q = bounds_q,
+            .mesh_metadata = mesh_metadata,
+        });
         return .{
             .blob_ref = blob_ref,
             .bounds_q = bounds_q,

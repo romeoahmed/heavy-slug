@@ -12,6 +12,13 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Core font/cache path rewritten:** font loading now has explicit
+  FreeType pixel-size validation plus path and memory-backed `FontSource`
+  handling, memory font bytes are owned by `LoadedFont` until after
+  `FT_Done_Face`, HarfBuzz shape plans now guess missing segment properties
+  even when callers provide only direction/script/language, and glyph-cache
+  insertion now uses a single payload API backed by Zig 0.16 unmanaged hash
+  maps.
 - **Core outline/render path refactored:** outline regularization now separates
   cubic geometry, critical-point splitting, and quantization stability checks;
   renderer meshlet planning now lives outside `RendererCore`, precomputes

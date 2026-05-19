@@ -8,8 +8,10 @@ pub const font_system = @import("font_system.zig");
 
 pub const FreeTypeLibrary = freetype.Library;
 pub const FreeTypeFace = freetype.Face;
+pub const FreeTypePixelSize = freetype.PixelSize;
 pub const HarfBuzzBuffer = harfbuzz.Buffer;
 pub const HarfBuzzFont = harfbuzz.Font;
+pub const HarfBuzzLanguage = harfbuzz.Language;
 pub const GlyphEncoder = glyph.GlyphEncoder;
 pub const EncodedGlyph = glyph.EncodedGlyph;
 pub const FontSystem = font_system.FontSystem;

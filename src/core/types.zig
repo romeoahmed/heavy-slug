@@ -295,6 +295,7 @@ pub const FontHandle = extern struct {
 
 pub const FontSource = union(enum) {
     path: [*:0]const u8,
+    memory: []const u8,
 };
 
 pub const FontOptions = struct {

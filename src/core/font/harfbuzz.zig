@@ -8,6 +8,7 @@ pub const Error = error{
     HarfBuzzFontCreateFailed,
     HarfBuzzFaceNotSized,
     HarfBuzzTextTooLong,
+    HarfBuzzLanguageTagTooLong,
 };
 
 /// Zig-native wrapper for hb_direction_t.
@@ -38,6 +39,21 @@ pub const Script = enum(c_uint) {
     _,
 };
 
+pub const ClusterLevel = enum(c_uint) {
+    monotone_graphemes = c.HB_BUFFER_CLUSTER_LEVEL_MONOTONE_GRAPHEMES,
+    monotone_characters = c.HB_BUFFER_CLUSTER_LEVEL_MONOTONE_CHARACTERS,
+    characters = c.HB_BUFFER_CLUSTER_LEVEL_CHARACTERS,
+};
+
+pub const Language = struct {
+    handle: c.hb_language_t,
+
+    pub fn fromBytes(tag: []const u8) Error!Language {
+        const tag_len = std.math.cast(c_int, tag.len) orelse return error.HarfBuzzLanguageTagTooLong;
+        return .{ .handle = c.hb_language_from_string(tag.ptr, tag_len) };
+    }
+};
+
 pub const Buffer = struct {
     handle: *c.hb_buffer_t,
 
@@ -50,7 +66,9 @@ pub const Buffer = struct {
             c.hb_buffer_destroy(buf);
             return error.HarfBuzzAllocationFailed;
         }
-        return .{ .handle = buf };
+        const buffer = Buffer{ .handle = buf };
+        buffer.setClusterLevel(.monotone_graphemes);
+        return buffer;
     }
 
     pub fn deinit(self: Buffer) void {
@@ -77,11 +95,27 @@ pub const Buffer = struct {
         c.hb_buffer_set_direction(self.handle, @intFromEnum(dir));
     }
 
-    pub fn setScript(self: Buffer, script: Script) void {
-        c.hb_buffer_set_script(self.handle, @intFromEnum(script));
+    pub fn direction(self: Buffer) Direction {
+        return @enumFromInt(c.hb_buffer_get_direction(self.handle));
     }
 
-    /// Let HarfBuzz infer direction, script, and language from buffer contents.
+    pub fn setScript(self: Buffer, script_tag: Script) void {
+        c.hb_buffer_set_script(self.handle, @intFromEnum(script_tag));
+    }
+
+    pub fn script(self: Buffer) Script {
+        return @enumFromInt(c.hb_buffer_get_script(self.handle));
+    }
+
+    pub fn setLanguage(self: Buffer, language: Language) void {
+        c.hb_buffer_set_language(self.handle, language.handle);
+    }
+
+    pub fn setClusterLevel(self: Buffer, level: ClusterLevel) void {
+        c.hb_buffer_set_cluster_level(self.handle, @intFromEnum(level));
+    }
+
+    /// Let HarfBuzz infer missing direction, script, and language from buffer contents.
     pub fn guessSegmentProperties(self: Buffer) void {
         c.hb_buffer_guess_segment_properties(self.handle);
     }
@@ -105,6 +139,7 @@ pub const Buffer = struct {
     /// Reset buffer content and segment properties for reuse.
     pub fn reset(self: Buffer) void {
         c.hb_buffer_reset(self.handle);
+        self.setClusterLevel(.monotone_graphemes);
     }
 
     fn ensureAllocated(self: Buffer) Error!void {
@@ -121,6 +156,10 @@ pub const Font = struct {
     /// hb_ft_font_create_referenced takes its own FT_Face reference; the
     /// wrapper still destroys the hb_font before its owning Face for clarity.
     pub fn fromFace(face: ft.Face) Error!Font {
+        return fromFreeTypeFace(face);
+    }
+
+    pub fn fromFreeTypeFace(face: ft.Face) Error!Font {
         if (!face.isSized()) return error.HarfBuzzFaceNotSized;
         const hb_font = c.hb_ft_font_create_referenced(face.handle) orelse return error.HarfBuzzFontCreateFailed;
         return .{ .handle = hb_font };
@@ -159,6 +198,18 @@ test "set direction and script" {
     buf.setScript(.latin);
     try buf.addUtf8("test");
     try std.testing.expectEqual(@as(usize, 4), buf.len());
+}
+
+test "Buffer: guessing fills missing script while preserving explicit direction" {
+    const buf = try Buffer.init();
+    defer buf.deinit();
+
+    try buf.addUtf8("Hello");
+    buf.setDirection(.ltr);
+    buf.guessSegmentProperties();
+
+    try std.testing.expectEqual(Direction.ltr, buf.direction());
+    try std.testing.expectEqual(Script.latin, buf.script());
 }
 
 test "Font: create from sized FreeType face and shape text" {

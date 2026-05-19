@@ -193,6 +193,9 @@ package modules.
 Stable top-level core exports include `FontHandle`, `FontSource`,
 `FontOptions`, `TextRun`, `FrameToken`, `Color`, `Transform`, `View`,
 `PrecisionPolicy`, `FillRule`, `RendererOptions`, and `ShaderStats`.
+`FontSource` accepts either a NUL-terminated filesystem path or an in-memory
+font byte slice; memory sources are copied into the loaded font so FreeType's
+face lifetime never depends on caller-owned transient buffers.
 
 Backend modules expose `Context`, `Renderer`, `Frame`, `Target`,
 `RendererOptions`, `FontHandle`, `FrameToken`, `Stats`, and
@@ -350,6 +353,8 @@ Backend debug counters are exposed through `Renderer.stats()` in Debug builds.
 | Glyph resources | Cached glyph blobs live in a backend-owned, storage-aligned byte pool; visible strips live in per-frame meshlet buffers. |
 | Outline regularization | Cubic geometry, critical-point splitting, and quantization stability checks are separate from HarfBuzz capture. |
 | Meshlet planning | Host culling, viewport back-projection, h-band strip bounds, and meshlet ABI writes are isolated in core render planning code. |
+| Font lifetime | FreeType library, face, and HarfBuzz font lifetimes are explicit; memory-backed font sources are copied and released only after the face is destroyed. |
+| Shaping | HarfBuzz buffers are reused per plan, reset with an explicit cluster level, and always guess missing segment properties without overwriting caller-provided direction/script/language. |
 | Blob ABI | `CoverageBlob` v3 is an explicit 32-bit word stream, not a serialized Zig struct; CPU decode validates the header, curve table, and CSR h-band candidate index before upload. |
 | Blob precision | Glyph blobs are 32-bit fixed-point and keyed by precision tier. Unsupported precision tiers are rejected before outline regularization. |
 | Blob references | `GlyphBlobRef` values are byte offsets. |
