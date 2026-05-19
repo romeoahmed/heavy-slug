@@ -3,6 +3,8 @@ const vk = @import("vulkan");
 const heavy_slug = @import("heavy_slug");
 const gpu_context = @import("context.zig");
 const bindings = @import("bindings.zig");
+const draw_plan = @import("draw_plan.zig");
+const memory = @import("memory.zig");
 const shader_program_mod = @import("shader_program.zig");
 const backend_options = @import("heavy_slug_backend_options");
 const render = heavy_slug.core.render.renderer_core;
@@ -11,11 +13,8 @@ const pool_mod = heavy_slug.core.cache.byte_pool;
 const mesh_limits = heavy_slug.gpu.mesh_limits;
 const shader_stats_mod = heavy_slug.gpu.shader_stats;
 
-pub const Error = error{
-    NoSuitableMemoryType,
+pub const Error = memory.Error || draw_plan.Error || error{
     FrameResourcesInUse,
-    InvalidView,
-    MeshWorkgroupLimitExceeded,
 };
 
 pub const RendererOptions = render.RendererOptions;
@@ -92,7 +91,7 @@ pub const Target = struct {
 };
 
 const FrameBatch = heavy_slug.core.render.FrameBatch(bindings.GlyphInstance, bindings.GlyphMeshlet);
-const ShaderStatsBuffers = if (backend_options.shader_stats) [frames_in_flight]MappedBuffer else void;
+const ShaderStatsBuffers = if (backend_options.shader_stats) [frames_in_flight]memory.MappedBuffer else void;
 
 pub const Frame = struct {
     renderer: *Renderer,
@@ -117,118 +116,6 @@ pub const Frame = struct {
     }
 };
 
-/// A host-visible, host-coherent VkBuffer with persistently mapped memory.
-const MappedBuffer = struct {
-    buffer: vk.Buffer,
-    memory: vk.DeviceMemory,
-    mapped: [*]u8,
-    size: vk.DeviceSize,
-};
-
-/// Find a memory type index that satisfies both the type filter (from
-/// VkMemoryRequirements.memoryTypeBits) and the required property flags.
-fn findMemoryType(
-    properties: vk.PhysicalDeviceMemoryProperties,
-    type_filter: u32,
-    required: vk.MemoryPropertyFlags,
-) ?u32 {
-    const required_bits: u32 = @bitCast(required);
-    for (0..properties.memory_type_count) |i| {
-        if (type_filter & (@as(u32, 1) << @as(u5, @intCast(i))) != 0) {
-            const flags_bits: u32 = @bitCast(properties.memory_types[i].property_flags);
-            if (flags_bits & required_bits == required_bits) {
-                return @intCast(i);
-            }
-        }
-    }
-    return null;
-}
-
-fn createMappedBuffer(
-    ctx: gpu_context.Context,
-    size: vk.DeviceSize,
-    usage: vk.BufferUsageFlags,
-) !MappedBuffer {
-    const device = ctx.device;
-    const dispatch = ctx.dispatch;
-    const buffer_ci = vk.BufferCreateInfo{
-        .s_type = .buffer_create_info,
-        .flags = .{},
-        .size = size,
-        .usage = usage,
-        .sharing_mode = .exclusive,
-        .queue_family_index_count = 0,
-        .p_queue_family_indices = null,
-    };
-    const buffer = try dispatch.createBuffer(device, &buffer_ci, null);
-
-    const mem_req = dispatch.getBufferMemoryRequirements(device, buffer);
-
-    const mem_type_index = findMemoryType(
-        ctx.memory_properties,
-        mem_req.memory_type_bits,
-        .{ .host_visible_bit = true, .host_coherent_bit = true },
-    ) orelse {
-        dispatch.destroyBuffer(device, buffer, null);
-        return Error.NoSuitableMemoryType;
-    };
-
-    const alloc_info = vk.MemoryAllocateInfo{
-        .s_type = .memory_allocate_info,
-        .allocation_size = mem_req.size,
-        .memory_type_index = mem_type_index,
-    };
-    const memory = dispatch.allocateMemory(device, &alloc_info, null) catch |err| {
-        dispatch.destroyBuffer(device, buffer, null);
-        return err;
-    };
-    // Buffer and memory both exist; errdefer must destroy buffer before freeing memory.
-    errdefer {
-        dispatch.destroyBuffer(device, buffer, null);
-        dispatch.freeMemory(device, memory, null);
-    }
-
-    try dispatch.bindBufferMemory(device, buffer, memory, 0);
-
-    const mapped_ptr = try dispatch.mapMemory(device, memory, 0, size, .{});
-
-    return .{
-        .buffer = buffer,
-        .memory = memory,
-        .mapped = @ptrCast(mapped_ptr.?),
-        .size = size,
-    };
-}
-
-fn destroyMappedBuffer(self: MappedBuffer, device: vk.Device, dispatch: gpu_context.DeviceDispatch) void {
-    dispatch.unmapMemory(device, self.memory);
-    dispatch.destroyBuffer(device, self.buffer, null);
-    dispatch.freeMemory(device, self.memory, null);
-}
-
-fn validateMeshDrawWorkgroups(
-    props: vk.PhysicalDeviceMeshShaderPropertiesEXT,
-    workgroup_count: u32,
-) Error!void {
-    if (workgroup_count == 0) return;
-    if (workgroup_count > props.max_mesh_work_group_count[0] or
-        workgroup_count > props.max_mesh_work_group_total_count)
-    {
-        return Error.MeshWorkgroupLimitExceeded;
-    }
-}
-
-fn maxMeshWorkgroupsPerDraw(props: vk.PhysicalDeviceMeshShaderPropertiesEXT) u32 {
-    return @min(props.max_mesh_work_group_count[0], props.max_mesh_work_group_total_count);
-}
-
-fn drawChunkCount(workgroup_count: u32, max_workgroups_per_draw: u32) u32 {
-    if (workgroup_count == 0) return 0;
-    std.debug.assert(max_workgroups_per_draw > 0);
-    return (workgroup_count / max_workgroups_per_draw) +
-        @intFromBool(workgroup_count % max_workgroups_per_draw != 0);
-}
-
 /// GPU text renderer using the Slug algorithm for exact glyph coverage.
 ///
 /// **Thread safety:** Not thread-safe. `beginFrame`, `Frame.drawText`,
@@ -250,16 +137,15 @@ pub const Renderer = struct {
     shader_program: shader_program_mod.ShaderProgram,
 
     // Host-visible storage buffers.
-    pool_buffer: MappedBuffer,
-    glyph_buffers: [frames_in_flight]MappedBuffer,
-    meshlet_buffers: [frames_in_flight]MappedBuffer,
+    pool_buffer: memory.MappedBuffer,
+    glyph_buffers: [frames_in_flight]memory.MappedBuffer,
+    meshlet_buffers: [frames_in_flight]memory.MappedBuffer,
     shader_stats_buffers: ShaderStatsBuffers,
     active_frame: u32,
 
     // Per-frame debug counters, compiled to no-ops outside Debug.
     debug_stats: Stats,
 
-    allocator: std.mem.Allocator,
     last_submitted_frame: render.FrameToken,
     completed_frame: render.FrameToken,
     frame_tokens: [frames_in_flight]render.FrameToken,
@@ -286,25 +172,25 @@ pub const Renderer = struct {
         errdefer core.deinit();
 
         // Glyph blob storage, read by the fragment shader.
-        const pool_buf = try createMappedBuffer(
+        const pool_buf = try memory.createMapped(
             ctx,
             options.pool_buffer_size,
             .{ .storage_buffer_bit = true },
         );
-        errdefer destroyMappedBuffer(pool_buf, device, dispatch);
+        errdefer memory.destroy(pool_buf, device, dispatch);
 
         // One glyph instance buffer per frame slot.
         const glyph_buffer_size = @as(vk.DeviceSize, options.max_glyphs_per_frame) *
             @sizeOf(bindings.GlyphInstance);
-        var glyph_buffers: [frames_in_flight]MappedBuffer = undefined;
+        var glyph_buffers: [frames_in_flight]memory.MappedBuffer = undefined;
         var initialized_glyph_buffers: usize = 0;
         errdefer {
             for (glyph_buffers[0..initialized_glyph_buffers]) |glyph_buffer| {
-                destroyMappedBuffer(glyph_buffer, device, dispatch);
+                memory.destroy(glyph_buffer, device, dispatch);
             }
         }
         for (&glyph_buffers) |*glyph_buffer| {
-            glyph_buffer.* = try createMappedBuffer(
+            glyph_buffer.* = try memory.createMapped(
                 ctx,
                 glyph_buffer_size,
                 .{ .storage_buffer_bit = true },
@@ -314,15 +200,15 @@ pub const Renderer = struct {
 
         const meshlet_buffer_size = @as(vk.DeviceSize, mesh_limits.maxMeshletsForGlyphCapacity(options.max_glyphs_per_frame)) *
             @sizeOf(bindings.GlyphMeshlet);
-        var meshlet_buffers: [frames_in_flight]MappedBuffer = undefined;
+        var meshlet_buffers: [frames_in_flight]memory.MappedBuffer = undefined;
         var initialized_meshlet_buffers: usize = 0;
         errdefer {
             for (meshlet_buffers[0..initialized_meshlet_buffers]) |meshlet_buffer| {
-                destroyMappedBuffer(meshlet_buffer, device, dispatch);
+                memory.destroy(meshlet_buffer, device, dispatch);
             }
         }
         for (&meshlet_buffers) |*meshlet_buffer| {
-            meshlet_buffer.* = try createMappedBuffer(
+            meshlet_buffer.* = try memory.createMapped(
                 ctx,
                 meshlet_buffer_size,
                 .{ .storage_buffer_bit = true },
@@ -335,11 +221,11 @@ pub const Renderer = struct {
             var initialized_shader_stats: usize = 0;
             errdefer {
                 for (shader_stats_buffers[0..initialized_shader_stats]) |stats_buf| {
-                    destroyMappedBuffer(stats_buf, device, dispatch);
+                    memory.destroy(stats_buf, device, dispatch);
                 }
             }
             for (&shader_stats_buffers) |*stats_buf| {
-                stats_buf.* = try createMappedBuffer(
+                stats_buf.* = try memory.createMapped(
                     ctx,
                     @sizeOf(heavy_slug.ShaderStats),
                     .{ .storage_buffer_bit = true },
@@ -362,7 +248,6 @@ pub const Renderer = struct {
             .shader_stats_buffers = shader_stats_buffers,
             .active_frame = frames_in_flight - 1,
             .debug_stats = .{},
-            .allocator = allocator,
             .last_submitted_frame = 0,
             .completed_frame = 0,
             .frame_tokens = .{0} ** frames_in_flight,
@@ -448,8 +333,7 @@ pub const Renderer = struct {
     }
 
     pub fn uploadBlob(self: *Renderer, pool_alloc: pool_mod.Allocation, data: []const u8) !GlyphBlobRef {
-        const dst = self.pool_buffer.mapped[pool_alloc.offset..][0..data.len];
-        @memcpy(dst, data);
+        self.pool_buffer.copyFrom(pool_alloc.offset, data);
         return GlyphBlobRef.from(pool_alloc.offset);
     }
 
@@ -465,26 +349,17 @@ pub const Renderer = struct {
     fn submitFrame(self: *Renderer, target: Target, view: core_types.View, glyph_count: u32, meshlet_count: u32) Error!render.FrameToken {
         if (glyph_count == 0 or meshlet_count == 0) return self.last_submitted_frame;
         const vk_cmd = target.command_buffer;
-        const view_size = viewSizeF32(view) orelse return Error.InvalidView;
+        const geometry = try draw_plan.frameGeometry(view);
 
-        const vk_viewport = yUpViewport(view_size);
-        self.dispatch.cmdSetViewportWithCount(vk_cmd, &.{vk_viewport});
-
-        const vk_scissor = vk.Rect2D{
-            .offset = .{ .x = 0, .y = 0 },
-            .extent = .{
-                .width = @intFromFloat(@round(view_size[0])),
-                .height = @intFromFloat(@round(view_size[1])),
-            },
-        };
-        self.dispatch.cmdSetScissorWithCount(vk_cmd, &.{vk_scissor});
+        self.dispatch.cmdSetViewportWithCount(vk_cmd, &.{geometry.viewport});
+        self.dispatch.cmdSetScissorWithCount(vk_cmd, &.{geometry.scissor});
 
         self.shader_program.bind(vk_cmd);
 
         const glyph_buffer = self.glyph_buffers[self.active_frame];
         const meshlet_buffer = self.meshlet_buffers[self.active_frame];
-        const max_workgroups_per_draw = maxMeshWorkgroupsPerDraw(self.mesh_shader_properties);
-        const draw_chunks = drawChunkCount(meshlet_count, max_workgroups_per_draw);
+        const max_workgroups_per_draw = draw_plan.maxMeshWorkgroupsPerDraw(self.mesh_shader_properties);
+        const draw_chunks = draw_plan.chunkCount(meshlet_count, max_workgroups_per_draw);
         if (backend_options.shader_stats) {
             seedShaderStatsBuffer(
                 self.shader_stats_buffers[self.active_frame],
@@ -495,30 +370,14 @@ pub const Renderer = struct {
         }
         const shader_stats_binding: ?bindings.BufferView = if (backend_options.shader_stats) blk: {
             const stats_buffer = self.shader_stats_buffers[self.active_frame];
-            break :blk .{
-                .buffer = stats_buffer.buffer,
-                .offset = 0,
-                .range = @sizeOf(heavy_slug.ShaderStats),
-            };
+            break :blk stats_buffer.view();
         } else null;
         const push_stats = self.frame_bindings.pushFrameBuffers(
             vk_cmd,
             self.shader_program.pipeline_layout,
-            .{
-                .buffer = self.pool_buffer.buffer,
-                .offset = 0,
-                .range = self.pool_buffer.size,
-            },
-            .{
-                .buffer = glyph_buffer.buffer,
-                .offset = 0,
-                .range = glyph_buffer.size,
-            },
-            .{
-                .buffer = meshlet_buffer.buffer,
-                .offset = 0,
-                .range = meshlet_buffer.size,
-            },
+            self.pool_buffer.view(),
+            glyph_buffer.view(),
+            meshlet_buffer.view(),
             shader_stats_binding,
         );
         if (@import("builtin").mode == .Debug) {
@@ -526,18 +385,11 @@ pub const Renderer = struct {
             self.debug_stats.binding_pushes += push_stats.push_calls;
         }
 
-        var meshlet_base: u32 = 0;
-        while (meshlet_base < meshlet_count) {
-            const workgroup_count = @min(meshlet_count - meshlet_base, max_workgroups_per_draw);
-            try validateMeshDrawWorkgroups(self.mesh_shader_properties, workgroup_count);
+        var chunks = draw_plan.ChunkIterator.init(meshlet_count, max_workgroups_per_draw);
+        while (chunks.next()) |chunk| {
+            try draw_plan.validateDrawChunk(self.mesh_shader_properties, chunk.workgroup_count);
 
-            const params = bindings.FrameParams{
-                .viewport_size = view_size,
-                .screen_from_framebuffer_2x2 = .{ 1, 0, 0, -1 },
-                .screen_from_framebuffer_offset = .{ 0, view_size[1] },
-                .meshlet_count = workgroup_count,
-                .meshlet_base = meshlet_base,
-            };
+            const params = draw_plan.frameParams(geometry, chunk);
             self.dispatch.cmdPushConstants(
                 vk_cmd,
                 self.shader_program.pipeline_layout,
@@ -547,8 +399,7 @@ pub const Renderer = struct {
                 @ptrCast(&params),
             );
 
-            self.dispatch.cmdDrawMeshTasksEXT(vk_cmd, workgroup_count, 1, 1);
-            meshlet_base += workgroup_count;
+            self.dispatch.cmdDrawMeshTasksEXT(vk_cmd, chunk.workgroup_count, 1, 1);
         }
         if (@import("builtin").mode == .Debug) {
             self.core.stats.submitted_glyphs += glyph_count;
@@ -565,17 +416,17 @@ pub const Renderer = struct {
     pub fn deinit(self: *Renderer) void {
         self.markFrameComplete(std.math.maxInt(render.FrameToken));
         for (self.glyph_buffers) |glyph_buffer| {
-            destroyMappedBuffer(glyph_buffer, self.device, self.dispatch);
+            memory.destroy(glyph_buffer, self.device, self.dispatch);
         }
         for (self.meshlet_buffers) |meshlet_buffer| {
-            destroyMappedBuffer(meshlet_buffer, self.device, self.dispatch);
+            memory.destroy(meshlet_buffer, self.device, self.dispatch);
         }
         if (backend_options.shader_stats) {
             for (self.shader_stats_buffers) |stats_buf| {
-                destroyMappedBuffer(stats_buf, self.device, self.dispatch);
+                memory.destroy(stats_buf, self.device, self.dispatch);
             }
         }
-        destroyMappedBuffer(self.pool_buffer, self.device, self.dispatch);
+        memory.destroy(self.pool_buffer, self.device, self.dispatch);
 
         self.core.deinit();
         self.shader_program.deinit();
@@ -585,51 +436,18 @@ pub const Renderer = struct {
     }
 };
 
-fn resetShaderStatsBuffer(buffer: MappedBuffer) void {
+fn resetShaderStatsBuffer(buffer: memory.MappedBuffer) void {
     shader_stats_mod.clearBytes(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
 }
 
-fn seedShaderStatsBuffer(buffer: MappedBuffer, glyph_count: u32, meshlet_count: u32, draw_chunks: u32) void {
+fn seedShaderStatsBuffer(buffer: memory.MappedBuffer, glyph_count: u32, meshlet_count: u32, draw_chunks: u32) void {
     const bytes: []align(@alignOf(u32)) u8 = @alignCast(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
     shader_stats_mod.seedFrameSubmission(bytes, glyph_count, meshlet_count, draw_chunks);
 }
 
-fn readShaderStatsBuffer(buffer: MappedBuffer) heavy_slug.ShaderStats {
+fn readShaderStatsBuffer(buffer: memory.MappedBuffer) heavy_slug.ShaderStats {
     const bytes: []align(@alignOf(u32)) const u8 = @alignCast(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
     return shader_stats_mod.Stats.fromBytes(bytes);
-}
-
-fn viewSizeF32(view: core_types.View) ?[2]f32 {
-    if (!view.isFinite()) return null;
-    if (view.width > @as(f64, @floatFromInt(std.math.maxInt(u32))) or
-        view.height > @as(f64, @floatFromInt(std.math.maxInt(u32))))
-    {
-        return null;
-    }
-    return .{
-        @floatCast(view.width),
-        @floatCast(view.height),
-    };
-}
-
-// Match the Metal demo's y-up clip-space convention without changing shared scene input math.
-fn yUpViewport(viewport: [2]f32) vk.Viewport {
-    return .{
-        .x = 0,
-        .y = viewport[1],
-        .width = viewport[0],
-        .height = -viewport[1],
-        .min_depth = 0,
-        .max_depth = 1,
-    };
-}
-
-fn viewportFramebufferY(viewport: vk.Viewport, ndc_y: f32) f32 {
-    return viewport.y + (ndc_y + 1.0) * viewport.height * 0.5;
-}
-
-fn framebufferToScreenYUpForCurrentBackends(framebuffer: [2]f32, viewport: [2]f32) [2]f32 {
-    return .{ framebuffer[0], viewport[1] - framebuffer[1] };
 }
 
 test "RendererOptions has correct defaults" {
@@ -640,77 +458,6 @@ test "RendererOptions has correct defaults" {
     try std.testing.expectEqual(@as(u8, 3), opts.promote_frames);
     try std.testing.expectEqual(@as(u32, 32 * 1024 * 1024), opts.pool_buffer_size);
     try std.testing.expectEqual(@as(u32, 256), opts.min_storage_alignment);
-}
-
-test "findMemoryType selects correct memory type" {
-    var props = std.mem.zeroes(vk.PhysicalDeviceMemoryProperties);
-    props.memory_type_count = 3;
-    props.memory_types[0].property_flags = .{ .device_local_bit = true };
-    props.memory_types[1].property_flags = .{ .host_visible_bit = true };
-    props.memory_types[2].property_flags = .{ .host_visible_bit = true, .host_coherent_bit = true };
-
-    const filter: u32 = 0b111;
-
-    const result = findMemoryType(props, filter, .{ .host_visible_bit = true, .host_coherent_bit = true });
-    try std.testing.expectEqual(@as(?u32, 2), result);
-
-    const dl = findMemoryType(props, filter, .{ .device_local_bit = true });
-    try std.testing.expectEqual(@as(?u32, 0), dl);
-
-    const none = findMemoryType(props, filter, .{ .protected_bit = true });
-    try std.testing.expectEqual(@as(?u32, null), none);
-
-    const filtered = findMemoryType(props, 0b011, .{ .host_visible_bit = true, .host_coherent_bit = true });
-    try std.testing.expectEqual(@as(?u32, null), filtered);
-}
-
-test "mesh workgroup validation follows Vulkan mesh shader draw limits" {
-    var props = std.mem.zeroes(vk.PhysicalDeviceMeshShaderPropertiesEXT);
-    props.max_mesh_work_group_total_count = 4;
-    props.max_mesh_work_group_count = .{ 4, 1, 1 };
-
-    try validateMeshDrawWorkgroups(props, 4);
-    try std.testing.expectError(Error.MeshWorkgroupLimitExceeded, validateMeshDrawWorkgroups(props, 5));
-
-    props.max_mesh_work_group_total_count = 3;
-    try std.testing.expectError(Error.MeshWorkgroupLimitExceeded, validateMeshDrawWorkgroups(props, 4));
-    try std.testing.expectEqual(@as(u32, 3), maxMeshWorkgroupsPerDraw(props));
-    try std.testing.expectEqual(@as(u32, 0), drawChunkCount(0, 3));
-    try std.testing.expectEqual(@as(u32, 1), drawChunkCount(3, 3));
-    try std.testing.expectEqual(@as(u32, 2), drawChunkCount(4, 3));
-}
-
-test "yUpViewport matches the Metal demo clip-space convention" {
-    const viewport = yUpViewport(.{ 1280, 720 });
-
-    try std.testing.expectEqual(@as(f32, 0), viewport.x);
-    try std.testing.expectEqual(@as(f32, 720), viewport.y);
-    try std.testing.expectEqual(@as(f32, 1280), viewport.width);
-    try std.testing.expectEqual(@as(f32, -720), viewport.height);
-    try std.testing.expectEqual(@as(f32, 0), viewportFramebufferY(viewport, 1));
-    try std.testing.expectEqual(@as(f32, 720), viewportFramebufferY(viewport, -1));
-}
-
-test "fragment framebuffer conversion restores y-up screen coordinates" {
-    const viewport = [2]f32{ 1280, 720 };
-    const samples = [_][2]f32{
-        .{ 0, 720 },
-        .{ 10, 640 },
-        .{ 640, 360 },
-        .{ 1279.5, 0.5 },
-    };
-    const expected = [_][2]f32{
-        .{ 0, 0 },
-        .{ 10, 80 },
-        .{ 640, 360 },
-        .{ 1279.5, 719.5 },
-    };
-
-    for (samples, expected) |framebuffer, screen| {
-        const converted = framebufferToScreenYUpForCurrentBackends(framebuffer, viewport);
-        try std.testing.expectEqual(screen[0], converted[0]);
-        try std.testing.expectEqual(screen[1], converted[1]);
-    }
 }
 
 test "Renderer satisfies core backend contract" {

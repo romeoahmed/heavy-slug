@@ -174,8 +174,7 @@ pub const Host = struct {
             };
         }
 
-        var enabled_features = vk_chains.FeatureChain.init();
-        enabled_features.enableRendererFeatures();
+        var enabled_features = gpu_context.Context.requiredFeatureChain();
         enabled_features.enableSynchronization2();
 
         // pp_enabled_layer_names is *const *const u8 (non-optional in this vk.zig version).
@@ -196,7 +195,7 @@ pub const Host = struct {
             demo_idisp.dispatch.vkGetDeviceProcAddr orelse return error.MissingFunction,
         );
         const demo_ddisp = DemoDeviceDispatch.load(device, get_device_proc_addr);
-        const renderer_context = gpu_context.Context.init(
+        const renderer_context = try gpu_context.Context.init(
             physical_device,
             device,
             lib_idisp,

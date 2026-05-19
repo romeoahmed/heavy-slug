@@ -12,6 +12,12 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Vulkan backend refactored:** device requirement validation, host-coherent
+  buffer allocation, and mesh draw planning now live in dedicated modules;
+  `Context.requiredFeatureChain()` exposes the renderer feature pNext chain,
+  `Context.init()` revalidates queried properties, and shader-object binding
+  now explicitly clears unused vertex/tessellation/geometry/task stages before
+  binding the linked no-task mesh/fragment pair.
 - **Shader pipeline rewritten:** shared Slang math helpers and h-band candidate
   traversal now live in dedicated modules, fragment coverage explicitly gates
   candidate-index use before falling back to full scans, mesh emission planning

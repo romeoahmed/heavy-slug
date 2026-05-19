@@ -4,6 +4,7 @@ const gpu_context = @import("context.zig");
 const gpu_structs = @import("gpu_structs");
 const backend_options = @import("heavy_slug_backend_options");
 const heavy_slug = @import("heavy_slug");
+const memory = @import("memory.zig");
 
 const resource_model = heavy_slug.gpu.resource_model;
 
@@ -49,11 +50,7 @@ pub fn frameBufferCount() u32 {
     return resource_model.descriptorBindingCount(backend_options.shader_stats);
 }
 
-pub const BufferView = struct {
-    buffer: vk.Buffer,
-    offset: vk.DeviceSize,
-    range: vk.DeviceSize,
-};
+pub const BufferView = memory.BufferView;
 
 pub const FrameBindings = struct {
     device: vk.Device,

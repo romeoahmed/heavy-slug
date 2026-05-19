@@ -199,7 +199,12 @@ face lifetime never depends on caller-owned transient buffers.
 
 Backend modules expose `Context`, `Renderer`, `Frame`, `Target`,
 `RendererOptions`, `FontHandle`, `FrameToken`, `Stats`, and
-`shader_stats_enabled`. The Metal backend also exposes `Host`, the
+`shader_stats_enabled`. The Vulkan backend also exposes
+`required_api_version`, `required_device_extensions`, and
+`Context.requiredFeatureChain()` so hosts can build the same feature pNext
+chain that `Context.checkDeviceSupport()` validates; `Context.init()` rechecks
+queried device properties and returns `FeatureError` for non-conforming
+devices. The Metal backend also exposes `Host`, the
 `id<MTLDevice>` / `id<MTL4CommandQueue>` / `CAMetalLayer *` creation contract
 used by the Swift bridge. The bridge retains those objects internally, while
 the host keeps the layer attached and configured for presentation. Metal bridge
@@ -276,7 +281,10 @@ cached GPU storage is retired only after the host reports completed work.
 
 The Vulkan backend intentionally uses byte-offset `GlyphBlobRef` values rather
 than per-glyph descriptor slots and binds mesh and fragment stages as linked
-`VK_EXT_shader_object` shader objects. The Metal backend follows the
+`VK_EXT_shader_object` shader objects. Each draw bind explicitly clears unused
+vertex, tessellation, geometry, and task shader-object stages before binding
+the no-task mesh/fragment pair, then records all required dynamic graphics
+state before `vkCmdDrawMeshTasksEXT`. The Metal backend follows the
 Metal 4 command and argument-table path exposed through the Swift bridge; it
 keeps a mesh `MTLRenderPipelineState` because Metal dynamic
 libraries and pipeline dynamic linking do not replace the render pipeline state

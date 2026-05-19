@@ -4,6 +4,9 @@ pub const vk = @import("vulkan");
 pub const bindings = @import("bindings.zig");
 pub const chains = @import("chains.zig");
 pub const context = @import("context.zig");
+pub const draw_plan = @import("draw_plan.zig");
+pub const memory = @import("memory.zig");
+pub const requirements = @import("requirements.zig");
 pub const shader_program = @import("shader_program.zig");
 pub const renderer = @import("renderer.zig");
 
@@ -28,6 +31,9 @@ test {
     _ = bindings;
     _ = chains;
     _ = context;
+    _ = draw_plan;
+    _ = memory;
+    _ = requirements;
     _ = shader_program;
     _ = renderer;
 }
