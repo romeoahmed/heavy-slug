@@ -217,11 +217,13 @@ fn spirvCapabilities(stage: Stage) []const []const u8 {
 fn addSlangImportInputs(b: *std.Build, cmd: *std.Build.Step.Run, target: SlangTarget) void {
     const core_inputs = [_][]const u8{
         "shaders/core/abi.slang",
+        "shaders/core/candidate_index.slang",
         "shaders/core/coverage_blob.slang",
         "shaders/core/coverage_integral.slang",
         "shaders/core/hband.slang",
         "shaders/core/mesh_clip.slang",
         "shaders/core/screen_mapping.slang",
+        "shaders/core/shader_math.slang",
         "shaders/core/stats.slang",
     };
     for (core_inputs) |path| cmd.addFileInput(b.path(path));

@@ -3,39 +3,9 @@ module hband;
 
 // Conservative h-band range selection for curve candidate lookup.
 
+import shader_math;
+
 static const float kHBandEpsilon = 1.0 / 1048576.0;
-static const float kI32MinFloat = -2147483648.0;
-static const float kI32MaxFloat = 2147483520.0;
-
-int boundedQFromFloat(float v, bool upper)
-{
-    if (!isfinite(v))
-        return upper ? 2147483647 : -2147483647 - 1;
-    float rounded = upper ? ceil(v) : floor(v);
-    if (rounded <= kI32MinFloat)
-        return -2147483647 - 1;
-    if (rounded >= kI32MaxFloat)
-        return 2147483647;
-    return int(rounded);
-}
-
-int saturatingAddInt(int a, int b)
-{
-    if (b > 0 && a > 2147483647 - b)
-        return 2147483647;
-    if (b < 0 && a < (-2147483647 - 1) - b)
-        return -2147483647 - 1;
-    return a + b;
-}
-
-public int floorDivInt(int a, int b)
-{
-    int q = a / b;
-    int r = a - q * b;
-    if (r != 0 && ((r < 0) != (b < 0)))
-        q -= 1;
-    return q;
-}
 
 public int anchoredHBandIndexQ(int deltaYQ, int anchorYQ, int bandHeightQ)
 {

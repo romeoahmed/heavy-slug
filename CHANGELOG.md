@@ -12,6 +12,11 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Shader pipeline rewritten:** shared Slang math helpers and h-band candidate
+  traversal now live in dedicated modules, fragment coverage explicitly gates
+  candidate-index use before falling back to full scans, mesh emission planning
+  is factored around a bounded NDC quad clip result, and the GPU ABI now names
+  the eight-band candidate merge limit alongside mesh output budgets.
 - **Core font/cache path rewritten:** font loading now has explicit
   FreeType pixel-size validation plus path and memory-backed `FontSource`
   handling, memory font bytes are owned by `LoadedFont` until after

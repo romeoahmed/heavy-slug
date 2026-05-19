@@ -10,6 +10,11 @@ pub const thread_count: u32 = 32;
 /// to a frame stream.
 pub const max_subdivisions_per_glyph: u32 = 16;
 
+/// Maximum adjacent h-band candidate lists the fragment shader merges before
+/// falling back to a full curve scan. This bounds local arrays and register
+/// pressure on fragment-heavy text.
+pub const max_merged_candidate_bands: u32 = 8;
+
 /// Sutherland-Hodgman clipping of a quad against four NDC half-spaces can emit
 /// at most eight vertices. The triangle fan therefore needs at most six
 /// triangles.
@@ -90,6 +95,7 @@ test "mesh-only limits match the Slang meshlet stream budget" {
     try std.testing.expectEqual(@as(u32, 5), scalar_components_written_per_vertex);
     try std.testing.expectEqual(@as(u32, 8), scalar_components_reserved_per_vertex);
     try std.testing.expectEqual(@as(u32, 16), max_subdivisions_per_glyph);
+    try std.testing.expectEqual(@as(u32, 8), max_merged_candidate_bands);
     try std.testing.expectEqual(payload_and_shared_bytes, shared_bytes);
 }
 

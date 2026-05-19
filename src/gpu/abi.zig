@@ -24,14 +24,31 @@ pub const RequiredStruct = enum {
     FrameParams,
 };
 
+pub const RequiredConstant = enum {
+    kMeshThreadCount,
+    kMaxSubdivisionsPerGlyph,
+    kMeshOutputVertices,
+    kMeshOutputPrimitives,
+    kMaxMergedCandidateBands,
+};
+
 pub const required_structs = [_]RequiredStruct{
     .GlyphInstance,
     .GlyphMeshlet,
     .FrameParams,
 };
 
+pub const required_constants = [_]RequiredConstant{
+    .kMeshThreadCount,
+    .kMaxSubdivisionsPerGlyph,
+    .kMeshOutputVertices,
+    .kMeshOutputPrimitives,
+    .kMaxMergedCandidateBands,
+};
+
 test "GPU ABI is reflection-generated and lists the CPU visible structs" {
     try std.testing.expectEqual(Source.slang_reflection, source);
     try std.testing.expectEqual(LayoutPolicy.reflection_generated_extern_structs, layout_policy);
     try std.testing.expectEqual(@as(usize, 3), required_structs.len);
+    try std.testing.expectEqual(@as(usize, 5), required_constants.len);
 }

@@ -8,6 +8,7 @@ import coverage_blob;
 import mesh_clip;
 import resources;
 import screen_mapping;
+import shader_math;
 import stats;
 
 struct VertexOutput
@@ -28,6 +29,80 @@ groupshared uint s_emit;
 bool rectIsInvalid(int2 rectMinQ, int2 rectMaxQ)
 {
     return rectMaxQ.x <= rectMinQ.x || rectMaxQ.y <= rectMinQ.y;
+}
+
+float quadArea2(float2 p0, float2 p1, float2 p2, float2 p3)
+{
+    return p0.x * p1.y - p0.y * p1.x +
+           p1.x * p2.y - p1.y * p2.x +
+           p2.x * p3.y - p2.y * p3.x +
+           p3.x * p0.y - p3.y * p0.x;
+}
+
+bool meshletQuadNdc(
+    GlyphInstance glyph,
+    GlyphMeshlet meshlet,
+    out float2 p0,
+    out float2 p1,
+    out float2 p2,
+    out float2 p3)
+{
+    p0 = screenToNdc(glyphLocalQToScreen(glyph, meshlet.rect_min_q), pc.viewport_size);
+    p1 = screenToNdc(
+        glyphLocalQToScreen(glyph, int2(meshlet.rect_max_q.x, meshlet.rect_min_q.y)),
+        pc.viewport_size);
+    p2 = screenToNdc(glyphLocalQToScreen(glyph, meshlet.rect_max_q), pc.viewport_size);
+    p3 = screenToNdc(
+        glyphLocalQToScreen(glyph, int2(meshlet.rect_min_q.x, meshlet.rect_max_q.y)),
+        pc.viewport_size);
+
+    return isFinite2(meshlet.screen_anchor_px) &&
+           isFinite2(p0) &&
+           isFinite2(p1) &&
+           isFinite2(p2) &&
+           isFinite2(p3);
+}
+
+bool planMeshletEmission(
+    bool inRange,
+    GlyphInstance glyph,
+    GlyphMeshlet meshlet,
+    out float2 clipped[kMeshOutputVertices],
+    out uint clippedCount,
+    out uint cullReason)
+{
+    clippedCount = 0;
+    cullReason = kMeshletCullNone;
+    for (uint i = 0; i < kMeshOutputVertices; i++)
+        clipped[i] = float2(0.0, 0.0);
+
+    if (!inRange || rectIsInvalid(meshlet.rect_min_q, meshlet.rect_max_q))
+    {
+        cullReason = kMeshletCullInvalidStrip;
+        return false;
+    }
+
+    float2 p0, p1, p2, p3;
+    if (!meshletQuadNdc(glyph, meshlet, p0, p1, p2, p3))
+    {
+        cullReason = kMeshletCullNonFinite;
+        return false;
+    }
+
+    float area2 = quadArea2(p0, p1, p2, p3);
+    if (!isfinite(area2) || abs(area2) <= 1.0e-12)
+    {
+        cullReason = kMeshletCullZeroArea;
+        return false;
+    }
+
+    if (!clipNdcQuad(p0, p1, p2, p3, clipped, clippedCount))
+    {
+        cullReason = kMeshletCullClipEmpty;
+        return false;
+    }
+
+    return true;
 }
 
 [shader("mesh")]
@@ -51,47 +126,10 @@ void meshMain(
 
     if (gtid == 0)
     {
-        bool emit = inRange;
-        uint cullReason = kMeshletCullNone;
-
-        if (!inRange || rectIsInvalid(meshlet.rect_min_q, meshlet.rect_max_q))
-        {
-            emit = false;
-            cullReason = kMeshletCullInvalidStrip;
-        }
-
         float2 clipped[kMeshOutputVertices];
         uint clippedCount = 0;
-        for (uint i = 0; i < kMeshOutputVertices; i++)
-            clipped[i] = float2(0.0, 0.0);
-
-        if (emit)
-        {
-            float2 p0 = screenToNdc(glyphLocalQToScreen(glyph, meshlet.rect_min_q), pc.viewport_size);
-            float2 p1 = screenToNdc(glyphLocalQToScreen(glyph, int2(meshlet.rect_max_q.x, meshlet.rect_min_q.y)), pc.viewport_size);
-            float2 p2 = screenToNdc(glyphLocalQToScreen(glyph, meshlet.rect_max_q), pc.viewport_size);
-            float2 p3 = screenToNdc(glyphLocalQToScreen(glyph, int2(meshlet.rect_min_q.x, meshlet.rect_max_q.y)), pc.viewport_size);
-            float area2 = p0.x * p1.y - p0.y * p1.x +
-                          p1.x * p2.y - p1.y * p2.x +
-                          p2.x * p3.y - p2.y * p3.x +
-                          p3.x * p0.y - p3.y * p0.x;
-            if (!isFinite2(meshlet.screen_anchor_px) || !isFinite2(p0) || !isFinite2(p1) || !isFinite2(p2) || !isFinite2(p3))
-            {
-                emit = false;
-                cullReason = kMeshletCullNonFinite;
-            }
-            else if (abs(area2) <= 1.0e-12)
-            {
-                emit = false;
-                cullReason = kMeshletCullZeroArea;
-            }
-            else
-            {
-                emit = clipNdcQuad(p0, p1, p2, p3, clipped, clippedCount);
-                if (!emit)
-                    cullReason = kMeshletCullClipEmpty;
-            }
-        }
+        uint cullReason = kMeshletCullNone;
+        bool emit = planMeshletEmission(inRange, glyph, meshlet, clipped, clippedCount, cullReason);
 
         s_vertexCount = emit ? clippedCount : 0u;
         s_primitiveCount = emit ? clippedCount - 2u : 0u;

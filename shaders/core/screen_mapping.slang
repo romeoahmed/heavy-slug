@@ -7,6 +7,7 @@ module screen_mapping;
 
 import abi;
 import coverage_blob;
+import shader_math;
 
 public struct LocalFrame
 {
@@ -14,16 +15,6 @@ public struct LocalFrame
     public float2 dx;
     public float2 dy;
 };
-
-public bool isFinite2(float2 v)
-{
-    return isfinite(v.x) && isfinite(v.y);
-}
-
-public float2 mul2x2(float4 m, float2 v)
-{
-    return float2(m.x * v.x + m.z * v.y, m.y * v.x + m.w * v.y);
-}
 
 public float2 glyphLocalQToScreen(GlyphInstance glyph, int2 localQ)
 {

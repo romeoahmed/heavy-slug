@@ -1,18 +1,19 @@
 #language slang 2026
 module coverage_blob;
 
+import shader_math;
+
 // CoverageBlob v3 decoding. The blob is a 32-bit word ABI; all fixed-point
 // coordinates are decoded relative to the current meshlet chart before they
 // become f32.
 
 static const uint BLOB_MAGIC_VERSION = 0x33425348u; // "HSB3", little-endian words.
+static const uint MIN_FRACTION_BITS = 12;
+static const uint MAX_FRACTION_BITS = 24;
 
 static const uint HEADER_WORD_LEN = 17;
 static const uint CURVE_WORD_LEN = 12;
 static const uint BAND_WORD_LEN = 2;
-static const int  EXACT_F32_INT_RADIUS = 16777216;
-static const int  I32_MAX_VALUE = 2147483647;
-static const int  I32_MIN_VALUE = -2147483647 - 1;
 
 static const uint HEADER_MAGIC_VERSION = 0;
 static const uint HEADER_FRACTION_BITS = 1;
@@ -69,7 +70,24 @@ public struct BlobHeader
 
     public bool isSupported()
     {
-        return magicVersion == BLOB_MAGIC_VERSION;
+        if (magicVersion != BLOB_MAGIC_VERSION)
+            return false;
+        if (fractionBits < MIN_FRACTION_BITS || fractionBits > MAX_FRACTION_BITS)
+            return false;
+        if (curveBaseWords < HEADER_WORD_LEN || wordCount < curveBaseWords)
+            return false;
+        return curveCount <= (wordCount - curveBaseWords) / CURVE_WORD_LEN;
+    }
+
+    public bool hasCandidateIndex()
+    {
+        if (bandCount == 0 || bandHeightQ <= 0)
+            return false;
+        if (bandBaseWords < curveBaseWords || idBaseWords < bandBaseWords || wordCount < idBaseWords)
+            return false;
+        if (bandCount > (idBaseWords - bandBaseWords) / BAND_WORD_LEN)
+            return false;
+        return idCount <= wordCount - idBaseWords;
     }
 };
 
@@ -81,46 +99,6 @@ public struct CurveQ
     public int2 p3;
     public int4 bbox; // min_x, min_y, max_x, max_y
 };
-
-bool diffGreaterThanExactRadius(int valueQ, int anchorQ)
-{
-    if (valueQ <= anchorQ)
-        return false;
-    if (anchorQ > I32_MAX_VALUE - EXACT_F32_INT_RADIUS)
-        return false;
-    return valueQ > anchorQ + EXACT_F32_INT_RADIUS;
-}
-
-bool diffLessThanNegativeExactRadius(int valueQ, int anchorQ)
-{
-    if (valueQ >= anchorQ)
-        return false;
-    if (anchorQ < I32_MIN_VALUE + EXACT_F32_INT_RADIUS)
-        return false;
-    return valueQ < anchorQ - EXACT_F32_INT_RADIUS;
-}
-
-public bool componentFitsExactRelative(int valueQ, int anchorQ)
-{
-    return !diffGreaterThanExactRadius(valueQ, anchorQ) &&
-           !diffLessThanNegativeExactRadius(valueQ, anchorQ);
-}
-
-public int relativeClampQ(int valueQ, int anchorQ)
-{
-    if (diffGreaterThanExactRadius(valueQ, anchorQ))
-        return EXACT_F32_INT_RADIUS;
-    if (diffLessThanNegativeExactRadius(valueQ, anchorQ))
-        return -EXACT_F32_INT_RADIUS;
-    return valueQ - anchorQ;
-}
-
-public int2 relativeClampQ2(int2 valueQ, int2 anchorQ)
-{
-    return int2(
-        relativeClampQ(valueQ.x, anchorQ.x),
-        relativeClampQ(valueQ.y, anchorQ.y));
-}
 
 public struct BlobReader
 {
@@ -200,22 +178,6 @@ public struct BlobReader
             relativeClampQ(bbox.y, anchorQ.y),
             relativeClampQ(bbox.z, anchorQ.x),
             relativeClampQ(bbox.w, anchorQ.y)) * invScale;
-    }
-
-    public bool curveFitsExactRelative(CurveQ c, int2 anchorQ)
-    {
-        return componentFitsExactRelative(c.p0.x, anchorQ.x) &&
-               componentFitsExactRelative(c.p0.y, anchorQ.y) &&
-               componentFitsExactRelative(c.p1.x, anchorQ.x) &&
-               componentFitsExactRelative(c.p1.y, anchorQ.y) &&
-               componentFitsExactRelative(c.p2.x, anchorQ.x) &&
-               componentFitsExactRelative(c.p2.y, anchorQ.y) &&
-               componentFitsExactRelative(c.p3.x, anchorQ.x) &&
-               componentFitsExactRelative(c.p3.y, anchorQ.y) &&
-               componentFitsExactRelative(c.bbox.x, anchorQ.x) &&
-               componentFitsExactRelative(c.bbox.y, anchorQ.y) &&
-               componentFitsExactRelative(c.bbox.z, anchorQ.x) &&
-               componentFitsExactRelative(c.bbox.w, anchorQ.y);
     }
 
     public void curvePointsRelative(

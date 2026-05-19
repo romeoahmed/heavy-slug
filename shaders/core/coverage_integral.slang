@@ -4,6 +4,7 @@ module coverage_integral;
 // Analytic cubic coverage integration helpers.
 
 import coverage_blob;
+import shader_math;
 
 struct Cubic
 {

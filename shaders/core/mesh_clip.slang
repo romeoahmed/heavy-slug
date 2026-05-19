@@ -5,7 +5,7 @@ module mesh_clip;
 // mesh shader should only emit bounded W=1 positions.
 
 import abi;
-import screen_mapping;
+import shader_math;
 
 static const uint kClipPlaneLeft = 0;
 static const uint kClipPlaneRight = 1;

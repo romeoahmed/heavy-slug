@@ -286,7 +286,7 @@ model for this renderer.
 
 | Path | Role |
 | --- | --- |
-| `shaders/core/` | Shared ABI, coverage, h-band, chart mapping, and stats logic. |
+| `shaders/core/` | Shared ABI, numeric helpers, coverage, h-band candidate indexing, chart mapping, and stats logic. |
 | `shaders/backend_vulkan/` | Vulkan resource binding shim. |
 | `shaders/backend_metal/` | Metal resource binding shim. |
 | `shaders/entries/mesh.slang` | Mesh shader entry for CPU-authored glyph meshlets. |
@@ -297,7 +297,10 @@ source-declared entry points to SPIR-V 1.6 for Vulkan and Metal Shading
 Language for Metal. GPU ABI structs are generated from Slang reflection by
 `tools/layout_gen.zig`; the hot ABI keeps glyph-wide chart transforms in
 `GlyphInstance` and per-strip bounds/anchors in `GlyphMeshlet` to avoid
-duplicating matrices across meshlets.
+duplicating matrices across meshlets. Fragment candidate lookup merges at most
+eight adjacent h-band lists before falling back to a full curve scan, keeping
+local arrays and register pressure bounded while preserving the same analytic
+coverage result.
 
 <details>
 <summary>Shader output paths</summary>
