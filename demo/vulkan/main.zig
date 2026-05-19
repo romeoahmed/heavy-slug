@@ -37,14 +37,18 @@ pub fn main() !void {
         window.pollEvents();
         if (window.should_close or window.input().getKey(.escape)) break;
 
-        const fb_size = window.framebufferSize();
-        if (fb_size[0] != host.swapchain_extent.width or fb_size[1] != host.swapchain_extent.height) {
-            try host.recreateSwapchain(&window);
-        }
-
         const now = window.time();
         const dt: f32 = @floatCast(now - last_time);
         last_time = now;
+
+        const fb_size = window.framebufferSize();
+        if (fb_size[0] == 0 or fb_size[1] == 0) {
+            if (host.swapchain != .null_handle) try host.recreateSwapchain(&window);
+            continue;
+        }
+        if (fb_size[0] != host.swapchain_extent.width or fb_size[1] != host.swapchain_extent.height) {
+            try host.recreateSwapchain(&window);
+        }
 
         const w: f32 = @floatFromInt(host.swapchain_extent.width);
         const h: f32 = @floatFromInt(host.swapchain_extent.height);

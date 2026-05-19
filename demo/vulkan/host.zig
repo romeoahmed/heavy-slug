@@ -106,7 +106,7 @@ pub const Host = struct {
     command_pool: vk.CommandPool = .null_handle,
     command_buffers: [frames_in_flight]vk.CommandBuffer = .{.null_handle} ** frames_in_flight,
     image_available: [frames_in_flight]vk.Semaphore = .{.null_handle} ** frames_in_flight,
-    render_finished: [frames_in_flight]vk.Semaphore = .{.null_handle} ** frames_in_flight,
+    submit_finished: []vk.Semaphore = &.{},
     in_flight_fences: [frames_in_flight]vk.Fence = .{.null_handle} ** frames_in_flight,
     frame_index: u32 = 0,
     /// Linear RGBA clear color. Vulkan converts to sRGB on write for sRGB swapchain formats.
@@ -256,7 +256,6 @@ pub const Host = struct {
 
         for (0..frames_in_flight) |i| {
             self.image_available[i] = try self.demo_ddisp.createSemaphore(self.device, &.{}, null);
-            self.render_finished[i] = try self.demo_ddisp.createSemaphore(self.device, &.{}, null);
             self.in_flight_fences[i] = try self.demo_ddisp.createFence(self.device, &.{
                 .flags = .{ .signaled_bit = true },
             }, null);
@@ -269,6 +268,8 @@ pub const Host = struct {
         image: vk.Image,
         image_index: u32,
         frame_index: u32,
+        submit_finished: vk.Semaphore,
+        suboptimal: bool,
     };
 
     pub fn createSwapchain(self: *Host, window: *const demo_platform.Window) !void {
@@ -277,64 +278,57 @@ pub const Host = struct {
             self.surface,
         );
 
-        const fb_size = window.framebufferSize();
-        self.swapchain_extent = .{
-            .width = std.math.clamp(fb_size[0], caps.min_image_extent.width, caps.max_image_extent.width),
-            .height = std.math.clamp(fb_size[1], caps.min_image_extent.height, caps.max_image_extent.height),
-        };
+        const extent = chooseSwapchainExtent(caps, window.framebufferSize());
+        if (extent.width == 0 or extent.height == 0) {
+            self.destroySwapchain();
+            self.swapchain_extent = extent;
+            return;
+        }
+        if (!caps.supported_usage_flags.color_attachment_bit) return error.SurfaceColorAttachmentUnsupported;
 
-        if (self.swapchain_extent.width == 0 or self.swapchain_extent.height == 0) return;
-
-        var image_count = caps.min_image_count + 1;
-        if (caps.max_image_count > 0) image_count = @min(image_count, caps.max_image_count);
+        const image_count = chooseSwapchainImageCount(caps);
 
         const same_family = self.graphics_family == self.present_family;
         const families = [_]u32{ self.graphics_family, self.present_family };
 
         const old_swapchain = self.swapchain;
-        self.swapchain = try self.demo_ddisp.createSwapchainKHR(self.device, &.{
+        const new_swapchain = try self.demo_ddisp.createSwapchainKHR(self.device, &.{
             .surface = self.surface,
             .min_image_count = image_count,
             .image_format = self.surface_format.format,
             .image_color_space = self.surface_format.color_space,
-            .image_extent = self.swapchain_extent,
+            .image_extent = extent,
             .image_array_layers = 1,
             .image_usage = .{ .color_attachment_bit = true },
             .image_sharing_mode = if (same_family) .exclusive else .concurrent,
             .queue_family_index_count = if (same_family) 0 else 2,
             .p_queue_family_indices = if (same_family) null else &families,
             .pre_transform = caps.current_transform,
-            .composite_alpha = .{ .opaque_bit_khr = true },
+            .composite_alpha = chooseCompositeAlpha(caps.supported_composite_alpha),
             .present_mode = .fifo_khr,
             .clipped = .true,
             .old_swapchain = old_swapchain,
         }, null);
-
-        if (old_swapchain != .null_handle) {
-            self.destroySwapchainResources();
-            self.demo_ddisp.destroySwapchainKHR(self.device, old_swapchain, null);
-        }
+        errdefer self.demo_ddisp.destroySwapchainKHR(self.device, new_swapchain, null);
 
         var img_count: u32 = 0;
-        _ = try self.demo_ddisp.getSwapchainImagesKHR(self.device, self.swapchain, &img_count, null);
-        self.swapchain_images = try self.allocator.alloc(vk.Image, img_count);
+        _ = try self.demo_ddisp.getSwapchainImagesKHR(self.device, new_swapchain, &img_count, null);
+        const images = try self.allocator.alloc(vk.Image, img_count);
         errdefer {
-            self.allocator.free(self.swapchain_images);
-            self.swapchain_images = &.{};
+            self.allocator.free(images);
         }
-        _ = try self.demo_ddisp.getSwapchainImagesKHR(self.device, self.swapchain, &img_count, self.swapchain_images.ptr);
+        _ = try self.demo_ddisp.getSwapchainImagesKHR(self.device, new_swapchain, &img_count, images.ptr);
 
-        self.swapchain_views = try self.allocator.alloc(vk.ImageView, img_count);
+        const views = try self.allocator.alloc(vk.ImageView, img_count);
         var views_created: usize = 0;
         errdefer {
-            for (self.swapchain_views[0..views_created]) |view| {
+            for (views[0..views_created]) |view| {
                 self.demo_ddisp.destroyImageView(self.device, view, null);
             }
-            self.allocator.free(self.swapchain_views);
-            self.swapchain_views = &.{};
+            self.allocator.free(views);
         }
-        for (self.swapchain_images, 0..) |img, i| {
-            self.swapchain_views[i] = try self.demo_ddisp.createImageView(self.device, &.{
+        for (images, 0..) |img, i| {
+            views[i] = try self.demo_ddisp.createImageView(self.device, &.{
                 .image = img,
                 .view_type = .@"2d",
                 .format = self.surface_format.format,
@@ -349,16 +343,54 @@ pub const Host = struct {
             }, null);
             views_created += 1;
         }
+
+        const submit_finished = try self.allocator.alloc(vk.Semaphore, img_count);
+        var semaphores_created: usize = 0;
+        errdefer {
+            for (submit_finished[0..semaphores_created]) |semaphore| {
+                self.demo_ddisp.destroySemaphore(self.device, semaphore, null);
+            }
+            self.allocator.free(submit_finished);
+        }
+        for (submit_finished) |*semaphore| {
+            semaphore.* = try self.demo_ddisp.createSemaphore(self.device, &.{}, null);
+            semaphores_created += 1;
+        }
+
+        self.destroySwapchainResources();
+        if (old_swapchain != .null_handle) {
+            self.demo_ddisp.destroySwapchainKHR(self.device, old_swapchain, null);
+        }
+
+        self.swapchain = new_swapchain;
+        self.swapchain_images = images;
+        self.swapchain_views = views;
+        self.submit_finished = submit_finished;
+        self.swapchain_extent = extent;
     }
 
     fn destroySwapchainResources(self: *Host) void {
         for (self.swapchain_views) |view| {
             self.demo_ddisp.destroyImageView(self.device, view, null);
         }
+        for (self.submit_finished) |semaphore| {
+            self.demo_ddisp.destroySemaphore(self.device, semaphore, null);
+        }
         if (self.swapchain_views.len > 0) self.allocator.free(self.swapchain_views);
         if (self.swapchain_images.len > 0) self.allocator.free(self.swapchain_images);
+        if (self.submit_finished.len > 0) self.allocator.free(self.submit_finished);
         self.swapchain_views = &.{};
         self.swapchain_images = &.{};
+        self.submit_finished = &.{};
+    }
+
+    fn destroySwapchain(self: *Host) void {
+        self.destroySwapchainResources();
+        if (self.swapchain != .null_handle) {
+            self.demo_ddisp.destroySwapchainKHR(self.device, self.swapchain, null);
+            self.swapchain = .null_handle;
+        }
+        self.swapchain_extent = .{ .width = 0, .height = 0 };
     }
 
     pub fn beginFrame(self: *Host) !?SwapchainFrame {
@@ -380,7 +412,6 @@ pub const Host = struct {
             error.OutOfDateKHR => return null,
             else => return err,
         };
-        if (acquire_result.result == .suboptimal_khr) return null;
         image_index = acquire_result.image_index;
 
         try self.demo_ddisp.resetFences(self.device, self.in_flight_fences[fi .. fi + 1]);
@@ -420,6 +451,8 @@ pub const Host = struct {
             .image = self.swapchain_images[image_index],
             .image_index = image_index,
             .frame_index = fi,
+            .submit_finished = self.submit_finished[image_index],
+            .suboptimal = acquire_result.result == .suboptimal_khr,
         };
     }
 
@@ -441,7 +474,7 @@ pub const Host = struct {
             .device_index = 0,
         };
         const signal_info = vk.SemaphoreSubmitInfo{
-            .semaphore = self.render_finished[fi],
+            .semaphore = frame.submit_finished,
             .stage_mask = .{ .all_commands_bit = true },
             .value = 0,
             .device_index = 0,
@@ -460,19 +493,23 @@ pub const Host = struct {
         };
         try self.demo_ddisp.queueSubmit2(self.graphics_queue, &[_]vk.SubmitInfo2{submit_info}, self.in_flight_fences[fi]);
 
-        var needs_recreate = false;
-        _ = self.demo_ddisp.queuePresentKHR(self.present_queue, &vk.PresentInfoKHR{
+        var needs_recreate = frame.suboptimal;
+        const present_result = self.demo_ddisp.queuePresentKHR(self.present_queue, &vk.PresentInfoKHR{
             .wait_semaphore_count = 1,
-            .p_wait_semaphores = @ptrCast(&self.render_finished[fi]),
+            .p_wait_semaphores = @ptrCast(&frame.submit_finished),
             .swapchain_count = 1,
             .p_swapchains = @ptrCast(&self.swapchain),
             .p_image_indices = @ptrCast(&frame.image_index),
         }) catch |err| switch (err) {
-            error.OutOfDateKHR => {
+            error.OutOfDateKHR => blk: {
                 needs_recreate = true;
+                break :blk .success;
             },
             else => return err,
         };
+        if (present_result == .suboptimal_khr) {
+            needs_recreate = true;
+        }
 
         self.frame_index = (fi + 1) % frames_in_flight;
         return needs_recreate;
@@ -537,18 +574,13 @@ pub const Host = struct {
         for (0..frames_in_flight) |i| {
             if (self.image_available[i] != .null_handle)
                 self.demo_ddisp.destroySemaphore(self.device, self.image_available[i], null);
-            if (self.render_finished[i] != .null_handle)
-                self.demo_ddisp.destroySemaphore(self.device, self.render_finished[i], null);
             if (self.in_flight_fences[i] != .null_handle)
                 self.demo_ddisp.destroyFence(self.device, self.in_flight_fences[i], null);
         }
         if (self.command_pool != .null_handle)
             self.demo_ddisp.destroyCommandPool(self.device, self.command_pool, null);
 
-        self.destroySwapchainResources();
-        if (self.swapchain != .null_handle) {
-            self.demo_ddisp.destroySwapchainKHR(self.device, self.swapchain, null);
-        }
+        self.destroySwapchain();
 
         self.demo_ddisp.destroyDevice(self.device, null);
 
@@ -556,6 +588,38 @@ pub const Host = struct {
         self.demo_idisp.destroyInstance(self.instance, null);
     }
 };
+
+fn chooseSwapchainExtent(caps: vk.SurfaceCapabilitiesKHR, framebuffer_size: [2]u32) vk.Extent2D {
+    if (caps.current_extent.width != std.math.maxInt(u32)) return caps.current_extent;
+    if (framebuffer_size[0] == 0 or framebuffer_size[1] == 0) {
+        return .{ .width = 0, .height = 0 };
+    }
+    return .{
+        .width = std.math.clamp(
+            framebuffer_size[0],
+            caps.min_image_extent.width,
+            caps.max_image_extent.width,
+        ),
+        .height = std.math.clamp(
+            framebuffer_size[1],
+            caps.min_image_extent.height,
+            caps.max_image_extent.height,
+        ),
+    };
+}
+
+fn chooseSwapchainImageCount(caps: vk.SurfaceCapabilitiesKHR) u32 {
+    const preferred = caps.min_image_count + 1;
+    if (caps.max_image_count == 0) return preferred;
+    return @min(preferred, caps.max_image_count);
+}
+
+fn chooseCompositeAlpha(supported: vk.CompositeAlphaFlagsKHR) vk.CompositeAlphaFlagsKHR {
+    if (supported.opaque_bit_khr) return .{ .opaque_bit_khr = true };
+    if (supported.pre_multiplied_bit_khr) return .{ .pre_multiplied_bit_khr = true };
+    if (supported.post_multiplied_bit_khr) return .{ .post_multiplied_bit_khr = true };
+    return .{ .inherit_bit_khr = true };
+}
 
 fn supportsDeviceExtensions(
     pdev: vk.PhysicalDevice,
@@ -620,4 +684,73 @@ fn findQueueFamilies(
         if (gfx != null and present != null) break;
     }
     return .{ gfx orelse return error.NoGraphicsQueue, present orelse return error.NoPresentQueue };
+}
+
+fn testSurfaceCapabilities() vk.SurfaceCapabilitiesKHR {
+    var caps = std.mem.zeroes(vk.SurfaceCapabilitiesKHR);
+    caps.current_extent = .{
+        .width = std.math.maxInt(u32),
+        .height = std.math.maxInt(u32),
+    };
+    caps.min_image_extent = .{ .width = 64, .height = 32 };
+    caps.max_image_extent = .{ .width = 4096, .height = 2160 };
+    caps.min_image_count = 2;
+    caps.max_image_count = 3;
+    caps.supported_composite_alpha = .{ .opaque_bit_khr = true };
+    caps.supported_usage_flags = .{ .color_attachment_bit = true };
+    return caps;
+}
+
+test "Vulkan demo swapchain extent follows fixed surface extent" {
+    var caps = testSurfaceCapabilities();
+    caps.current_extent = .{ .width = 1280, .height = 720 };
+
+    try std.testing.expectEqual(
+        vk.Extent2D{ .width = 1280, .height = 720 },
+        chooseSwapchainExtent(caps, .{ 640, 480 }),
+    );
+}
+
+test "Vulkan demo swapchain extent clamps framebuffer size and preserves minimization" {
+    const caps = testSurfaceCapabilities();
+
+    try std.testing.expectEqual(
+        vk.Extent2D{ .width = 64, .height = 32 },
+        chooseSwapchainExtent(caps, .{ 1, 1 }),
+    );
+    try std.testing.expectEqual(
+        vk.Extent2D{ .width = 4096, .height = 2160 },
+        chooseSwapchainExtent(caps, .{ 8192, 4096 }),
+    );
+    try std.testing.expectEqual(
+        vk.Extent2D{ .width = 0, .height = 0 },
+        chooseSwapchainExtent(caps, .{ 0, 720 }),
+    );
+}
+
+test "Vulkan demo swapchain image count respects bounded and unbounded caps" {
+    var caps = testSurfaceCapabilities();
+    try std.testing.expectEqual(@as(u32, 3), chooseSwapchainImageCount(caps));
+
+    caps.max_image_count = 0;
+    try std.testing.expectEqual(@as(u32, 3), chooseSwapchainImageCount(caps));
+
+    caps.min_image_count = 3;
+    caps.max_image_count = 3;
+    try std.testing.expectEqual(@as(u32, 3), chooseSwapchainImageCount(caps));
+}
+
+test "Vulkan demo composite alpha prefers opaque and falls back deterministically" {
+    try std.testing.expectEqual(
+        vk.CompositeAlphaFlagsKHR{ .opaque_bit_khr = true },
+        chooseCompositeAlpha(.{ .opaque_bit_khr = true, .inherit_bit_khr = true }),
+    );
+    try std.testing.expectEqual(
+        vk.CompositeAlphaFlagsKHR{ .pre_multiplied_bit_khr = true },
+        chooseCompositeAlpha(.{ .pre_multiplied_bit_khr = true }),
+    );
+    try std.testing.expectEqual(
+        vk.CompositeAlphaFlagsKHR{ .inherit_bit_khr = true },
+        chooseCompositeAlpha(.{ .inherit_bit_khr = true }),
+    );
 }

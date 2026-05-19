@@ -38,6 +38,11 @@ implementation notes belong in commits and code review history.
   requires the task shader feature or task payload limits for the default
   renderer path; mesh workgroup dispatch count now equals the CPU meshlet
   count.
+- **Vulkan Windows demo startup fixed:** the Vulkan shader-object path now
+  creates mesh shader objects with explicit no-task usage, clears the vertex
+  stage when binding mesh/fragment shader objects, and hardens swapchain
+  extent, suboptimal-image, minimization, and present semaphore handling for
+  native Win32 startup.
 - **Mesh-only diagnostics cleaned up:** shader-stat counters and backend logs
   now report submitted glyphs, submitted meshlets, draw chunks, and meshlet-cull
   outcomes directly instead of preserving obsolete task-shader terminology.

@@ -6,7 +6,13 @@ const gpu_context = @import("context.zig");
 const bindings = @import("bindings.zig");
 const spirv = @import("spirv_shaders");
 
-const stages = [_]vk.ShaderStageFlags{
+const create_stages = [_]vk.ShaderStageFlags{
+    .{ .mesh_bit_ext = true },
+    .{ .fragment_bit = true },
+};
+
+const bind_stages = [_]vk.ShaderStageFlags{
+    .{ .vertex_bit = true },
     .{ .mesh_bit_ext = true },
     .{ .fragment_bit = true },
 };
@@ -15,7 +21,7 @@ pub const ShaderProgram = struct {
     device: vk.Device,
     dispatch: gpu_context.DeviceDispatch,
     pipeline_layout: vk.PipelineLayout,
-    shaders: [stages.len]vk.ShaderEXT,
+    shaders: [create_stages.len]vk.ShaderEXT,
 
     pub fn init(
         ctx: gpu_context.Context,
@@ -42,7 +48,7 @@ pub const ShaderProgram = struct {
         const pipeline_layout = try dispatch.createPipelineLayout(device, &layout_ci, null);
         errdefer dispatch.destroyPipelineLayout(device, pipeline_layout, null);
 
-        var shaders: [stages.len]vk.ShaderEXT = .{.null_handle} ** stages.len;
+        var shaders: [create_stages.len]vk.ShaderEXT = .{.null_handle} ** create_stages.len;
         errdefer destroyShaders(device, dispatch, shaders);
 
         const set_layouts = [_]vk.DescriptorSetLayout{frame_set_layout};
@@ -60,7 +66,12 @@ pub const ShaderProgram = struct {
     }
 
     pub fn bind(self: ShaderProgram, command_buffer: vk.CommandBuffer) void {
-        self.dispatch.cmdBindShadersEXT(command_buffer, &stages, &self.shaders);
+        const bound_shaders = [_]vk.ShaderEXT{
+            .null_handle,
+            self.shaders[0],
+            self.shaders[1],
+        };
+        self.dispatch.cmdBindShadersEXT(command_buffer, &bind_stages, &bound_shaders);
         setFixedDynamicState(self.dispatch, command_buffer);
     }
 
@@ -74,11 +85,12 @@ pub const ShaderProgram = struct {
 fn shaderCreateInfos(
     set_layouts: []const vk.DescriptorSetLayout,
     push_ranges: []const vk.PushConstantRange,
-) [stages.len]vk.ShaderCreateInfoEXT {
+) [create_stages.len]vk.ShaderCreateInfoEXT {
     return .{
         shaderCreateInfo(
             .{ .mesh_bit_ext = true },
             .{ .fragment_bit = true },
+            .{ .link_stage_bit_ext = true, .no_task_shader_bit_ext = true },
             spirv.mesh,
             set_layouts,
             push_ranges,
@@ -86,6 +98,7 @@ fn shaderCreateInfos(
         shaderCreateInfo(
             .{ .fragment_bit = true },
             .{},
+            .{ .link_stage_bit_ext = true },
             spirv.fragment,
             set_layouts,
             push_ranges,
@@ -96,12 +109,13 @@ fn shaderCreateInfos(
 fn shaderCreateInfo(
     stage: vk.ShaderStageFlags,
     next_stage: vk.ShaderStageFlags,
+    flags: vk.ShaderCreateFlagsEXT,
     code: []align(4) const u8,
     set_layouts: []const vk.DescriptorSetLayout,
     push_ranges: []const vk.PushConstantRange,
 ) vk.ShaderCreateInfoEXT {
     return .{
-        .flags = .{ .link_stage_bit_ext = true },
+        .flags = flags,
         .stage = stage,
         .next_stage = next_stage,
         .code_type = .spirv_ext,
@@ -118,7 +132,7 @@ fn shaderCreateInfo(
 fn destroyShaders(
     device: vk.Device,
     dispatch: gpu_context.DeviceDispatch,
-    shaders: [stages.len]vk.ShaderEXT,
+    shaders: [create_stages.len]vk.ShaderEXT,
 ) void {
     for (shaders) |shader| {
         if (shader != .null_handle) dispatch.destroyShaderEXT(device, shader, null);
@@ -192,7 +206,21 @@ test "SPIR-V length is multiple of 4 (u32-aligned words)" {
     try std.testing.expectEqual(@as(usize, 0), spirv.fragment.len % 4);
 }
 
-test "shader object stages are mesh fragment" {
-    try std.testing.expect(stages[0].mesh_bit_ext);
-    try std.testing.expect(stages[1].fragment_bit);
+test "shader object creation stages are linked mesh and fragment" {
+    try std.testing.expect(create_stages[0].mesh_bit_ext);
+    try std.testing.expect(create_stages[1].fragment_bit);
+}
+
+test "shader object bind stages explicitly clear vertex for mesh draws" {
+    try std.testing.expect(bind_stages[0].vertex_bit);
+    try std.testing.expect(bind_stages[1].mesh_bit_ext);
+    try std.testing.expect(bind_stages[2].fragment_bit);
+}
+
+test "mesh shader object declares no-task usage" {
+    const infos = shaderCreateInfos(&.{}, &.{});
+    try std.testing.expect(infos[0].flags.link_stage_bit_ext);
+    try std.testing.expect(infos[0].flags.no_task_shader_bit_ext);
+    try std.testing.expect(infos[1].flags.link_stage_bit_ext);
+    try std.testing.expect(!infos[1].flags.no_task_shader_bit_ext);
 }
