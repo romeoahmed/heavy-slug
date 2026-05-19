@@ -47,6 +47,7 @@ extern fn hs_demo_cocoa_window_create(
 ) Status;
 extern fn hs_demo_cocoa_window_destroy(host: ?*WindowHandle) void;
 extern fn hs_demo_cocoa_window_poll_events(host: ?*WindowHandle) void;
+extern fn hs_demo_cocoa_window_set_dark_mode(host: ?*WindowHandle, enabled: U8) void;
 extern fn hs_demo_cocoa_window_snapshot(
     host: ?*WindowHandle,
     keys: ?[*]U8,
@@ -86,6 +87,10 @@ fn bufferPtr(bytes: []u8) ?[*]U8 {
     return if (bytes.len == 0) null else bytes.ptr;
 }
 
+fn boolByte(value: bool) U8 {
+    return @intFromBool(value);
+}
+
 pub const Window = struct {
     handle: *WindowHandle = undefined,
     input_state: demo_input.State = .{},
@@ -111,6 +116,7 @@ pub const Window = struct {
             return Error.WindowCreateFailed;
         }
         self.* = .{ .handle = handle orelse return Error.WindowCreateFailed };
+        self.setDarkMode(false);
         self.refreshSnapshot();
     }
 
@@ -122,6 +128,10 @@ pub const Window = struct {
     pub fn pollEvents(self: *Window) void {
         hs_demo_cocoa_window_poll_events(self.handle);
         self.refreshSnapshot();
+    }
+
+    pub fn setDarkMode(self: *Window, enabled: bool) void {
+        hs_demo_cocoa_window_set_dark_mode(self.handle, boolByte(enabled));
     }
 
     pub fn input(self: *Window) *demo_input.State {
@@ -230,4 +240,9 @@ test "Cocoa window requires positive initial extents" {
     try std.testing.expect(!validInitialExtent(1, 0));
     try std.testing.expect(!validInitialExtent(-1, 1));
     try std.testing.expect(!validInitialExtent(1, -1));
+}
+
+test "Cocoa ABI encodes bools as byte flags" {
+    try std.testing.expectEqual(@as(U8, 0), boolByte(false));
+    try std.testing.expectEqual(@as(U8, 1), boolByte(true));
 }

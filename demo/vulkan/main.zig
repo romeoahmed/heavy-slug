@@ -53,7 +53,7 @@ pub fn main() !void {
         const w: f32 = @floatFromInt(host.swapchain_extent.width);
         const h: f32 = @floatFromInt(host.swapchain_extent.height);
         scene.update(window.input(), dt, now, w, h);
-        window.setDarkMode(scene.dark_mode);
+        window.setDarkMode(scene.darkModeEnabled());
         host.clear_color = scene.clearColor();
 
         const frame = try host.beginFrame() orelse {

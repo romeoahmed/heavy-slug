@@ -45,6 +45,7 @@ pub fn main() !void {
         const w: f32 = @floatFromInt(size[0]);
         const h: f32 = @floatFromInt(size[1]);
         scene.update(window.input(), dt, now, w, h);
+        window.setDarkMode(scene.darkModeEnabled());
 
         var text_frame = try text_renderer.beginFrame(scene.frameView(w, h));
         try scene.draw(&text_frame, font);

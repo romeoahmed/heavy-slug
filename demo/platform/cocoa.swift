@@ -30,6 +30,24 @@ private enum MouseButton: Int {
   case right = 1
 }
 
+private enum DemoColorScheme {
+  case light
+  case dark
+
+  init(darkModeEnabled: Bool) {
+    self = darkModeEnabled ? .dark : .light
+  }
+
+  var appearanceName: NSAppearance.Name {
+    switch self {
+    case .light:
+      return .aqua
+    case .dark:
+      return .darkAqua
+    }
+  }
+}
+
 private let keyCount = 10
 private let mouseButtonCount = 2
 
@@ -166,6 +184,7 @@ private final class DemoWindowHost {
   var framebufferWidth: UInt32 = 0
   var framebufferHeight: UInt32 = 0
   var shouldClose = false
+  var colorScheme: DemoColorScheme = .light
   let startTime = CACurrentMediaTime()
 
   init(device: MTLDevice, commandQueue: MTL4CommandQueue, layer: CAMetalLayer) {
@@ -225,6 +244,25 @@ private final class DemoWindowHost {
 
   func setMouseButton(_ button: MouseButton, pressed: Bool) {
     mouseButtons[button.rawValue] = pressed
+  }
+
+  func setDarkMode(_ enabled: Bool) {
+    let nextScheme = DemoColorScheme(darkModeEnabled: enabled)
+    if colorScheme != nextScheme {
+      colorScheme = nextScheme
+    }
+    applyColorScheme()
+  }
+
+  func applyColorScheme() {
+    guard let appearance = NSAppearance(named: colorScheme.appearanceName) else {
+      return
+    }
+
+    NSApplication.shared.appearance = appearance
+    window?.appearance = appearance
+    window?.contentView?.appearance = appearance
+    view?.appearance = appearance
   }
 }
 
@@ -428,6 +466,7 @@ private struct HeavySlugMetalSurface: NSViewRepresentable {
     view.layer = host.layer
     view.layerContentsRedrawPolicy = .never
     host.view = view
+    host.applyColorScheme()
     return view
   }
 
@@ -437,6 +476,7 @@ private struct HeavySlugMetalSurface: NSViewRepresentable {
       nsView.layer = host.layer
     }
     host.view = nsView
+    host.applyColorScheme()
     host.updateDrawableSize()
   }
 }
@@ -621,6 +661,7 @@ private func makeWindow(width: UInt32, height: UInt32, title: String) throws -> 
   window.contentView = hostingView
   window.delegate = delegate
   AppState.shared.delegate?.activeHost = host
+  host.applyColorScheme()
 
   window.center()
   window.makeKeyAndOrderFront(nil)
@@ -781,6 +822,21 @@ public func hs_demo_cocoa_window_poll_events(_ hostHandle: OpaquePointer?) {
       app.updateWindows()
       host.updateDrawableSize()
     }
+  }
+}
+
+@c(hs_demo_cocoa_window_set_dark_mode)
+public func hs_demo_cocoa_window_set_dark_mode(_ hostHandle: OpaquePointer?, _ enabled: UInt8) {
+  guard Thread.isMainThread else {
+    return
+  }
+  nonisolated(unsafe) let unsafeHostHandle = hostHandle
+
+  MainActor.assumeIsolated {
+    guard let host = borrowedHost(unsafeHostHandle) else {
+      return
+    }
+    host.setDarkMode(enabled != 0)
   }
 }
 

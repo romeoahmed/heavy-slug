@@ -50,6 +50,36 @@ const content_height: f64 = @as(f64, @floatFromInt(lines.len)) * line_height + 2
 const content_cx: f64 = content_width / 2;
 const content_cy: f64 = content_height / 2;
 
+pub const ColorScheme = enum {
+    light,
+    dark,
+
+    pub fn isDark(self: ColorScheme) bool {
+        return self == .dark;
+    }
+
+    fn toggled(self: ColorScheme) ColorScheme {
+        return switch (self) {
+            .light => .dark,
+            .dark => .light,
+        };
+    }
+
+    fn clearColor(self: ColorScheme) [4]f32 {
+        return switch (self) {
+            .light => .{ 1, 1, 1, 1 },
+            .dark => .{ 0, 0, 0, 1 },
+        };
+    }
+
+    fn textColor(self: ColorScheme) heavy_slug.Color {
+        return switch (self) {
+            .light => .black,
+            .dark => .white,
+        };
+    }
+};
+
 const ViewState = struct {
     scale: f64 = 1.0,
     pan_x: f64 = 0,
@@ -59,8 +89,8 @@ const ViewState = struct {
 pub const Scene = struct {
     view: ViewState = .{},
     view_initialized: bool = false,
-    dark_mode: bool = false,
-    b_was_pressed: bool = false,
+    color_scheme: ColorScheme = .light,
+    color_scheme_key_was_pressed: bool = false,
     r_was_pressed: bool = false,
     space_was_pressed: bool = false,
 
@@ -88,9 +118,7 @@ pub const Scene = struct {
             self.view_initialized = true;
         }
 
-        const b_pressed = input.getKey(.b);
-        if (b_pressed and !self.b_was_pressed) self.dark_mode = !self.dark_mode;
-        self.b_was_pressed = b_pressed;
+        self.updateColorScheme(input);
 
         const r_pressed = input.getKey(.r);
         if (r_pressed and !self.r_was_pressed) {
@@ -125,12 +153,16 @@ pub const Scene = struct {
         if (self.animate) self.rotation_angle += self.rotation_speed * dt64;
     }
 
+    pub fn darkModeEnabled(self: Scene) bool {
+        return self.color_scheme.isDark();
+    }
+
     pub fn clearColor(self: Scene) [4]f32 {
-        return if (self.dark_mode) .{ 0, 0, 0, 1 } else .{ 1, 1, 1, 1 };
+        return self.color_scheme.clearColor();
     }
 
     pub fn textColor(self: Scene) heavy_slug.Color {
-        return if (self.dark_mode) .white else .black;
+        return self.color_scheme.textColor();
     }
 
     pub fn frameView(self: Scene, width: f64, height: f64) heavy_slug.View {
@@ -151,6 +183,14 @@ pub const Scene = struct {
                 .color = fg,
             });
         }
+    }
+
+    fn updateColorScheme(self: *Scene, input: *const demo_input.State) void {
+        const pressed = input.getKey(.b);
+        if (pressed and !self.color_scheme_key_was_pressed) {
+            self.color_scheme = self.color_scheme.toggled();
+        }
+        self.color_scheme_key_was_pressed = pressed;
     }
 
     fn updateMouse(self: *Scene, input: *const demo_input.State, now: f64, width: f32, height: f32) void {
@@ -262,6 +302,30 @@ test "demo scene frame view keeps glyph outlines y-up" {
     const view = contentFit(window_width, window_height);
     const frame_view = (Scene{ .view = view }).frameView(window_width, window_height);
     try std.testing.expect(frame_view.screen_from_world.yy > 0);
+}
+
+test "demo scene starts light and toggles color scheme only on B key edges" {
+    var scene: Scene = .{};
+    var input: demo_input.State = .{};
+
+    try std.testing.expectEqual(ColorScheme.light, scene.color_scheme);
+    try std.testing.expect(!scene.darkModeEnabled());
+    try std.testing.expectEqual(@as([4]f32, .{ 1, 1, 1, 1 }), scene.clearColor());
+
+    input.setKey(.b, true);
+    scene.update(&input, 0, 0, window_width, window_height);
+    try std.testing.expectEqual(ColorScheme.dark, scene.color_scheme);
+    try std.testing.expect(scene.darkModeEnabled());
+
+    scene.update(&input, 0, 0, window_width, window_height);
+    try std.testing.expectEqual(ColorScheme.dark, scene.color_scheme);
+
+    input.setKey(.b, false);
+    scene.update(&input, 0, 0, window_width, window_height);
+    input.setKey(.b, true);
+    scene.update(&input, 0, 0, window_width, window_height);
+    try std.testing.expectEqual(ColorScheme.light, scene.color_scheme);
+    try std.testing.expect(!scene.darkModeEnabled());
 }
 
 test "demo scene zoom keeps the requested screen anchor stable" {

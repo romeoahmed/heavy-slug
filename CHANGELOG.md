@@ -12,6 +12,10 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Demo appearance policy unified:** all native demos now start from an
+  explicit light color scheme and switch both rendered content and available
+  native window chrome/client decorations only from the shared `B` key toggle
+  instead of inheriting the system appearance.
 - **Breaking naming contraction:** the public f64 affine type is now
   `Transform`, frame submission now takes `View`, the stale `Viewport` and
   `Affine2D64` exports were removed, render batch internals moved from
