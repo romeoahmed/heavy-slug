@@ -31,9 +31,68 @@ jobs:
       - name: Check Zig formatting
         run: zig fmt --check build.zig build/ demo/ src/ tools/
 
+      - name: Check Zig env parsing
+        shell: bash
+        run: |
+          cache_path="$(./.github/scripts/setup-zig.sh --print-global-cache-dir)"
+          if [[ -z "$cache_path" ]]; then
+            echo "::error::could not parse global_cache_dir from zig env" >&2
+            exit 1
+          fi
+
+      - name: Check PowerShell Zig env parsing
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version 3.0
+          $ErrorActionPreference = 'Stop'
+
+          $cachePath = ./.github/scripts/setup-zig.ps1 -PrintGlobalCacheDir
+          if ([string]::IsNullOrWhiteSpace($cachePath)) {
+              Write-Error 'could not parse global_cache_dir from zig env'
+              exit 1
+          }
+
+      - name: Check GitHub Actions YAML
+        shell: bash
+        run: |
+          ruby -e '
+            require "yaml"
+            files = Dir[".github/workflows/*.{yml,yaml}", ".github/actions/*/action.{yml,yaml}"].sort
+            files.each { |file| YAML.load_file(file); puts file }
+          '
+
       - name: Check POSIX shell syntax
         shell: bash
         run: |
           bash -n .github/scripts/fetch-zig-deps.sh
           bash -n .github/scripts/setup-zig.sh
           bash -n .github/scripts/setup-slang.sh
+
+      - name: Check POSIX shell quality
+        shell: bash
+        run: shellcheck .github/scripts/fetch-zig-deps.sh .github/scripts/setup-zig.sh .github/scripts/setup-slang.sh
+
+      - name: Check PowerShell syntax
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version 3.0
+          $ErrorActionPreference = 'Stop'
+
+          $failed = $false
+          Get-ChildItem -Path .github/scripts -Filter '*.ps1' |
+              Sort-Object -Property FullName |
+              ForEach-Object {
+                  $tokens = $null
+                  $errors = $null
+                  [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref] $tokens, [ref] $errors) | Out-Null
+                  foreach ($errorRecord in $errors) {
+                      $line = $errorRecord.Extent.StartLineNumber
+                      $column = $errorRecord.Extent.StartColumnNumber
+                      Write-Host "::error file=$($_.FullName),line=${line},col=${column}::$($errorRecord.Message)"
+                      $failed = $true
+                  }
+              }
+
+          if ($failed) {
+              exit 1
+          }

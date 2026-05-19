@@ -52,19 +52,36 @@ is_transient_failure() {
         *"connection was closed"* | \
         *"connection closed"* | \
         *tls* | \
-        *timeout* | \
         *"temporarily unavailable"* | \
         *"network is unreachable"* | \
         *"failed to fetch"* | \
         *"502 bad gateway"* | \
         *"503 service unavailable"* | \
-        *"504 gateway timeout"*)
+        *"504 gateway timeout"* | \
+        *timeout*)
             return 0
             ;;
         *)
             return 1
             ;;
     esac
+}
+
+is_safe_cleanup_path() {
+    local path="$1"
+    if [[ -z "$path" || "$path" == "/" ]]; then
+        return 1
+    fi
+    if [[ -n "${HOME:-}" && ( "$path" == "$HOME" || "$path" == "$HOME/" ) ]]; then
+        return 1
+    fi
+    if [[ -n "${TMPDIR:-}" && ( "$path" == "$TMPDIR" || "$path" == "$TMPDIR/" ) ]]; then
+        return 1
+    fi
+    if [[ "$path" == "/tmp" || "$path" == "/tmp/" ]]; then
+        return 1
+    fi
+    return 0
 }
 
 reset_zig_fetch_state() {
@@ -85,11 +102,11 @@ reset_zig_fetch_state() {
 
     local path
     for path in "${paths[@]}"; do
-        if [[ -z "$path" || "$path" == "/" || ! -e "$path" ]]; then
+        if ! is_safe_cleanup_path "$path" || [[ ! -e "$path" ]]; then
             continue
         fi
-        rm -rf "$path"
-        mkdir -p "$path"
+        rm -rf -- "$path"
+        mkdir -p -- "$path"
         echo "Cleared Zig fetch path: $path"
     done
 }

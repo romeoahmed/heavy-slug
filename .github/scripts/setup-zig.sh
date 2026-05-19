@@ -10,8 +10,11 @@ case "${1:-}" in
     "--resolve-only")
         mode="resolve"
         ;;
+    "--print-global-cache-dir")
+        mode="print_global_cache_dir"
+        ;;
     "-h"|"--help")
-        sed -n '1,38p' "$0"
+        sed -n '1,42p' "$0"
         exit 0
         ;;
     *)
@@ -92,16 +95,55 @@ append_path() {
     fi
 }
 
+zig_global_cache_dir() {
+    local cache_path
+    # Zig 0.16 prints a Zig object literal here, not JSON:
+    # .{ .global_cache_dir = "...", ... }
+    if ! cache_path="$(
+        zig env \
+            | awk -F '"' '/^[[:space:]]*\.global_cache_dir[[:space:]]*=/ { print $2; found = 1; exit } END { if (!found) exit 1 }'
+    )"; then
+        echo "::error::could not resolve Zig global_cache_dir from zig env" >&2
+        exit 1
+    fi
+    if [[ -z "$cache_path" ]]; then
+        echo "::error::could not resolve Zig global_cache_dir from zig env" >&2
+        exit 1
+    fi
+    printf '%s\n' "$cache_path"
+}
+
 download() {
     local url="$1"
     local output="$2"
-    curl --fail --show-error --silent --location --retry 3 --retry-delay 2 --output "$output" "$url"
+    curl \
+        --fail \
+        --show-error \
+        --silent \
+        --location \
+        --retry 3 \
+        --retry-all-errors \
+        --retry-delay 2 \
+        --connect-timeout 30 \
+        --output "$output" \
+        "$url"
 }
 
 resolve_from_index() {
     local request="$1"
     local index_json version
-    index_json="$(curl --fail --show-error --silent --location --retry 3 --retry-delay 2 https://ziglang.org/download/index.json)"
+    index_json="$(
+        curl \
+            --fail \
+            --show-error \
+            --silent \
+            --location \
+            --retry 3 \
+            --retry-all-errors \
+            --retry-delay 2 \
+            --connect-timeout 30 \
+            https://ziglang.org/download/index.json
+    )"
 
     case "$request" in
         ""|"auto"|"from-zon")
@@ -125,7 +167,7 @@ resolve_from_index() {
             return
             ;;
         *)
-            version="$request"
+            version="${request#v}"
             ;;
     esac
 
@@ -146,17 +188,30 @@ verify_sha256() {
     if [[ -z "$expected" ]]; then
         return
     fi
-    actual="$(shasum -a 256 "$file" | awk '{ print $1 }')"
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual="$(sha256sum "$file" | awk '{ print $1 }')"
+    else
+        actual="$(shasum -a 256 "$file" | awk '{ print $1 }')"
+    fi
     if [[ "$actual" != "$expected" ]]; then
         echo "::error::Zig archive checksum mismatch: expected $expected, got $actual" >&2
         exit 1
     fi
 }
 
+if [[ "$mode" == "print_global_cache_dir" ]]; then
+    require_command zig
+    zig_global_cache_dir
+    exit 0
+fi
+
 require_command curl
 require_command jq
 require_command tar
-require_command shasum
+if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+    echo "::error::sha256sum or shasum is required by setup-zig.sh" >&2
+    exit 1
+fi
 
 target="${ZIG_TARGET:-$(infer_target)}"
 
@@ -206,7 +261,7 @@ if [[ -x "$zig_bin" ]]; then
         exit 0
     fi
     echo "Replacing stale Zig install '$installed'"
-    rm -rf "$install_dir"
+    rm -rf -- "$install_dir"
 fi
 
 tmp_dir="$(mktemp -d)"
@@ -216,7 +271,8 @@ archive="$tmp_dir/zig.tar.xz"
 download "$download_url" "$archive"
 verify_sha256 "$archive" "${download_sha256:-}"
 
-mkdir -p "$install_dir"
+rm -rf -- "$install_dir"
+mkdir -p -- "$install_dir"
 tar -xJf "$archive" --strip-components=1 -C "$install_dir"
 
 append_path "$install_dir"

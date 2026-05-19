@@ -19,6 +19,9 @@ $ErrorActionPreference = 'Stop'
 if (Test-Path variable:PSNativeCommandUseErrorActionPreference) {
     $PSNativeCommandUseErrorActionPreference = $false
 }
+if (Test-Path variable:PSNativeCommandArgumentPassing) {
+    $PSNativeCommandArgumentPassing = 'Standard'
+}
 
 if ($BuildArgs.Count -eq 0 -and -not [string]::IsNullOrWhiteSpace($env:ZIG_FETCH_BUILD_ARGS)) {
     $BuildArgs = $env:ZIG_FETCH_BUILD_ARGS.Trim() -split '\s+'
@@ -78,7 +81,7 @@ function Reset-ZigFetchState {
     $paths += (Join-Path $tempRoot 'zig-cache-tmp')
 
     foreach ($path in $paths) {
-        if ([string]::IsNullOrWhiteSpace($path) -or $path -eq '\' -or -not (Test-Path -Path $path)) {
+        if (-not (Test-SafeCleanupPath $path) -or -not (Test-Path -Path $path)) {
             continue
         }
 
@@ -90,6 +93,36 @@ function Reset-ZigFetchState {
             Write-Warning "Could not clear Zig fetch path '$path': $($_.Exception.Message)"
         }
     }
+}
+
+function Test-SafeCleanupPath([string] $Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $false
+    }
+
+    try {
+        $fullPath = [IO.Path]::GetFullPath($Path)
+    } catch {
+        return $false
+    }
+
+    $root = [IO.Path]::GetPathRoot($fullPath)
+    $trimmedFullPath = $fullPath.TrimEnd([char[]] @('\', '/'))
+    if ($trimmedFullPath -eq $root.TrimEnd([char[]] @('\', '/'))) {
+        return $false
+    }
+
+    foreach ($protected in @($HOME, $env:USERPROFILE, $env:TEMP, [IO.Path]::GetTempPath())) {
+        if ([string]::IsNullOrWhiteSpace($protected)) {
+            continue
+        }
+        $protectedFullPath = [IO.Path]::GetFullPath($protected).TrimEnd([char[]] @('\', '/'))
+        if ($trimmedFullPath -eq $protectedFullPath) {
+            return $false
+        }
+    }
+
+    return $true
 }
 
 $commandForLog = "zig build $($BuildArgs -join ' ') --fetch=needed"
@@ -116,7 +149,7 @@ for ($attempt = 1; $attempt -le $Attempts; $attempt += 1) {
 
     Reset-ZigFetchState
 
-    $delay = [Math]::Min($InitialDelaySeconds * [Math]::Pow(2, $attempt - 1), $MaxDelaySeconds)
+    $delay = [int] [Math]::Min($InitialDelaySeconds * [Math]::Pow(2, $attempt - 1), $MaxDelaySeconds)
     Write-Warning "Transient Zig dependency fetch failure detected; retrying in $delay seconds."
     Start-Sleep -Seconds $delay
 }

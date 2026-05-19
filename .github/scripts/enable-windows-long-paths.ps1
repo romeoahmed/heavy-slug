@@ -6,6 +6,9 @@ $ErrorActionPreference = 'Stop'
 if (Test-Path variable:PSNativeCommandUseErrorActionPreference) {
     $PSNativeCommandUseErrorActionPreference = $true
 }
+if (Test-Path variable:PSNativeCommandArgumentPassing) {
+    $PSNativeCommandArgumentPassing = 'Standard'
+}
 
 $registryPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem'
 New-ItemProperty `

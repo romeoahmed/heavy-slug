@@ -2,13 +2,17 @@
 # Resolve, cache, and install Zig for Windows GitHub Actions runners.
 
 param(
-    [switch] $ResolveOnly
+    [switch] $ResolveOnly,
+    [switch] $PrintGlobalCacheDir
 )
 
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 if (Test-Path variable:PSNativeCommandUseErrorActionPreference) {
     $PSNativeCommandUseErrorActionPreference = $true
+}
+if (Test-Path variable:PSNativeCommandArgumentPassing) {
+    $PSNativeCommandArgumentPassing = 'Standard'
 }
 
 function RepoRoot {
@@ -71,7 +75,10 @@ function PropertyValue($Object, [string] $Name) {
 }
 
 function ResolveFromIndex([string] $Requested, [string] $Target) {
-    $index = Invoke-RestMethod -Uri 'https://ziglang.org/download/index.json'
+    $index = Invoke-RestMethod `
+        -Uri 'https://ziglang.org/download/index.json' `
+        -MaximumRetryCount 3 `
+        -RetryIntervalSec 2
 
     switch ($Requested) {
         { $_ -in @('', 'auto', 'from-zon') } {
@@ -105,7 +112,7 @@ function ResolveFromIndex([string] $Requested, [string] $Target) {
             }
         }
         default {
-            $version = $Requested
+            $version = $Requested.TrimStart('v')
         }
     }
 
@@ -138,15 +145,64 @@ function AddGitHubPath([string] $Path) {
     }
 }
 
+function ConvertFrom-ZigStringLiteral([string] $Value) {
+    $builder = [System.Text.StringBuilder]::new()
+    for ($index = 0; $index -lt $Value.Length; $index += 1) {
+        $character = $Value[$index]
+        if ($character -ne '\') {
+            [void] $builder.Append($character)
+            continue
+        }
+
+        $index += 1
+        if ($index -ge $Value.Length) {
+            throw 'unterminated escape sequence in Zig string literal'
+        }
+
+        $escaped = $Value[$index]
+        switch ($escaped) {
+            '\' { [void] $builder.Append('\'); break }
+            '"' { [void] $builder.Append('"'); break }
+            'n' { [void] $builder.Append("`n"); break }
+            'r' { [void] $builder.Append("`r"); break }
+            't' { [void] $builder.Append("`t"); break }
+            default {
+                [void] $builder.Append('\')
+                [void] $builder.Append($escaped)
+                break
+            }
+        }
+    }
+
+    return $builder.ToString()
+}
+
+function ZigGlobalCacheDir {
+    # Zig 0.16 prints a Zig object literal here, not JSON:
+    # .{ .global_cache_dir = "...", ... }
+    $zigEnvOutput = & zig env
+    $zigEnvText = ($zigEnvOutput | ForEach-Object { $_.ToString() }) -join "`n"
+    $match = [regex]::Match($zigEnvText, '(?m)^\s*\.global_cache_dir\s*=\s*"((?:\\.|[^"\\])*)"')
+    if (-not $match.Success) {
+        throw 'could not resolve Zig global_cache_dir from zig env'
+    }
+
+    return ConvertFrom-ZigStringLiteral $match.Groups[1].Value
+}
+
 function ClearDirectory([string] $Path) {
-    if (Test-Path -Path $Path) {
-        Remove-Item -Path $Path -Recurse -Force
+    if (Test-Path -LiteralPath $Path) {
+        Remove-Item -LiteralPath $Path -Recurse -Force
     }
     New-Item -ItemType Directory -Path $Path -Force | Out-Null
 }
 
 function DownloadFile([string] $Url, [string] $Output) {
-    Invoke-WebRequest -Uri $Url -OutFile $Output
+    Invoke-WebRequest `
+        -Uri $Url `
+        -OutFile $Output `
+        -MaximumRetryCount 3 `
+        -RetryIntervalSec 2
 }
 
 function VerifySha256([string] $Path, [string] $Expected) {
@@ -181,6 +237,11 @@ function ExpandZigArchive([string] $Archive, [string] $InstallDir) {
             Remove-Item -Path $tempRoot -Recurse -Force
         }
     }
+}
+
+if ($PrintGlobalCacheDir) {
+    ZigGlobalCacheDir
+    exit 0
 }
 
 $toolRoot = if ($env:HEAVY_SLUG_TOOL_ROOT) {

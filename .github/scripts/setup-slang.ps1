@@ -10,6 +10,9 @@ $ErrorActionPreference = 'Stop'
 if (Test-Path variable:PSNativeCommandUseErrorActionPreference) {
     $PSNativeCommandUseErrorActionPreference = $true
 }
+if (Test-Path variable:PSNativeCommandArgumentPassing) {
+    $PSNativeCommandArgumentPassing = 'Standard'
+}
 
 function HomeDir {
     if ($HOME) { return $HOME }
@@ -56,7 +59,11 @@ function GitHubApi([string] $Url) {
     if ($env:GH_TOKEN) {
         $headers['Authorization'] = "Bearer $env:GH_TOKEN"
     }
-    return Invoke-RestMethod -Uri $Url -Headers $headers
+    return Invoke-RestMethod `
+        -Uri $Url `
+        -Headers $headers `
+        -MaximumRetryCount 3 `
+        -RetryIntervalSec 2
 }
 
 function ResolveRelease([string] $Requested, [string] $Platform, [string] $AssetPattern) {
@@ -110,14 +117,18 @@ function AddGitHubPath([string] $Path) {
 }
 
 function ClearDirectory([string] $Path) {
-    if (Test-Path -Path $Path) {
-        Remove-Item -Path $Path -Recurse -Force
+    if (Test-Path -LiteralPath $Path) {
+        Remove-Item -LiteralPath $Path -Recurse -Force
     }
     New-Item -ItemType Directory -Path $Path -Force | Out-Null
 }
 
 function DownloadFile([string] $Url, [string] $Output) {
-    Invoke-WebRequest -Uri $Url -OutFile $Output
+    Invoke-WebRequest `
+        -Uri $Url `
+        -OutFile $Output `
+        -MaximumRetryCount 3 `
+        -RetryIntervalSec 2
 }
 
 function ExpandSlangArchive([string] $Archive, [string] $InstallDir) {

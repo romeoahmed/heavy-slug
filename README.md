@@ -372,10 +372,13 @@ and Metal verification. Local composite actions own Zig and Slang resolution,
 tool caching, and Zig package cache restore/save behavior, so platform jobs do
 not duplicate toolchain setup details. Zig package dependencies are prefetched
 with the same bounded exponential-backoff wrapper on Ubuntu, macOS, and
-Windows; the only Windows-specific setup left is enabling long paths for the
-runner job. Workflow dispatch can override Zig and Slang versions; normal CI
-reads Zig from `build.zig.zon` and pins Slang to the repository-supported
-`2026.9` release.
+Windows; Windows jobs enable Git long paths before checkout, then enable
+system long paths from the repository script before using the shared
+cross-platform toolchain path. The quality gate validates workflow/action YAML,
+Zig formatting, Zig environment parsing, Bash syntax and ShellCheck
+diagnostics, and PowerShell parser errors before backend jobs start. Workflow
+dispatch can override Zig and Slang versions; normal CI reads Zig from
+`build.zig.zon` and pins Slang to the repository-supported `2026.9` release.
 
 | Job family | Coverage |
 | --- | --- |

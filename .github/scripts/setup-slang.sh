@@ -88,18 +88,45 @@ append_path() {
 download() {
     local url="$1"
     local output="$2"
-    curl --fail --show-error --silent --location --retry 3 --retry-delay 2 --output "$output" "$url"
+    curl \
+        --fail \
+        --show-error \
+        --silent \
+        --location \
+        --retry 3 \
+        --retry-all-errors \
+        --retry-delay 2 \
+        --connect-timeout 30 \
+        --output "$output" \
+        "$url"
 }
 
 github_api() {
     local url="$1"
     if [[ -n "${GH_TOKEN:-}" ]]; then
-        curl --fail --show-error --silent --location --retry 3 --retry-delay 2 \
+        curl \
+            --fail \
+            --show-error \
+            --silent \
+            --location \
+            --retry 3 \
+            --retry-all-errors \
+            --retry-delay 2 \
+            --connect-timeout 30 \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "$url"
     else
-        curl --fail --show-error --silent --location --retry 3 --retry-delay 2 "$url"
+        curl \
+            --fail \
+            --show-error \
+            --silent \
+            --location \
+            --retry 3 \
+            --retry-all-errors \
+            --retry-delay 2 \
+            --connect-timeout 30 \
+            "$url"
     fi
 }
 
@@ -187,10 +214,10 @@ extract_archive() {
         root_dir="$bin_dir"
     fi
 
-    rm -rf "$install_dir"
-    mkdir -p "$install_dir"
+    rm -rf -- "$install_dir"
+    mkdir -p -- "$install_dir"
     cp -R "$root_dir"/. "$install_dir"
-    rm -rf "$temp_root"
+    rm -rf -- "$temp_root"
 }
 
 require_command curl
@@ -241,7 +268,7 @@ if [[ -x "$slangc" && -f "$version_file" ]]; then
         exit 0
     fi
     echo "Replacing stale Slang install '$installed'"
-    rm -rf "$install_dir"
+    rm -rf -- "$install_dir"
 fi
 
 tmp_dir="$(mktemp -d)"

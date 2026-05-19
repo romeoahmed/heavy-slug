@@ -12,6 +12,15 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **CI Zig cache parsing fixed:** Zig package-cache setup now treats
+  `zig env` output as Zig 0.16 object syntax rather than JSON on both Bash and
+  PowerShell paths, and the quality gate exercises the parser against the real
+  tool output.
+- **CI automation hardened:** Windows jobs now enable Git long paths before
+  checkout and system long paths immediately after checkout, the quality gate
+  validates workflow/action YAML plus Bash and PowerShell scripts, and
+  toolchain scripts use stricter native-command, retry, checksum, and cleanup
+  behavior across runner images.
 - **CI workflow architecture refactored:** the public GitHub Actions entrypoint
   now delegates to smaller reusable workflows for quality, core, shaders,
   Vulkan, and Metal; shared Zig/Slang setup and cache policy moved into local

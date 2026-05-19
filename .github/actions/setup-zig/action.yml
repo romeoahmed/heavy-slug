@@ -34,11 +34,6 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Enable Windows long paths
-      if: ${{ runner.os == 'Windows' }}
-      shell: pwsh
-      run: ./.github/scripts/enable-windows-long-paths.ps1
-
     - name: Resolve Zig
       if: ${{ runner.os != 'Windows' }}
       id: zig_posix
@@ -93,11 +88,9 @@ runs:
       id: zig_pkg_posix
       shell: bash
       run: |
-        cache_path="$(
-          zig env \
-            | sed -n 's/.*"global_cache_dir"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-            | head -n 1
-        )"
+        set -euo pipefail
+
+        cache_path="$(./.github/scripts/setup-zig.sh --print-global-cache-dir)"
         if [[ -z "$cache_path" ]]; then
           echo "::error::could not resolve Zig global_cache_dir from zig env" >&2
           exit 1
@@ -118,8 +111,13 @@ runs:
       id: zig_pkg_windows
       shell: pwsh
       run: |
-        $zigEnv = zig env | ConvertFrom-Json
-        $cachePath = $zigEnv.global_cache_dir
+        Set-StrictMode -Version 3.0
+        $ErrorActionPreference = 'Stop'
+        if (Test-Path variable:PSNativeCommandUseErrorActionPreference) {
+            $PSNativeCommandUseErrorActionPreference = $true
+        }
+
+        $cachePath = ./.github/scripts/setup-zig.ps1 -PrintGlobalCacheDir
         if ([string]::IsNullOrWhiteSpace($cachePath)) {
             Write-Error 'could not resolve Zig global_cache_dir from zig env'
             exit 1
