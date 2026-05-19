@@ -57,19 +57,22 @@ implementation notes belong in commits and code review history.
   hardware key codes, and clears captured input on close, quit, focus loss,
   minimization, or app deactivation.
 - **Metal Zig/C ABI boundary tightened:** the Metal backend bridge header and
-  Cocoa demo host header are now translated through build-system
-  `addTranslateC()` modules, leaving `bridge.h` and `cocoa.h` as the single
-  source of truth for C functions, opaque handles, ABI structs, and constants.
+  Cocoa demo host header are now modern C23/C++23 ABI contracts using
+  `char8_t`, C23 `bool`, and `static_assert`; Zig mirrors those contracts with
+  explicit `extern` declarations because Zig 0.16 `translate-c` does not parse
+  these C23 headers.
 - **Breaking Objective-C++ C ABI cleanup:** Metal shader sources, Cocoa window
-  titles, and error destinations now cross the C ABI as explicit UTF-8 span or
-  error-buffer structs, Metal draw/wait calls return a named status enum, and
-  the Objective-C++ implementations use `std::expected` plus `char8_t`
-  internally for non-throwing failure propagation.
+  titles, and error destinations now cross the C ABI as explicit
+  `*_u8_view`/`*_u8_buffer` structs over one-byte UTF-8 code units. Fallible
+  Metal/Cocoa create calls now return named status values and write handles via
+  out parameters, Cocoa exposes its borrowed Metal objects as a single host
+  struct, and the Objective-C++ implementations use `std::expected` plus
+  `std::span<const char8_t>` internally for non-throwing failure propagation.
 - **Objective-C++ bridge code moved to C++23:** the Metal backend bridge and
   Cocoa demo host now compile as Objective-C++ C++23 and use `std::span`,
   `std::array`, `std::optional`, and RAII helpers for internal host/context
   creation, shader-source validation, input snapshots, and frame-slot cleanup
-  while preserving the translated C ABI seen by Zig.
+  while preserving the explicit C ABI seen by Zig.
 - **Objective-C++ compiler policy hardened:** Metal/Cocoa bridge sources now
   share one build helper for C++23 ARC flags, optimize-mode-specific
   `-O0`/`-O3`/`-Os`, disabled C++/Objective-C exceptions and RTTI, stricter

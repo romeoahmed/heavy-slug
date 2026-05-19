@@ -11,14 +11,12 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <expected>
 #include <limits>
 #include <memory>
 #include <new>
 #include <optional>
 #include <span>
-#include <string_view>
 #include <utility>
 
 @class HeavySlugDemoAppDelegate;
@@ -30,11 +28,10 @@ static NSString *const HeavySlugFallbackTitle = @"heavy-slug Metal 4 demo";
 
 namespace {
 
-using namespace std::string_view_literals;
-
 constexpr double kPreciseScrollScale = 0.1;
 
-using Utf8View = std::u8string_view;
+using U8View = std::span<const char8_t>;
+using U8Buffer = std::span<char8_t>;
 
 struct Failure final {
   __strong NSString *message = nil;
@@ -72,16 +69,32 @@ static_assert(HS_DEMO_MOUSE_COUNT == 2);
   return static_cast<std::size_t>(std::to_underlying(button));
 }
 
-[[nodiscard]] constexpr const char *charData(Utf8View text) noexcept {
+template <std::size_t N>
+[[nodiscard]] constexpr U8View u8Span(const char8_t (&text)[N]) noexcept {
+  static_assert(N > 0);
+  return U8View{text, N - 1};
+}
+
+[[nodiscard]] constexpr const char *charData(U8View text) noexcept {
   return reinterpret_cast<const char *>(text.data());
 }
 
-[[nodiscard]] constexpr Utf8View utf8View(const char *data,
-                                          std::size_t length) noexcept {
-  return {reinterpret_cast<const char8_t *>(data), length};
+[[nodiscard]] constexpr U8View sourceView(hs_demo_cocoa_u8_view view) noexcept {
+  if (view.data == nullptr || view.size == 0) {
+    return {};
+  }
+  return U8View{view.data, view.size};
 }
 
-[[nodiscard]] NSString *makeNSString(Utf8View text) {
+[[nodiscard]] constexpr U8Buffer
+errorBuffer(hs_demo_cocoa_u8_buffer buffer) noexcept {
+  if (buffer.data == nullptr || buffer.size == 0) {
+    return {};
+  }
+  return U8Buffer{buffer.data, buffer.size};
+}
+
+[[nodiscard]] NSString *makeNSString(U8View text) {
   if (text.empty()) {
     return @"";
   }
@@ -97,7 +110,7 @@ static_assert(HS_DEMO_MOUSE_COUNT == 2);
   return std::unexpected<Failure>{Failure{message}};
 }
 
-[[nodiscard]] std::unexpected<Failure> fail(Utf8View message) {
+[[nodiscard]] std::unexpected<Failure> fail(U8View message) {
   NSString *text = makeNSString(message);
   if (!text) {
     text = @"invalid UTF-8 diagnostic";
@@ -115,12 +128,10 @@ static_assert(HS_DEMO_MOUSE_COUNT == 2);
 
 class ErrorBuffer final {
 public:
-  explicit ErrorBuffer(hs_demo_cocoa_error_buffer buffer) noexcept
-      : storage_(buffer.data && buffer.len > 0
-                     ? std::span<char>{buffer.data, buffer.len}
-                     : std::span<char>{}) {
+  explicit ErrorBuffer(hs_demo_cocoa_u8_buffer buffer) noexcept
+      : storage_(errorBuffer(buffer)) {
     if (!storage_.empty()) {
-      storage_.front() = '\0';
+      storage_.front() = static_cast<char8_t>(0);
     }
   }
 
@@ -136,11 +147,26 @@ public:
     if (!bytes) {
       bytes = "unknown Cocoa host error";
     }
-    std::snprintf(storage_.data(), storage_.size(), "%s", bytes);
+    writeCString(bytes);
   }
 
 private:
-  std::span<char> storage_;
+  void writeCString(const char *bytes) const {
+    if (!bytes || storage_.empty()) {
+      return;
+    }
+
+    const std::size_t writable = storage_.size() - 1;
+    std::size_t index = 0;
+    while (index < writable && bytes[index] != '\0') {
+      storage_[index] = static_cast<char8_t>(
+          static_cast<unsigned char>(bytes[index]));
+      index += 1;
+    }
+    storage_[index] = static_cast<char8_t>(0);
+  }
+
+  U8Buffer storage_;
 };
 
 template <typename T, typename... Args>
@@ -155,7 +181,7 @@ template <typename T, typename... Args>
   if (isMainThread()) {
     return {};
   }
-  return fail(u8"Cocoa demo host must be used on the main thread"sv);
+  return fail(u8Span(u8"Cocoa demo host must be used on the main thread"));
 }
 
 } // namespace
@@ -185,7 +211,7 @@ struct hs_demo_cocoa_window final {
   hs_demo_cocoa_window(const hs_demo_cocoa_window &) = delete;
   hs_demo_cocoa_window &operator=(const hs_demo_cocoa_window &) = delete;
 
-  void clearInput() noexcept {
+  void resetInput() noexcept {
     keys.fill(false);
     mouseButtons.fill(false);
     scrollDelta = 0;
@@ -218,9 +244,9 @@ struct CocoaAppState final {
   return state;
 }
 
-void clearInput(hs_demo_cocoa_window *host) {
+void resetHostInput(hs_demo_cocoa_window *host) {
   if (host) {
-    host->clearInput();
+    host->resetInput();
   }
 }
 
@@ -366,17 +392,17 @@ void copyBoolState(const std::array<bool, Count> &source,
 }
 
 [[nodiscard]] Result<NSString *>
-windowTitle(hs_demo_cocoa_utf8_span title) {
-  if (title.data == nullptr && title.len != 0) {
-    return fail(u8"Cocoa window title pointer is null"sv);
+windowTitle(hs_demo_cocoa_u8_view title) {
+  if (title.data == nullptr && title.size != 0) {
+    return fail(u8Span(u8"Cocoa window title pointer is null"));
   }
-  if (title.data == nullptr || title.len == 0) {
+  if (title.data == nullptr || title.size == 0) {
     return HeavySlugFallbackTitle;
   }
 
-  NSString *string = makeNSString(utf8View(title.data, title.len));
+  NSString *string = makeNSString(sourceView(title));
   if (!string) {
-    return fail(u8"Cocoa window title is not valid UTF-8"sv);
+    return fail(u8Span(u8"Cocoa window title is not valid UTF-8"));
   }
   return string;
 }
@@ -392,7 +418,7 @@ makeMenuItem(NSString *title, SEL action, NSString *key, id target) {
                                                 action:action
                                          keyEquivalent:key];
   if (!item) {
-    return fail(u8"NSMenuItem init returned nil"sv);
+    return fail(u8Span(u8"NSMenuItem init returned nil"));
   }
   item.target = target;
   if (key.length > 0) {
@@ -409,7 +435,7 @@ makeMenuItem(NSString *title, SEL action, NSString *key, id target) {
 
   NSMenu *main_menu = [[NSMenu alloc] initWithTitle:@""];
   if (!main_menu) {
-    return fail(u8"NSMenu init returned nil"sv);
+    return fail(u8Span(u8"NSMenu init returned nil"));
   }
 
   NSMenuItem *app_menu_item = [[NSMenuItem alloc] initWithTitle:@""
@@ -417,7 +443,7 @@ makeMenuItem(NSString *title, SEL action, NSString *key, id target) {
                                                   keyEquivalent:@""];
   NSMenu *app_menu = [[NSMenu alloc] initWithTitle:HeavySlugAppName];
   if (!app_menu_item || !app_menu) {
-    return fail(u8"failed to allocate Cocoa application menu"sv);
+    return fail(u8Span(u8"failed to allocate Cocoa application menu"));
   }
 
   auto about_item =
@@ -443,7 +469,7 @@ makeMenuItem(NSString *title, SEL action, NSString *key, id target) {
                                                    keyEquivalent:@""];
   NSMenu *file_menu = [[NSMenu alloc] initWithTitle:@"File"];
   if (!file_menu_item || !file_menu) {
-    return fail(u8"failed to allocate Cocoa file menu"sv);
+    return fail(u8Span(u8"failed to allocate Cocoa file menu"));
   }
 
   auto close_item =
@@ -464,13 +490,13 @@ makeMenuItem(NSString *title, SEL action, NSString *key, id target) {
   CocoaAppState &state = appState();
   [NSApplication sharedApplication];
   if (!NSApp) {
-    return fail(u8"NSApplication sharedApplication returned nil"sv);
+    return fail(u8Span(u8"NSApplication sharedApplication returned nil"));
   }
 
   if (!state.delegate) {
     state.delegate = [[HeavySlugDemoAppDelegate alloc] init];
     if (!state.delegate) {
-      return fail(u8"HeavySlugDemoAppDelegate init returned nil"sv);
+      return fail(u8Span(u8"HeavySlugDemoAppDelegate init returned nil"));
     }
     NSApp.delegate = state.delegate;
   }
@@ -492,10 +518,10 @@ makeMenuItem(NSString *title, SEL action, NSString *key, id target) {
 [[nodiscard]] Result<id<MTLDevice>> makeDevice() {
   id<MTLDevice> device = MTLCreateSystemDefaultDevice();
   if (!device) {
-    return fail(u8"MTLCreateSystemDefaultDevice returned nil"sv);
+    return fail(u8Span(u8"MTLCreateSystemDefaultDevice returned nil"));
   }
   if (![device supportsFamily:MTLGPUFamilyMetal4]) {
-    return fail(u8"heavy-slug Metal demo requires a Metal 4 family GPU"sv);
+    return fail(u8Span(u8"heavy-slug Metal demo requires a Metal 4 family GPU"));
   }
   return device;
 }
@@ -504,7 +530,7 @@ makeMenuItem(NSString *title, SEL action, NSString *key, id target) {
 makeCommandQueue(id<MTLDevice> device) {
   MTL4CommandQueueDescriptor *descriptor = [MTL4CommandQueueDescriptor new];
   if (!descriptor) {
-    return fail(u8"failed to allocate MTL4CommandQueueDescriptor"sv);
+    return fail(u8Span(u8"failed to allocate MTL4CommandQueueDescriptor"));
   }
   descriptor.label = @"heavy-slug demo command queue";
 
@@ -520,7 +546,7 @@ makeCommandQueue(id<MTLDevice> device) {
 [[nodiscard]] Result<CAMetalLayer *> makeMetalLayer(id<MTLDevice> device) {
   CAMetalLayer *layer = [CAMetalLayer layer];
   if (!layer) {
-    return fail(u8"CAMetalLayer layer returned nil"sv);
+    return fail(u8Span(u8"CAMetalLayer layer returned nil"));
   }
   layer.device = device;
   layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
@@ -530,7 +556,7 @@ makeCommandQueue(id<MTLDevice> device) {
   layer.allowsNextDrawableTimeout = YES;
   layer.opaque = YES;
   if (!layer.residencySet) {
-    return fail(u8"CAMetalLayer did not expose a Metal 4 residency set"sv);
+    return fail(u8Span(u8"CAMetalLayer did not expose a Metal 4 residency set"));
   }
   return layer;
 }
@@ -544,7 +570,7 @@ makeCommandQueue(id<MTLDevice> device) {
                                                    backing:NSBackingStoreBuffered
                                                      defer:NO];
   if (!window) {
-    return fail(u8"NSWindow init returned nil"sv);
+    return fail(u8Span(u8"NSWindow init returned nil"));
   }
   window.title = title;
   [window setReleasedWhenClosed:NO];
@@ -554,13 +580,13 @@ makeCommandQueue(id<MTLDevice> device) {
 
 [[nodiscard]] Result<std::unique_ptr<hs_demo_cocoa_window>>
 makeCocoaWindow(std::uint32_t width, std::uint32_t height,
-                hs_demo_cocoa_utf8_span title) {
+                hs_demo_cocoa_u8_view title) {
   auto thread_status = requireMainThread();
   if (!thread_status) {
     return std::unexpected<Failure>{thread_status.error()};
   }
   if (width == 0 || height == 0) {
-    return fail(u8"Cocoa demo host requires a positive initial window size"sv);
+    return fail(u8Span(u8"Cocoa demo host requires a positive initial window size"));
   }
 
   auto title_string = windowTitle(title);
@@ -585,7 +611,7 @@ makeCocoaWindow(std::uint32_t width, std::uint32_t height,
 
   auto host = makeOwned<hs_demo_cocoa_window>(*device, *command_queue);
   if (!host) {
-    return fail(u8"failed to allocate Cocoa demo host"sv);
+    return fail(u8Span(u8"failed to allocate Cocoa demo host"));
   }
 
   const NSRect rect = NSMakeRect(0, 0, static_cast<CGFloat>(width),
@@ -602,7 +628,7 @@ makeCocoaWindow(std::uint32_t width, std::uint32_t height,
 
   HeavySlugDemoView *view = [[HeavySlugDemoView alloc] initWithFrame:rect];
   if (!view) {
-    return fail(u8"HeavySlugDemoView init returned nil"sv);
+    return fail(u8Span(u8"HeavySlugDemoView init returned nil"));
   }
   view.host = host.get();
   view.wantsLayer = YES;
@@ -612,7 +638,7 @@ makeCocoaWindow(std::uint32_t width, std::uint32_t height,
   HeavySlugDemoWindowDelegate *delegate =
       [[HeavySlugDemoWindowDelegate alloc] init];
   if (!delegate) {
-    return fail(u8"HeavySlugDemoWindowDelegate init returned nil"sv);
+    return fail(u8Span(u8"HeavySlugDemoWindowDelegate init returned nil"));
   }
   delegate.host = host.get();
 
@@ -642,13 +668,13 @@ makeCocoaWindow(std::uint32_t width, std::uint32_t height,
     return NSTerminateNow;
   }
   self.activeHost->shouldClose = true;
-  clearInput(self.activeHost);
+  resetHostInput(self.activeHost);
   return NSTerminateCancel;
 }
 
 - (void)applicationDidResignActive:(NSNotification *)notification {
   (void)notification;
-  clearInput(self.activeHost);
+  resetHostInput(self.activeHost);
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:
@@ -835,7 +861,7 @@ makeCocoaWindow(std::uint32_t width, std::uint32_t height,
     return NO;
   }
   self.host->shouldClose = true;
-  clearInput(self.host);
+  resetHostInput(self.host);
   return NO;
 }
 
@@ -856,28 +882,36 @@ makeCocoaWindow(std::uint32_t width, std::uint32_t height,
 
 - (void)windowDidResignKey:(NSNotification *)notification {
   (void)notification;
-  clearInput(self.host);
+  resetHostInput(self.host);
 }
 
 - (void)windowDidMiniaturize:(NSNotification *)notification {
   (void)notification;
-  clearInput(self.host);
+  resetHostInput(self.host);
 }
 
 @end
 
-hs_demo_cocoa_window *
-hs_demo_cocoa_window_create(uint32_t width, uint32_t height,
-                            hs_demo_cocoa_utf8_span title,
-                            hs_demo_cocoa_error_buffer error_buffer) {
+hs_demo_cocoa_status
+hs_demo_cocoa_window_create(hs_demo_cocoa_window **out_window, uint32_t width,
+                            uint32_t height,
+                            hs_demo_cocoa_u8_view title,
+                            hs_demo_cocoa_u8_buffer error_buffer) {
   @autoreleasepool {
     ErrorBuffer error(error_buffer);
+    if (!out_window) {
+      error.write(Failure{@"Cocoa window create received a nil out parameter"});
+      return HS_DEMO_COCOA_STATUS_ERROR;
+    }
+    *out_window = nullptr;
+
     auto host = makeCocoaWindow(width, height, title);
     if (!host) {
       error.write(host.error());
-      return nullptr;
+      return HS_DEMO_COCOA_STATUS_ERROR;
     }
-    return host->release();
+    *out_window = host->release();
+    return HS_DEMO_COCOA_STATUS_OK;
   }
 }
 
@@ -891,7 +925,7 @@ void hs_demo_cocoa_window_destroy(hs_demo_cocoa_window *host) {
     if (appState().delegate.activeHost == owned.get()) {
       appState().delegate.activeHost = nullptr;
     }
-    owned->clearInput();
+    owned->resetInput();
     if (owned->view) {
       owned->view.host = nullptr;
     }
@@ -953,23 +987,14 @@ double hs_demo_cocoa_window_time(hs_demo_cocoa_window *host) {
   return CACurrentMediaTime() - host->startTime;
 }
 
-void *hs_demo_cocoa_window_device(hs_demo_cocoa_window *host) {
+hs_demo_cocoa_metal_host
+hs_demo_cocoa_window_metal_host(hs_demo_cocoa_window *host) {
   if (!host || !isMainThread()) {
-    return nullptr;
+    return hs_demo_cocoa_metal_host{};
   }
-  return (__bridge void *)host->device;
-}
-
-void *hs_demo_cocoa_window_command_queue(hs_demo_cocoa_window *host) {
-  if (!host || !isMainThread()) {
-    return nullptr;
-  }
-  return (__bridge void *)host->commandQueue;
-}
-
-void *hs_demo_cocoa_window_layer(hs_demo_cocoa_window *host) {
-  if (!host || !isMainThread()) {
-    return nullptr;
-  }
-  return (__bridge void *)host->layer;
+  return hs_demo_cocoa_metal_host{
+      (__bridge void *)host->device,
+      (__bridge void *)host->commandQueue,
+      (__bridge void *)host->layer,
+  };
 }

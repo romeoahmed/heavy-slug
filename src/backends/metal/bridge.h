@@ -3,6 +3,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef __cplusplus
+#include <uchar.h>
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -11,25 +15,38 @@ extern "C" {
 #define HEAVY_SLUG_SHADER_STATS 0
 #endif
 
+typedef enum hs_metal_status : int {
+  HS_METAL_STATUS_OK = 0,
+  HS_METAL_STATUS_ERROR = 1,
+} hs_metal_status;
+static_assert(sizeof(hs_metal_status) == sizeof(int),
+              "hs_metal_status must match Zig enum(c_int)");
+
 typedef struct hs_metal_context hs_metal_context;
 typedef struct hs_metal_buffer hs_metal_buffer;
 
-typedef enum hs_metal_status {
-  HS_METAL_STATUS_ERROR = 0,
-  HS_METAL_STATUS_OK = 1,
-} hs_metal_status;
+typedef char8_t hs_metal_u8;
+static_assert(sizeof(hs_metal_u8) == 1, "hs_metal_u8 must be one byte");
 
-typedef struct hs_metal_utf8_span {
-  const char *data;
-  size_t len;
-} hs_metal_utf8_span;
+typedef struct hs_metal_u8_view {
+  const hs_metal_u8 *data;
+  size_t size;
+} hs_metal_u8_view;
+static_assert(offsetof(hs_metal_u8_view, size) == sizeof(void *),
+              "hs_metal_u8_view must be pointer followed by size");
+static_assert(sizeof(hs_metal_u8_view) == sizeof(void *) + sizeof(size_t),
+              "hs_metal_u8_view must match the Zig extern mirror");
 
-typedef struct hs_metal_error_buffer {
-  char *data;
-  size_t len;
-} hs_metal_error_buffer;
+typedef struct hs_metal_u8_buffer {
+  hs_metal_u8 *data;
+  size_t size;
+} hs_metal_u8_buffer;
+static_assert(offsetof(hs_metal_u8_buffer, size) == sizeof(void *),
+              "hs_metal_u8_buffer must be pointer followed by size");
+static_assert(sizeof(hs_metal_u8_buffer) == sizeof(void *) + sizeof(size_t),
+              "hs_metal_u8_buffer must match the Zig extern mirror");
 
-typedef struct hs_metal_host_objects {
+typedef struct hs_metal_host {
   /* Borrowed id<MTLDevice>; retained by the created context. */
   void *device;
   /* Borrowed id<MTL4CommandQueue>; retained by the context and must belong to device. */
@@ -41,7 +58,9 @@ typedef struct hs_metal_host_objects {
    * configured for presentation while drawing.
    */
   void *layer;
-} hs_metal_host_objects;
+} hs_metal_host;
+static_assert(sizeof(hs_metal_host) == 3 * sizeof(void *),
+              "hs_metal_host must remain three borrowed object pointers");
 
 typedef struct hs_metal_resource_indices {
   uint32_t glyph_pool;
@@ -50,6 +69,8 @@ typedef struct hs_metal_resource_indices {
   uint32_t frame_params;
   uint32_t shader_stats;
 } hs_metal_resource_indices;
+static_assert(sizeof(hs_metal_resource_indices) == 5 * sizeof(uint32_t),
+              "hs_metal_resource_indices must match the Zig extern mirror");
 
 typedef struct hs_metal_geometry_limits {
   /* Zero when the Metal path has no object shader stage. */
@@ -57,6 +78,8 @@ typedef struct hs_metal_geometry_limits {
   uint32_t mesh_threadgroup_size;
   uint32_t max_mesh_threadgroups_per_draw;
 } hs_metal_geometry_limits;
+static_assert(sizeof(hs_metal_geometry_limits) == 3 * sizeof(uint32_t),
+              "hs_metal_geometry_limits must match the Zig extern mirror");
 
 /*
  * Keep these indices in lockstep with shaders/backend_metal/resources.slang
@@ -68,6 +91,7 @@ enum {
   HS_METAL_BUFFER_MESHLETS = 2,
   HS_METAL_BUFFER_FRAME_PARAMS = HEAVY_SLUG_SHADER_STATS ? 4 : 3,
   HS_METAL_BUFFER_SHADER_STATS = 3,
+  HS_METAL_U8_SIZE = 1,
   /*
    * Keep geometry limits in lockstep with shaders/core/abi.slang
    * and src/gpu/mesh_limits.zig.
@@ -82,34 +106,38 @@ hs_metal_geometry_limits hs_metal_get_geometry_limits(void);
 
 /*
  * Ownership model:
- * - create/destroy pairs transfer ownership of hs_metal_context and
- * hs_metal_buffer.
+ * - successful create calls store owned hs_metal_context/hs_metal_buffer
+ *   handles in their out parameters; destroy releases those handles.
  * - Host Objective-C objects are borrowed at creation and retained internally.
- * - hs_metal_buffer objects are owned by callers and must not outlive their
- *   context.
+ * - hs_metal_buffer objects are owned by callers. They retain enough Metal
+ *   state to be destroyed independently, but they must not be used after their
+ *   creating context is destroyed or while a submitted draw can still read
+ *   them.
  * - The context owns its internal pipeline, frame slots, argument tables, and
  *   completion handlers. Zig sees only typed opaque C handles.
- * - UTF-8 crosses the ABI as explicit pointer/length spans. The Objective-C++
- *   implementation uses char8_t internally; the C ABI remains C-compatible.
- * - Errors cross the ABI as a named status plus caller-provided UTF-8 text
- *   buffer.
+ * - UTF-8 crosses the ABI as explicit pointer/size views over hs_metal_u8
+ *   code units. The Objective-C++ implementation immediately narrows these to
+ *   std::span<const char8_t> or std::span<char8_t>.
+ * - Errors cross the ABI as a status plus caller-provided UTF-8 buffer.
  */
-hs_metal_context *
-hs_metal_context_create(hs_metal_host_objects host,
-                        hs_metal_utf8_span mesh_source,
-                        hs_metal_utf8_span fragment_source,
-                        hs_metal_error_buffer error_buffer);
+hs_metal_status
+hs_metal_context_create(hs_metal_context **out_context, hs_metal_host host,
+                        hs_metal_u8_view mesh_source,
+                        hs_metal_u8_view fragment_source,
+                        hs_metal_u8_buffer error_buffer);
 
 void hs_metal_context_destroy(hs_metal_context *context);
 hs_metal_status
 hs_metal_context_wait_frame_slot(hs_metal_context *context,
                                  uint32_t slot_index,
-                                 hs_metal_error_buffer error_buffer);
+                                 hs_metal_u8_buffer error_buffer);
 void hs_metal_context_release_frame_slot(hs_metal_context *context,
                                          uint32_t slot_index);
 void hs_metal_context_wait_submitted(hs_metal_context *context);
 
-hs_metal_buffer *hs_metal_buffer_create(hs_metal_context *context, size_t size);
+hs_metal_status hs_metal_buffer_create(hs_metal_buffer **out_buffer,
+                                       hs_metal_context *context, size_t size,
+                                       hs_metal_u8_buffer error_buffer);
 void hs_metal_buffer_destroy(hs_metal_buffer *buffer);
 void *hs_metal_buffer_contents(hs_metal_buffer *buffer);
 
@@ -117,9 +145,9 @@ hs_metal_status hs_metal_context_draw(
     hs_metal_context *context, uint32_t width, uint32_t height, float clear_r,
     float clear_g, float clear_b, float clear_a, hs_metal_buffer *glyphs,
     hs_metal_buffer *meshlets, hs_metal_buffer *frame_params,
-    uint32_t frame_params_stride, hs_metal_buffer *glyph_pool,
+    size_t frame_params_stride, hs_metal_buffer *glyph_pool,
     hs_metal_buffer *shader_stats, uint32_t workgroup_count,
-    uint32_t slot_index, hs_metal_error_buffer error_buffer);
+    uint32_t slot_index, hs_metal_u8_buffer error_buffer);
 
 #ifdef __cplusplus
 }

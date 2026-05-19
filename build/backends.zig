@@ -62,7 +62,6 @@ pub fn buildMetal(
     gpu_structs_mod: *std.Build.Module,
     shader_stats: bool,
 ) MetalBackend {
-    const metal_c = translateMetalC(b, target, optimize, shader_stats);
     const mod = b.addModule("heavy_slug_metal", .{
         .root_source_file = b.path("src/backends/metal/root.zig"),
         .target = target,
@@ -72,7 +71,6 @@ pub fn buildMetal(
     mod.addImport("heavy_slug", core_mod);
     mod.addImport("msl_shaders", msl.module);
     mod.addImport("gpu_structs", gpu_structs_mod);
-    mod.addImport("metal_c", metal_c);
     mod.addOptions("heavy_slug_backend_options", options);
     mod.addIncludePath(b.path("src/backends/metal"));
     mod.link_libcpp = true;
@@ -88,20 +86,4 @@ pub fn buildMetal(
     });
 
     return .{ .module = mod };
-}
-
-fn translateMetalC(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    shader_stats: bool,
-) *std.Build.Module {
-    const translate = b.addTranslateC(.{
-        .root_source_file = b.path("src/backends/metal/bridge.h"),
-        .target = target,
-        .optimize = optimize,
-    });
-    translate.addIncludePath(b.path("src/backends/metal"));
-    translate.defineCMacro("HEAVY_SLUG_SHADER_STATS", if (shader_stats) "1" else "0");
-    return translate.createModule();
 }

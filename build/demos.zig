@@ -105,14 +105,12 @@ pub fn buildMetal(
 
     const demo_input = buildDemoInputModule(b, target, optimize);
     const demo_scene = buildDemoSceneModule(b, target, optimize, core_mod, demo_input);
-    const cocoa_c = translateCocoaC(b, target, optimize);
     const demo_platform = b.createModule(.{
         .root_source_file = b.path("demo/platform/cocoa.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "demo_input", .module = demo_input },
-            .{ .name = "cocoa_c", .module = cocoa_c },
         },
     });
 
@@ -225,20 +223,6 @@ fn translateWaylandC(
         .optimize = optimize,
     });
     translate.addIncludePath(wayland_protocols);
-    return translate.createModule();
-}
-
-fn translateCocoaC(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-) *std.Build.Module {
-    const translate = b.addTranslateC(.{
-        .root_source_file = b.path("demo/platform/cocoa.h"),
-        .target = target,
-        .optimize = optimize,
-    });
-    translate.addIncludePath(b.path("demo/platform"));
     return translate.createModule();
 }
 

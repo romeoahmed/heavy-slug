@@ -22,7 +22,9 @@ const frames_in_flight = 3;
 
 pub const Context = metal.Context;
 pub const Host = metal.Host;
-pub const Error = metal.Error;
+pub const Error = metal.Error || error{
+    InvalidView,
+};
 
 pub const RendererOptions = render.RendererOptions;
 pub const FontHandle = render.FontHandle;
@@ -295,7 +297,7 @@ pub const Renderer = struct {
         const wait_start = monotonicNs();
         metal.waitFrameSlot(self.context, self.active_frame, &error_buf) catch {
             std.log.err("Metal frame slot wait failed: {s}", .{std.mem.sliceTo(&error_buf, 0)});
-            return Error.MetalDrawFailed;
+            return Error.DrawFailed;
         };
         if (@import("builtin").mode == .Debug) {
             const wait_end = monotonicNs();
@@ -391,7 +393,7 @@ pub const Renderer = struct {
             std.log.err("Metal draw failed: {s}", .{std.mem.sliceTo(&error_buf, 0)});
             metal.releaseFrameSlot(self.context, self.active_frame);
             self.frame_reserved = false;
-            return Error.MetalDrawFailed;
+            return Error.DrawFailed;
         };
         self.frame_reserved = false;
 

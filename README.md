@@ -150,12 +150,21 @@ Important dependency facts:
   backend or Vulkan demo is requested.
 - `-Ddemo-backend=` is interpreted only when `-Ddemo=true`; backend-only builds
   use `-Dvulkan=true` or `-Dmetal=true`.
+- Metal/Cocoa C ABI headers use explicit `*_u8_view`/`*_u8_buffer` structs over
+  C23/C++23 `char8_t` UTF-8 code units, C23 `bool`, and C23/C++23
+  `static_assert`; Objective-C++ narrows the UTF-8 views to
+  `std::span<const char8_t>` or `std::span<char8_t>` at the boundary.
+- Fallible Metal/Cocoa C ABI creation calls return named status values and
+  write owned handles through explicit out parameters; Cocoa exposes the
+  borrowed Metal host objects as one struct instead of three independent
+  accessors.
+- Zig mirrors the Metal/Cocoa C ABI with explicit `extern` declarations because
+  Zig 0.16 `translate-c` does not currently parse these C23 headers.
 - Metal/Cocoa Objective-C++ sources compile as C++23 with ARC, no C++ or
   Objective-C exceptions, no RTTI, warnings as errors, and Zig optimize-mode
   mapped `-O0`/`-O3`/`-Os` flags.
-- The translated Metal/Cocoa C ABI uses explicit UTF-8 span and error-buffer
-  structs at Objective-C++ boundaries; internal bridge failures are represented
-  without exceptions and mapped back to Zig error sets.
+- Internal bridge failures are represented without exceptions and mapped back
+  to Zig error sets.
 - The demo hosts are deliberately native: Win32 on Windows, Wayland on Linux,
   and Cocoa on macOS. GLFW/SDL-style toolkit dependencies are not part of the
   current build model.
@@ -186,8 +195,9 @@ Backend modules expose `Context`, `Renderer`, `Frame`, `Target`,
 `id<MTLDevice>` / `id<MTL4CommandQueue>` / `CAMetalLayer *` creation contract
 used by the bridge. The bridge retains those objects internally, while the host
 keeps the layer attached and configured for presentation. Metal bridge calls
-that cross Objective-C++ use explicit C ABI span/error-buffer structs rather
-than implicit NUL-terminated strings.
+that cross Objective-C++ use explicit status/out-handle results and C ABI
+`char8_t` UTF-8 view/buffer structs rather than implicit null-pointer failures
+or NUL-terminated strings.
 
 <details>
 <summary>Typical frame shape</summary>

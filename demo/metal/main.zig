@@ -11,13 +11,14 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     var window: demo_platform.Window = .{};
-    try window.init(allocator, demo_scene.window_width, demo_scene.window_height, "heavy-slug Metal 4 demo");
+    try window.init(demo_scene.window_width, demo_scene.window_height, "heavy-slug Metal 4 demo");
     defer window.deinit();
 
+    const host = try window.metalHost();
     var ctx = try heavy_slug_metal.Context.init(.{
-        .device = window.device(),
-        .command_queue = window.commandQueue(),
-        .layer = window.layer(),
+        .device = host.device,
+        .command_queue = host.command_queue,
+        .layer = host.layer,
     });
     defer ctx.deinit();
 
