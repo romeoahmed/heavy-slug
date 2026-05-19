@@ -205,7 +205,8 @@ pointer/length UTF-8 buffers rather than implicit null-pointer failures or
 NUL-terminated strings.
 
 `RendererOptions.validate()` is the shared capacity, pool-alignment, and
-precision-policy contract used by the core and backends. Invalid renderer
+precision-policy contract used by the core and backends. The glyph pool buffer
+size must be a multiple of `min_storage_alignment`; invalid renderer
 configuration is reported as an error before glyph-cache or pool storage is
 created.
 
@@ -344,7 +345,7 @@ Backend debug counters are exposed through `Renderer.stats()` in Debug builds.
 | Core boundary | Core is backend-neutral and window-system-free. |
 | Host boundary | Applications own graphics/device/window lifetimes. |
 | Frame math | Draw submission uses a CPU f64 affine `View`; backends no longer accept f32 projection matrices. |
-| Glyph resources | Cached glyph blobs live in a backend-owned byte pool; visible strips live in per-frame meshlet buffers. |
+| Glyph resources | Cached glyph blobs live in a backend-owned, storage-aligned byte pool; visible strips live in per-frame meshlet buffers. |
 | Blob precision | Glyph blobs are 32-bit fixed-point and keyed by precision tier. |
 | Blob references | `GlyphBlobRef` values are byte offsets. |
 | GPU ABI | Layouts are generated from Slang reflection. |

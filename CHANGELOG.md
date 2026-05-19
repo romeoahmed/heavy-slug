@@ -12,6 +12,10 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Core byte pool allocator rewritten:** glyph blob pool metadata now uses
+  stable free-block nodes, address-ordered coalescing, and power-of-two size
+  bins instead of a single linear best-fit list; pool buffer sizes must now be
+  aligned to the configured minimum storage alignment.
 - **Core renderer contracts tightened:** renderer options now live in a
   dedicated core module with explicit validation for cache capacity, pool
   alignment, and blob-supported precision tiers; glyph-store initialization no

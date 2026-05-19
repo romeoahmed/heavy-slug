@@ -27,6 +27,7 @@ pub const RendererOptions = struct {
         if (self.pool_buffer_size == 0) return error.InvalidRendererOptions;
         if (!isPowerOfTwo(self.min_storage_alignment)) return error.InvalidRendererOptions;
         if (self.min_storage_alignment > self.pool_buffer_size) return error.InvalidRendererOptions;
+        if (self.pool_buffer_size & (self.min_storage_alignment - 1) != 0) return error.InvalidRendererOptions;
 
         try validatePrecisionPolicy(self.precision_policy);
     }
@@ -78,6 +79,10 @@ test "RendererOptions rejects invalid capacity and alignment contracts" {
     try std.testing.expectError(
         error.InvalidRendererOptions,
         (RendererOptions{ .pool_buffer_size = 128, .min_storage_alignment = 256 }).validate(),
+    );
+    try std.testing.expectError(
+        error.InvalidRendererOptions,
+        (RendererOptions{ .pool_buffer_size = 384, .min_storage_alignment = 256 }).validate(),
     );
 }
 
