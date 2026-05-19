@@ -58,6 +58,7 @@ zig build run -Ddemo=true -Ddemo-backend=metal
 
 ```bash
 zig fmt --check build.zig build/ demo/ src/ tools/
+zig build swift-format-lint
 zig build test
 zig build test -Dvulkan=true
 zig build test -Dmetal=true
@@ -164,7 +165,9 @@ Important dependency facts:
   Swift `6.3` or newer compiler, `-swift-version 6`, an explicit macOS SDK,
   and an explicit Apple Swift target triple derived from the Zig target. The
   Zig optimize mode maps to `-Onone`, `-O`, or `-Osize`, and Swift module
-  caches are emitted under the Zig build cache.
+  caches are emitted under the Zig build cache. Swift sources are linted with
+  `zig build swift-format-lint`, which runs `swift format lint --strict`
+  through `xcrun --sdk macosx`.
 - Internal bridge failures are represented without exceptions and mapped back
   to Zig error sets.
 - The demo hosts are deliberately native: Win32 on Windows, Wayland on Linux,
@@ -373,6 +376,7 @@ repository-supported `2026.9` release.
 | Job family | Coverage |
 | --- | --- |
 | Format and Script Syntax | Zig formatting plus POSIX shell syntax checks. |
+| Swift Format | `zig build swift-format-lint` on the selected Apple Swift toolchain. |
 | Core | Core library and build-tool tests on Ubuntu, macOS, and Windows. |
 | Shaders | `zig build spirv` and `zig build msl`. |
 | Backend | Vulkan, Metal, shader-stat variants, and native demo host build tests. |

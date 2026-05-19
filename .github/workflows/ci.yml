@@ -77,6 +77,71 @@ jobs:
           bash -n .github/scripts/setup-zig.sh
           bash -n .github/scripts/setup-slang.sh
 
+  swift-format:
+    name: Swift Format
+    runs-on: macos-26
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Resolve Zig
+        id: zig
+        run: ./.github/scripts/setup-zig.sh --resolve-only
+
+      - name: Restore Zig tool cache
+        id: zig-tool-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ steps.zig.outputs.install_dir }}
+          key: zig-tool-${{ runner.os }}-${{ runner.arch }}-${{ steps.zig.outputs.target }}-${{ steps.zig.outputs.version }}
+
+      - name: Restore Zig package cache
+        id: zig-pkg-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/.cache/zig
+          key: zig-pkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-pkg-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Show Apple Swift toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-path
+          xcrun --sdk macosx swiftc --version
+          xcrun --sdk macosx swift format --version
+
+      - name: Setup Zig
+        run: ./.github/scripts/setup-zig.sh
+        env:
+          ZIG_VERSION: ${{ steps.zig.outputs.version }}
+          ZIG_DOWNLOAD_URL: ${{ steps.zig.outputs.url }}
+          ZIG_DOWNLOAD_SHA256: ${{ steps.zig.outputs.sha256 }}
+
+      - name: Save Zig tool cache
+        if: ${{ github.event_name != 'pull_request' && steps.zig-tool-cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ steps.zig.outputs.install_dir }}
+          key: zig-tool-${{ runner.os }}-${{ runner.arch }}-${{ steps.zig.outputs.target }}-${{ steps.zig.outputs.version }}
+
+      - name: Lint Swift formatting
+        run: zig build swift-format-lint
+
+      - name: Save Zig package cache
+        if: ${{ github.event_name != 'pull_request' && steps.zig-pkg-cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.cache/zig
+          key: zig-pkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+
   core:
     name: Core (${{ matrix.name }})
     needs: format

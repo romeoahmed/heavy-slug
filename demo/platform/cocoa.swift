@@ -1,6 +1,7 @@
 // SwiftUI/AppKit demo host and Metal 4 object provider for the Zig demo.
 
 import AppKit
+import Combine
 import Foundation
 import Metal
 import QuartzCore
@@ -46,10 +47,24 @@ private enum DemoColorScheme {
       return .darkAqua
     }
   }
+
+  var swiftUIColorScheme: ColorScheme {
+    switch self {
+    case .light:
+      return .light
+    case .dark:
+      return .dark
+    }
+  }
 }
 
 private let keyCount = 10
 private let mouseButtonCount = 2
+
+@MainActor
+private final class DemoAppearance: ObservableObject {
+  @Published var scheme: DemoColorScheme = .light
+}
 
 private struct HostFailure: Error, CustomStringConvertible {
   let message: String
@@ -184,7 +199,7 @@ private final class DemoWindowHost {
   var framebufferWidth: UInt32 = 0
   var framebufferHeight: UInt32 = 0
   var shouldClose = false
-  var colorScheme: DemoColorScheme = .light
+  let appearance = DemoAppearance()
   let startTime = CACurrentMediaTime()
 
   init(device: MTLDevice, commandQueue: MTL4CommandQueue, layer: CAMetalLayer) {
@@ -248,21 +263,21 @@ private final class DemoWindowHost {
 
   func setDarkMode(_ enabled: Bool) {
     let nextScheme = DemoColorScheme(darkModeEnabled: enabled)
-    if colorScheme != nextScheme {
-      colorScheme = nextScheme
+    if appearance.scheme != nextScheme {
+      appearance.scheme = nextScheme
     }
-    applyColorScheme()
+    applyAppearance()
   }
 
-  func applyColorScheme() {
-    guard let appearance = NSAppearance(named: colorScheme.appearanceName) else {
+  func applyAppearance() {
+    guard let appKitAppearance = NSAppearance(named: appearance.scheme.appearanceName) else {
       return
     }
 
-    NSApplication.shared.appearance = appearance
-    window?.appearance = appearance
-    window?.contentView?.appearance = appearance
-    view?.appearance = appearance
+    NSApplication.shared.appearance = appKitAppearance
+    window?.appearance = appKitAppearance
+    window?.contentView?.appearance = appKitAppearance
+    view?.appearance = appKitAppearance
   }
 }
 
@@ -466,7 +481,7 @@ private struct HeavySlugMetalSurface: NSViewRepresentable {
     view.layer = host.layer
     view.layerContentsRedrawPolicy = .never
     host.view = view
-    host.applyColorScheme()
+    host.applyAppearance()
     return view
   }
 
@@ -476,16 +491,18 @@ private struct HeavySlugMetalSurface: NSViewRepresentable {
       nsView.layer = host.layer
     }
     host.view = nsView
-    host.applyColorScheme()
+    host.applyAppearance()
     host.updateDrawableSize()
   }
 }
 
 private struct HeavySlugDemoRootView: View {
+  @ObservedObject var appearance: DemoAppearance
   let host: DemoWindowHost
 
   var body: some View {
     HeavySlugMetalSurface(host: host)
+      .preferredColorScheme(appearance.scheme.swiftUIColorScheme)
   }
 }
 
@@ -656,12 +673,13 @@ private func makeWindow(width: UInt32, height: UInt32, title: String) throws -> 
   host.window = window
   host.delegate = delegate
 
-  let hostingView = NSHostingView(rootView: HeavySlugDemoRootView(host: host))
+  let hostingView = NSHostingView(
+    rootView: HeavySlugDemoRootView(appearance: host.appearance, host: host))
   hostingView.frame = rect
   window.contentView = hostingView
   window.delegate = delegate
   AppState.shared.delegate?.activeHost = host
-  host.applyColorScheme()
+  host.applyAppearance()
 
   window.center()
   window.makeKeyAndOrderFront(nil)
@@ -734,7 +752,7 @@ private func writeEmptySnapshot(
 }
 
 @c(hs_demo_cocoa_window_create)
-public func hs_demo_cocoa_window_create(
+public func hsDemoCocoaWindowCreate(
   _ outWindow: UnsafeMutablePointer<OpaquePointer?>?,
   _ width: UInt32,
   _ height: UInt32,
@@ -774,7 +792,7 @@ public func hs_demo_cocoa_window_create(
 }
 
 @c(hs_demo_cocoa_window_destroy)
-public func hs_demo_cocoa_window_destroy(_ hostHandle: OpaquePointer?) {
+public func hsDemoCocoaWindowDestroy(_ hostHandle: OpaquePointer?) {
   guard Thread.isMainThread, let hostHandle else {
     return
   }
@@ -798,7 +816,7 @@ public func hs_demo_cocoa_window_destroy(_ hostHandle: OpaquePointer?) {
 }
 
 @c(hs_demo_cocoa_window_poll_events)
-public func hs_demo_cocoa_window_poll_events(_ hostHandle: OpaquePointer?) {
+public func hsDemoCocoaWindowPollEvents(_ hostHandle: OpaquePointer?) {
   guard Thread.isMainThread else {
     return
   }
@@ -826,7 +844,7 @@ public func hs_demo_cocoa_window_poll_events(_ hostHandle: OpaquePointer?) {
 }
 
 @c(hs_demo_cocoa_window_set_dark_mode)
-public func hs_demo_cocoa_window_set_dark_mode(_ hostHandle: OpaquePointer?, _ enabled: UInt8) {
+public func hsDemoCocoaWindowSetDarkMode(_ hostHandle: OpaquePointer?, _ enabled: UInt8) {
   guard Thread.isMainThread else {
     return
   }
@@ -841,7 +859,7 @@ public func hs_demo_cocoa_window_set_dark_mode(_ hostHandle: OpaquePointer?, _ e
 }
 
 @c(hs_demo_cocoa_window_snapshot)
-public func hs_demo_cocoa_window_snapshot(
+public func hsDemoCocoaWindowSnapshot(
   _ hostHandle: OpaquePointer?,
   _ keys: UnsafeMutablePointer<UInt8>?,
   _ keyCapacity: UInt,
@@ -909,7 +927,7 @@ public func hs_demo_cocoa_window_snapshot(
 }
 
 @c(hs_demo_cocoa_window_time)
-public func hs_demo_cocoa_window_time(_ hostHandle: OpaquePointer?) -> Double {
+public func hsDemoCocoaWindowTime(_ hostHandle: OpaquePointer?) -> Double {
   guard Thread.isMainThread else {
     return 0
   }
@@ -924,7 +942,7 @@ public func hs_demo_cocoa_window_time(_ hostHandle: OpaquePointer?) -> Double {
 }
 
 @c(hs_demo_cocoa_window_metal_host)
-public func hs_demo_cocoa_window_metal_host(
+public func hsDemoCocoaWindowMetalHost(
   _ hostHandle: OpaquePointer?,
   _ outDevice: UnsafeMutablePointer<UnsafeMutableRawPointer?>?,
   _ outCommandQueue: UnsafeMutablePointer<UnsafeMutableRawPointer?>?,

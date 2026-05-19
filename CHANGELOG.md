@@ -12,6 +12,15 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Swift bridge style and linting tightened:** Swift/Metal bridge compilation
+  now invokes `swiftc` through `xcrun --sdk macosx`, the build graph exposes
+  `zig build swift-format-lint`, CI runs that strict Swift format lint on
+  macOS, and Swift `@c` functions keep their C symbols while using Swift-style
+  lower-camel identifiers internally.
+- **Metal demo appearance host modernized:** the Cocoa/SwiftUI demo host now
+  drives the explicit light/dark toggle through SwiftUI `preferredColorScheme`
+  and an observable appearance model while continuing to set AppKit appearances
+  for the native window/titlebar chrome.
 - **Swift build toolchain resolution tightened:** Metal and Cocoa bridge builds
   now resolve `swiftc` and the macOS SDK through `xcrun --sdk macosx`, pass the
   SDK explicitly to Swift, fail early when the selected Swift compiler is older

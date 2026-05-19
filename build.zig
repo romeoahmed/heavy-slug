@@ -6,6 +6,7 @@ const c_libs = @import("build/c_libs.zig");
 const demos = @import("build/demos.zig");
 const deps = @import("build/deps.zig");
 const shaders = @import("build/shaders.zig");
+const swift = @import("build/swift.zig");
 
 pub fn build(b: *std.Build) void {
     const opts = deps.resolve(b);
@@ -39,6 +40,9 @@ pub fn build(b: *std.Build) void {
     const msl_step = b.step("msl", "Compile Slang shaders to Metal Shading Language");
     const msl_shaders = shaders.compileMsl(b, opts.shader_stats);
     shaders.installMsl(b, msl_step, msl_shaders);
+
+    const swift_format_step = b.step("swift-format-lint", "Lint Swift sources with swift-format");
+    swift.addFormatLintStep(b, swift_format_step);
 
     const gpu_structs_mod = if (opts.vulkan or opts.metal)
         shaders.buildGpuStructsModule(b)

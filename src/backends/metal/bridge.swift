@@ -625,7 +625,7 @@ private func draw(
 }
 
 @c(hs_metal_context_create)
-public func hs_metal_context_create(
+public func hsMetalContextCreate(
   _ outContext: UnsafeMutablePointer<OpaquePointer?>?,
   _ device: UnsafeMutableRawPointer?,
   _ commandQueue: UnsafeMutableRawPointer?,
@@ -666,7 +666,7 @@ public func hs_metal_context_create(
 }
 
 @c(hs_metal_context_destroy)
-public func hs_metal_context_destroy(_ contextHandle: OpaquePointer?) {
+public func hsMetalContextDestroy(_ contextHandle: OpaquePointer?) {
   guard let contextHandle else {
     return
   }
@@ -679,7 +679,7 @@ public func hs_metal_context_destroy(_ contextHandle: OpaquePointer?) {
 }
 
 @c(hs_metal_context_wait_frame_slot)
-public func hs_metal_context_wait_frame_slot(
+public func hsMetalContextWaitFrameSlot(
   _ contextHandle: OpaquePointer?,
   _ slotIndex: UInt32,
   _ errorData: UnsafeMutablePointer<UInt8>?,
@@ -700,7 +700,7 @@ public func hs_metal_context_wait_frame_slot(
 }
 
 @c(hs_metal_context_release_frame_slot)
-public func hs_metal_context_release_frame_slot(
+public func hsMetalContextReleaseFrameSlot(
   _ contextHandle: OpaquePointer?, _ slotIndex: UInt32
 ) {
   guard let context = try? borrowedContext(contextHandle), validSlotIndex(slotIndex) else {
@@ -710,7 +710,7 @@ public func hs_metal_context_release_frame_slot(
 }
 
 @c(hs_metal_context_wait_submitted)
-public func hs_metal_context_wait_submitted(_ contextHandle: OpaquePointer?) {
+public func hsMetalContextWaitSubmitted(_ contextHandle: OpaquePointer?) {
   guard let context = try? borrowedContext(contextHandle) else {
     return
   }
@@ -718,7 +718,7 @@ public func hs_metal_context_wait_submitted(_ contextHandle: OpaquePointer?) {
 }
 
 @c(hs_metal_buffer_create)
-public func hs_metal_buffer_create(
+public func hsMetalBufferCreate(
   _ outBuffer: UnsafeMutablePointer<OpaquePointer?>?,
   _ contextHandle: OpaquePointer?,
   _ size: UInt,
@@ -746,7 +746,7 @@ public func hs_metal_buffer_create(
 }
 
 @c(hs_metal_buffer_destroy)
-public func hs_metal_buffer_destroy(_ bufferHandle: OpaquePointer?) {
+public func hsMetalBufferDestroy(_ bufferHandle: OpaquePointer?) {
   guard let bufferHandle else {
     return
   }
@@ -754,7 +754,7 @@ public func hs_metal_buffer_destroy(_ bufferHandle: OpaquePointer?) {
 }
 
 @c(hs_metal_buffer_contents)
-public func hs_metal_buffer_contents(_ bufferHandle: OpaquePointer?) -> UnsafeMutableRawPointer? {
+public func hsMetalBufferContents(_ bufferHandle: OpaquePointer?) -> UnsafeMutableRawPointer? {
   guard let buffer = borrowedBuffer(bufferHandle) else {
     return nil
   }
@@ -762,7 +762,7 @@ public func hs_metal_buffer_contents(_ bufferHandle: OpaquePointer?) -> UnsafeMu
 }
 
 @c(hs_metal_context_draw)
-public func hs_metal_context_draw(
+public func hsMetalContextDraw(
   _ contextHandle: OpaquePointer?,
   _ width: UInt32,
   _ height: UInt32,

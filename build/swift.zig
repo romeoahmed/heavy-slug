@@ -19,6 +19,10 @@ pub const RuntimeOptions = struct {
 const macos_sdk = "macosx";
 const swift_language_version = "6";
 const min_swift_version = std.SemanticVersion{ .major = 6, .minor = 3, .patch = 0 };
+const swift_format_sources = [_][]const u8{
+    "src/backends/metal/bridge.swift",
+    "demo/platform/cocoa.swift",
+};
 
 const Toolchain = struct {
     swiftc_path: []const u8,
@@ -38,7 +42,7 @@ const SwiftTargetPaths = struct {
 pub fn addObject(b: *std.Build, options: ObjectOptions) std.Build.LazyPath {
     const target_triple = swiftTargetTriple(b, options.target.result);
     const toolchain = resolveToolchain(b, target_triple);
-    const cmd = b.addSystemCommand(&.{toolchain.swiftc_path});
+    const cmd = addSwiftcCommand(b);
     cmd.setName(b.fmt("swiftc {s}", .{options.name}));
     cmd.addArgs(&.{
         "-parse-as-library",
@@ -60,6 +64,24 @@ pub fn addObject(b: *std.Build, options: ObjectOptions) std.Build.LazyPath {
     const object = cmd.addOutputFileArg(b.fmt("{s}.o", .{options.name}));
     cmd.addFileArg(options.source);
     return object;
+}
+
+pub fn addFormatLintStep(b: *std.Build, step: *std.Build.Step) void {
+    const cmd = b.addSystemCommand(&.{
+        "xcrun",
+        "--sdk",
+        macos_sdk,
+        "swift",
+        "format",
+        "lint",
+        "--strict",
+        "--parallel",
+    });
+    cmd.setName("swift format lint");
+    for (swift_format_sources) |source| {
+        cmd.addFileArg(b.path(source));
+    }
+    step.dependOn(&cmd.step);
 }
 
 pub fn linkRuntime(b: *std.Build, module: *std.Build.Module, options: RuntimeOptions) void {
@@ -139,11 +161,23 @@ fn macosVersionString(b: *std.Build, version: std.SemanticVersion) []const u8 {
     return b.fmt("{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
 }
 
+fn addSwiftcCommand(b: *std.Build) *std.Build.Step.Run {
+    return b.addSystemCommand(&.{
+        "xcrun",
+        "--sdk",
+        macos_sdk,
+        "swiftc",
+    });
+}
+
 fn resolveToolchain(b: *std.Build, target_triple: []const u8) Toolchain {
     const swiftc_path = trimCommandOutput(b.run(&.{ "xcrun", "--sdk", macos_sdk, "--find", "swiftc" }));
     const sdk_path = trimCommandOutput(b.run(&.{ "xcrun", "--sdk", macos_sdk, "--show-sdk-path" }));
     const target_info = parseSwiftTargetInfo(b, b.run(&.{
-        swiftc_path,
+        "xcrun",
+        "--sdk",
+        macos_sdk,
+        "swiftc",
         "-print-target-info",
         "-target",
         target_triple,
