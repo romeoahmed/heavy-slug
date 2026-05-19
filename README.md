@@ -152,8 +152,9 @@ Important dependency facts:
 - `-Ddemo-backend=` is interpreted only when `-Ddemo=true`; backend-only builds
   use `-Dvulkan=true` or `-Dmetal=true`.
 - Metal/Cocoa bridge code is Swift. Swift `@c` exports use only pointers,
-  integer sizes, scalar values, and explicit out parameters so Zig mirrors the
-  ABI directly with `extern` declarations and does not translate bridge headers.
+  integer sizes, scalar values, explicit out parameters, and versioned raw
+  request blocks for larger calls, so Zig mirrors the ABI directly with
+  `extern` declarations and does not translate bridge headers.
 - Fallible Metal/Cocoa bridge creation calls return named status values and
   write owned handles through explicit out parameters. UTF-8 data crosses as
   pointer/length pairs, and diagnostics are written into caller-provided byte
@@ -209,8 +210,9 @@ devices. The Metal backend also exposes `Host`, the
 used by the Swift bridge. The bridge retains those objects internally, while
 the host keeps the layer attached and configured for presentation. Metal bridge
 calls cross Swift `@c` functions as explicit status/out-handle results plus
-pointer/length UTF-8 buffers rather than implicit null-pointer failures or
-NUL-terminated strings.
+pointer/length UTF-8 buffers and a versioned draw-request byte layout rather
+than implicit null-pointer failures, NUL-terminated strings, or Swift struct
+layout assumptions.
 
 `RendererOptions.validate()` is the shared capacity, pool-alignment, and
 precision-policy contract used by the core and backends. The glyph pool buffer
@@ -285,10 +287,12 @@ than per-glyph descriptor slots and binds mesh and fragment stages as linked
 vertex, tessellation, geometry, and task shader-object stages before binding
 the no-task mesh/fragment pair, then records all required dynamic graphics
 state before `vkCmdDrawMeshTasksEXT`. The Metal backend follows the
-Metal 4 command and argument-table path exposed through the Swift bridge; it
-keeps a mesh `MTLRenderPipelineState` because Metal dynamic
-libraries and pipeline dynamic linking do not replace the render pipeline state
-model for this renderer.
+Metal 4 command and argument-table path exposed through the Swift bridge; Zig
+submits one validated draw-request block per frame slot, while Swift decodes it
+before binding `MTL4ArgumentTable` GPU addresses and encoding chunked mesh
+threadgroup draws. It keeps a mesh `MTLRenderPipelineState` because Metal
+dynamic libraries and pipeline dynamic linking do not replace the render
+pipeline state model for this renderer.
 
 ## Shader Layout
 

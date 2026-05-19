@@ -100,17 +100,21 @@ fn frameParamChunkCount(max_glyphs_per_frame: u32) u32 {
     return drawChunkCount(mesh_limits.maxMeshletsForGlyphCapacity(max_glyphs_per_frame));
 }
 
+fn byteSizeFor(comptime Element: type, count: usize) Error!usize {
+    return std.math.mul(usize, count, @sizeOf(Element)) catch Error.BufferCreateFailed;
+}
+
 fn resetShaderStatsBuffer(buffer: metal.Buffer) void {
-    shader_stats_mod.clearBytes(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
+    shader_stats_mod.clearBytes(buffer.bytes()[0..@sizeOf(heavy_slug.ShaderStats)]);
 }
 
 fn seedShaderStatsBuffer(buffer: metal.Buffer, glyph_count: u32, meshlet_count: u32, draw_chunks: u32) void {
-    const bytes: []align(@alignOf(u32)) u8 = @alignCast(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
+    const bytes: []align(@alignOf(u32)) u8 = @alignCast(buffer.bytes()[0..@sizeOf(heavy_slug.ShaderStats)]);
     shader_stats_mod.seedFrameSubmission(bytes, glyph_count, meshlet_count, draw_chunks);
 }
 
 fn readShaderStatsBuffer(buffer: metal.Buffer) heavy_slug.ShaderStats {
-    const bytes: []align(@alignOf(u32)) const u8 = @alignCast(buffer.mapped[0..@sizeOf(heavy_slug.ShaderStats)]);
+    const bytes: []align(@alignOf(u32)) const u8 = @alignCast(buffer.constBytes()[0..@sizeOf(heavy_slug.ShaderStats)]);
     return shader_stats_mod.Stats.fromBytes(bytes);
 }
 
@@ -127,7 +131,7 @@ fn viewSizeU32(view: core_types.View) ?[2]u32 {
     return .{ width, height };
 }
 
-fn writeFrameParams(buffer: metal.Buffer, view_size: [2]u32, meshlet_count: u32) void {
+fn writeFrameParams(buffer: metal.Buffer, view_size: [2]u32, meshlet_count: u32) Error!void {
     var meshlet_base: u32 = 0;
     var chunk_index: usize = 0;
     while (meshlet_base < meshlet_count) : (chunk_index += 1) {
@@ -140,7 +144,10 @@ fn writeFrameParams(buffer: metal.Buffer, view_size: [2]u32, meshlet_count: u32)
             .meshlet_base = meshlet_base,
         };
         const offset = chunk_index * @sizeOf(FrameParams);
-        @memcpy(buffer.mapped[offset..][0..@sizeOf(FrameParams)], std.mem.asBytes(&params));
+        if (offset > buffer.size or @sizeOf(FrameParams) > buffer.size - offset) {
+            return Error.DrawFailed;
+        }
+        @memcpy(buffer.bytes()[offset..][0..@sizeOf(FrameParams)], std.mem.asBytes(&params));
         meshlet_base += chunk_count;
     }
 }
@@ -223,8 +230,9 @@ pub const Renderer = struct {
         const pool_buf = try metal.Buffer.init(context, options.pool_buffer_size);
         errdefer pool_buf.deinit();
 
-        const glyph_buffer_size = @as(usize, options.max_glyphs_per_frame) * @sizeOf(AbiGlyphInstance);
-        const meshlet_buffer_size = @as(usize, mesh_limits.maxMeshletsForGlyphCapacity(options.max_glyphs_per_frame)) * @sizeOf(AbiGlyphMeshlet);
+        const glyph_buffer_size = try byteSizeFor(AbiGlyphInstance, @intCast(options.max_glyphs_per_frame));
+        const meshlet_buffer_size = try byteSizeFor(AbiGlyphMeshlet, @intCast(mesh_limits.maxMeshletsForGlyphCapacity(options.max_glyphs_per_frame)));
+        const frame_params_size = try byteSizeFor(FrameParams, @intCast(frameParamChunkCount(options.max_glyphs_per_frame)));
         var frame_slots: [frames_in_flight]FrameSlot = undefined;
         var initialized_slots: usize = 0;
         errdefer {
@@ -237,7 +245,7 @@ pub const Renderer = struct {
             const meshlet_buffer = try metal.Buffer.init(context, meshlet_buffer_size);
             errdefer meshlet_buffer.deinit();
 
-            const params_buffer = try metal.Buffer.init(context, @as(usize, frameParamChunkCount(options.max_glyphs_per_frame)) * @sizeOf(FrameParams));
+            const params_buffer = try metal.Buffer.init(context, frame_params_size);
             errdefer params_buffer.deinit();
 
             var shader_stats: ShaderStatsBuffer = undefined;
@@ -336,7 +344,10 @@ pub const Renderer = struct {
     }
 
     pub fn uploadBlob(self: *Renderer, pool_alloc: pool_mod.Allocation, data: []const u8) !GlyphBlobRef {
-        const dst = self.pool_buffer.mapped[pool_alloc.offset..][0..data.len];
+        if (pool_alloc.offset > self.pool_buffer.size or data.len > self.pool_buffer.size - pool_alloc.offset) {
+            return Error.DrawFailed;
+        }
+        const dst = self.pool_buffer.bytes()[pool_alloc.offset..][0..data.len];
         @memcpy(dst, data);
         return GlyphBlobRef.from(pool_alloc.offset);
     }
@@ -372,7 +383,7 @@ pub const Renderer = struct {
         else
             null;
 
-        writeFrameParams(frame_slot.frame_params, view_size, meshlet_count);
+        try writeFrameParams(frame_slot.frame_params, view_size, meshlet_count);
 
         const workgroup_count = meshlet_count;
         var error_buf: [metal.diagnostic_capacity]u8 = undefined;

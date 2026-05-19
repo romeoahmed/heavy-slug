@@ -35,6 +35,7 @@ pub const GeometryLimits = struct {
 };
 
 pub const frame_slot_count: usize = 3;
+pub const draw_request_abi_version: u32 = 1;
 pub const buffer_glyph_pool: u32 = @intFromEnum(resource_model.BufferBinding.glyph_pool);
 pub const buffer_glyphs: u32 = @intFromEnum(resource_model.BufferBinding.glyphs);
 pub const buffer_meshlets: u32 = @intFromEnum(resource_model.BufferBinding.meshlets);
@@ -76,20 +77,8 @@ extern fn hs_metal_buffer_destroy(buffer: ?*BufferHandle) void;
 extern fn hs_metal_buffer_contents(buffer: ?*BufferHandle) ?*anyopaque;
 extern fn hs_metal_context_draw(
     context: ?*ContextHandle,
-    width: u32,
-    height: u32,
-    clear_r: f32,
-    clear_g: f32,
-    clear_b: f32,
-    clear_a: f32,
-    glyphs: ?*BufferHandle,
-    meshlets: ?*BufferHandle,
-    frame_params: ?*BufferHandle,
-    frame_params_stride: usize,
-    glyph_pool: ?*BufferHandle,
-    shader_stats: ?*BufferHandle,
-    workgroup_count: u32,
-    slot_index: u32,
+    request_data: ?*const DrawRequest,
+    request_size: usize,
     error_data: ?[*]U8,
     error_size: usize,
 ) Status;
@@ -107,6 +96,7 @@ pub const Error = error{
     ContextCreateFailed,
     BufferCreateFailed,
     DrawFailed,
+    InvalidBufferSize,
 };
 
 fn emptyDiagnostic() [diagnostic_capacity]u8 {
@@ -154,8 +144,11 @@ pub const Context = struct {
 pub const Buffer = struct {
     handle: *BufferHandle,
     mapped: [*]u8,
+    size: usize,
 
     pub fn init(ctx: Context, size: usize) !Buffer {
+        if (size == 0) return Error.InvalidBufferSize;
+
         var error_buf = emptyDiagnostic();
         var handle: ?*BufferHandle = null;
         if (hs_metal_buffer_create(
@@ -177,11 +170,20 @@ pub const Buffer = struct {
         return .{
             .handle = owned_handle,
             .mapped = @ptrCast(contents),
+            .size = size,
         };
     }
 
     pub fn deinit(self: Buffer) void {
         hs_metal_buffer_destroy(self.handle);
+    }
+
+    pub fn bytes(self: Buffer) []u8 {
+        return self.mapped[0..self.size];
+    }
+
+    pub fn constBytes(self: Buffer) []const u8 {
+        return self.mapped[0..self.size];
     }
 };
 
@@ -215,28 +217,47 @@ pub const DrawInfo = struct {
     slot_index: u32,
 };
 
+pub const DrawRequest = extern struct {
+    abi_version: u32,
+    width: u32,
+    height: u32,
+    slot_index: u32,
+    workgroup_count: u32,
+    reserved0: u32,
+    clear_color: [4]f32,
+    frame_params_stride: usize,
+    glyphs: ?*BufferHandle,
+    meshlets: ?*BufferHandle,
+    frame_params: ?*BufferHandle,
+    glyph_pool: ?*BufferHandle,
+    shader_stats: ?*BufferHandle,
+
+    pub fn init(info: DrawInfo) DrawRequest {
+        return .{
+            .abi_version = draw_request_abi_version,
+            .width = info.viewport[0],
+            .height = info.viewport[1],
+            .slot_index = info.slot_index,
+            .workgroup_count = info.workgroup_count,
+            .reserved0 = 0,
+            .clear_color = info.clear_color,
+            .frame_params_stride = info.frame_params_stride,
+            .glyphs = info.glyphs.handle,
+            .meshlets = info.meshlets.handle,
+            .frame_params = info.frame_params.handle,
+            .glyph_pool = info.glyph_pool.handle,
+            .shader_stats = if (info.shader_stats) |shader_stats| shader_stats.handle else null,
+        };
+    }
+};
+
 pub fn draw(ctx: Context, info: DrawInfo, error_buffer: []u8) Error!void {
-    const shader_stats_handle: ?*BufferHandle = if (info.shader_stats) |shader_stats|
-        shader_stats.handle
-    else
-        null;
+    const request = DrawRequest.init(info);
 
     if (hs_metal_context_draw(
         ctx.handle,
-        info.viewport[0],
-        info.viewport[1],
-        info.clear_color[0],
-        info.clear_color[1],
-        info.clear_color[2],
-        info.clear_color[3],
-        info.glyphs.handle,
-        info.meshlets.handle,
-        info.frame_params.handle,
-        info.frame_params_stride,
-        info.glyph_pool.handle,
-        shader_stats_handle,
-        info.workgroup_count,
-        info.slot_index,
+        &request,
+        @sizeOf(DrawRequest),
         bufferPtr(error_buffer),
         error_buffer.len,
     ) != .ok) return Error.DrawFailed;
@@ -273,6 +294,7 @@ test "Metal context mirrors Swift bridge ABI constants" {
     try std.testing.expectEqual(@as(c_int, 1), @intFromEnum(Status.err));
     try std.testing.expectEqual(@as(usize, 1), @sizeOf(U8));
     try std.testing.expectEqual(@as(usize, 3), frame_slot_count);
+    try std.testing.expectEqual(@as(u32, 1), draw_request_abi_version);
     try std.testing.expectEqual(@as(u32, 0), buffer_glyph_pool);
     try std.testing.expectEqual(@as(u32, 1), buffer_glyphs);
     try std.testing.expectEqual(@as(u32, 2), buffer_meshlets);
@@ -280,4 +302,22 @@ test "Metal context mirrors Swift bridge ABI constants" {
     try std.testing.expectEqual(@as(u32, 0), object_threadgroup_size);
     try std.testing.expectEqual(@as(u32, 32), mesh_threadgroup_size);
     try std.testing.expectEqual(@as(u32, 1024), max_mesh_threadgroups_per_draw);
+}
+
+test "Metal draw request ABI is explicit and pointer-sized" {
+    try std.testing.expectEqual(@as(usize, 8), @alignOf(DrawRequest));
+    try std.testing.expectEqual(@as(usize, 88), @sizeOf(DrawRequest));
+    try std.testing.expectEqual(@as(usize, 0), @offsetOf(DrawRequest, "abi_version"));
+    try std.testing.expectEqual(@as(usize, 4), @offsetOf(DrawRequest, "width"));
+    try std.testing.expectEqual(@as(usize, 8), @offsetOf(DrawRequest, "height"));
+    try std.testing.expectEqual(@as(usize, 12), @offsetOf(DrawRequest, "slot_index"));
+    try std.testing.expectEqual(@as(usize, 16), @offsetOf(DrawRequest, "workgroup_count"));
+    try std.testing.expectEqual(@as(usize, 20), @offsetOf(DrawRequest, "reserved0"));
+    try std.testing.expectEqual(@as(usize, 24), @offsetOf(DrawRequest, "clear_color"));
+    try std.testing.expectEqual(@as(usize, 40), @offsetOf(DrawRequest, "frame_params_stride"));
+    try std.testing.expectEqual(@as(usize, 48), @offsetOf(DrawRequest, "glyphs"));
+    try std.testing.expectEqual(@as(usize, 56), @offsetOf(DrawRequest, "meshlets"));
+    try std.testing.expectEqual(@as(usize, 64), @offsetOf(DrawRequest, "frame_params"));
+    try std.testing.expectEqual(@as(usize, 72), @offsetOf(DrawRequest, "glyph_pool"));
+    try std.testing.expectEqual(@as(usize, 80), @offsetOf(DrawRequest, "shader_stats"));
 }

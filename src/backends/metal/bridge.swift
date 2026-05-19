@@ -9,6 +9,7 @@ private let statusOK: Int32 = 0
 private let statusError: Int32 = 1
 
 private let frameSlotCount = 3
+private let drawRequestAbiVersion: UInt32 = 1
 private let bufferGlyphPool: UInt32 = 0
 private let bufferGlyphs: UInt32 = 1
 private let bufferMeshlets: UInt32 = 2
@@ -24,6 +25,80 @@ private let objectThreadgroupSize = 0
 private let meshThreadgroupSize = 32
 private let maxMeshThreadgroupsPerDraw: UInt32 = 1024
 private let boundRenderStages: MTLRenderStages = [.mesh, .fragment]
+
+private enum DrawRequestLayout {
+  static let byteSize = 88
+  static let abiVersion = 0
+  static let width = 4
+  static let height = 8
+  static let slotIndex = 12
+  static let workgroupCount = 16
+  static let reserved0 = 20
+  static let clearR = 24
+  static let clearG = 28
+  static let clearB = 32
+  static let clearA = 36
+  static let frameParamsStride = 40
+  static let glyphs = 48
+  static let meshlets = 56
+  static let frameParams = 64
+  static let glyphPool = 72
+  static let shaderStats = 80
+}
+
+private struct DrawRequest {
+  let width: UInt32
+  let height: UInt32
+  let slotIndex: UInt32
+  let workgroupCount: UInt32
+  let clearR: Float
+  let clearG: Float
+  let clearB: Float
+  let clearA: Float
+  let frameParamsStride: UInt
+  let glyphs: OpaquePointer?
+  let meshlets: OpaquePointer?
+  let frameParams: OpaquePointer?
+  let glyphPool: OpaquePointer?
+  let shaderStats: OpaquePointer?
+
+  init(data: UnsafeRawPointer?, size: UInt) throws {
+    guard MemoryLayout<UInt>.size == 8, MemoryLayout<OpaquePointer?>.size == 8 else {
+      throw fail("Metal draw request ABI requires a 64-bit target")
+    }
+    guard let data else {
+      throw fail("Metal draw received a null draw request")
+    }
+    guard size >= UInt(DrawRequestLayout.byteSize) else {
+      throw fail("Metal draw request is smaller than the expected ABI size")
+    }
+
+    let abiVersion = data.load(fromByteOffset: DrawRequestLayout.abiVersion, as: UInt32.self)
+    guard abiVersion == drawRequestAbiVersion else {
+      throw fail("unsupported Metal draw request ABI version \(abiVersion)")
+    }
+    let reserved0 = data.load(fromByteOffset: DrawRequestLayout.reserved0, as: UInt32.self)
+    guard reserved0 == 0 else {
+      throw fail("Metal draw request reserved field must be zero")
+    }
+
+    width = data.load(fromByteOffset: DrawRequestLayout.width, as: UInt32.self)
+    height = data.load(fromByteOffset: DrawRequestLayout.height, as: UInt32.self)
+    slotIndex = data.load(fromByteOffset: DrawRequestLayout.slotIndex, as: UInt32.self)
+    workgroupCount = data.load(fromByteOffset: DrawRequestLayout.workgroupCount, as: UInt32.self)
+    clearR = data.load(fromByteOffset: DrawRequestLayout.clearR, as: Float.self)
+    clearG = data.load(fromByteOffset: DrawRequestLayout.clearG, as: Float.self)
+    clearB = data.load(fromByteOffset: DrawRequestLayout.clearB, as: Float.self)
+    clearA = data.load(fromByteOffset: DrawRequestLayout.clearA, as: Float.self)
+    frameParamsStride = data.load(
+      fromByteOffset: DrawRequestLayout.frameParamsStride, as: UInt.self)
+    glyphs = data.load(fromByteOffset: DrawRequestLayout.glyphs, as: OpaquePointer?.self)
+    meshlets = data.load(fromByteOffset: DrawRequestLayout.meshlets, as: OpaquePointer?.self)
+    frameParams = data.load(fromByteOffset: DrawRequestLayout.frameParams, as: OpaquePointer?.self)
+    glyphPool = data.load(fromByteOffset: DrawRequestLayout.glyphPool, as: OpaquePointer?.self)
+    shaderStats = data.load(fromByteOffset: DrawRequestLayout.shaderStats, as: OpaquePointer?.self)
+  }
+}
 
 private struct BridgeFailure: Error, CustomStringConvertible {
   let message: String
@@ -424,6 +499,35 @@ private func requireBuffer(_ handle: OpaquePointer?, owner: MetalContext) throws
   return buffer
 }
 
+private struct DrawResources {
+  let glyphs: MetalBuffer
+  let meshlets: MetalBuffer
+  let frameParams: MetalBuffer
+  let glyphPool: MetalBuffer
+  #if HEAVY_SLUG_SHADER_STATS
+    let shaderStats: MetalBuffer
+  #endif
+}
+
+private func drawResources(context: MetalContext, request: DrawRequest) throws -> DrawResources {
+  #if HEAVY_SLUG_SHADER_STATS
+    return try DrawResources(
+      glyphs: requireBuffer(request.glyphs, owner: context),
+      meshlets: requireBuffer(request.meshlets, owner: context),
+      frameParams: requireBuffer(request.frameParams, owner: context),
+      glyphPool: requireBuffer(request.glyphPool, owner: context),
+      shaderStats: requireBuffer(request.shaderStats, owner: context)
+    )
+  #else
+    return try DrawResources(
+      glyphs: requireBuffer(request.glyphs, owner: context),
+      meshlets: requireBuffer(request.meshlets, owner: context),
+      frameParams: requireBuffer(request.frameParams, owner: context),
+      glyphPool: requireBuffer(request.glyphPool, owner: context)
+    )
+  #endif
+}
+
 private func bindBuffer(_ table: MTL4ArgumentTable, _ buffer: MetalBuffer, slot: UInt32) {
   table.setAddress(buffer.buffer.gpuAddress, index: Int(slot))
 }
@@ -477,27 +581,11 @@ private func makeRenderPass(
   return pass
 }
 
-private func draw(
-  context: MetalContext,
-  width: UInt32,
-  height: UInt32,
-  clearR: Float,
-  clearG: Float,
-  clearB: Float,
-  clearA: Float,
-  glyphsHandle: OpaquePointer?,
-  meshletsHandle: OpaquePointer?,
-  frameParamsHandle: OpaquePointer?,
-  frameParamsStride: UInt,
-  glyphPoolHandle: OpaquePointer?,
-  shaderStatsHandle: OpaquePointer?,
-  workgroupCount: UInt32,
-  slotIndex: UInt32
-) throws {
-  guard validSlotIndex(slotIndex) else {
+private func draw(context: MetalContext, request: DrawRequest) throws {
+  guard validSlotIndex(request.slotIndex) else {
     throw fail("invalid Metal frame slot")
   }
-  let frameSlot = slot(context: context, index: slotIndex)
+  let frameSlot = slot(context: context, index: request.slotIndex)
   guard frameSlot.reserved else {
     throw fail("Metal draw used an unreserved frame slot")
   }
@@ -509,29 +597,23 @@ private func draw(
     }
   }
 
-  guard workgroupCount > 0 else {
+  guard request.workgroupCount > 0 else {
     return
   }
-  guard width > 0, height > 0 else {
+  guard request.width > 0, request.height > 0 else {
     throw fail("Metal draw requires a nonzero viewport")
   }
-  guard frameParamsStride > 0 else {
+  guard request.frameParamsStride > 0 else {
     throw fail("Metal draw received a zero frame parameter stride")
   }
 
-  let glyphs = try requireBuffer(glyphsHandle, owner: context)
-  let meshlets = try requireBuffer(meshletsHandle, owner: context)
-  let frameParams = try requireBuffer(frameParamsHandle, owner: context)
-  let glyphPool = try requireBuffer(glyphPoolHandle, owner: context)
-  #if HEAVY_SLUG_SHADER_STATS
-    let shaderStats = try requireBuffer(shaderStatsHandle, owner: context)
-  #endif
+  let resources = try drawResources(context: context, request: request)
 
   guard context.layer.pixelFormat == context.colorFormat else {
     throw fail("CAMetalLayer pixelFormat changed after Metal pipeline creation")
   }
 
-  context.layer.drawableSize = CGSize(width: Int(width), height: Int(height))
+  context.layer.drawableSize = CGSize(width: Int(request.width), height: Int(request.height))
   guard let drawable = context.layer.nextDrawable() else {
     throw fail("CAMetalLayer nextDrawable returned nil")
   }
@@ -546,33 +628,34 @@ private func draw(
 
   let pass = try makeRenderPass(
     drawable: drawable,
-    clearR: clearR,
-    clearG: clearG,
-    clearB: clearB,
-    clearA: clearA
+    clearR: request.clearR,
+    clearG: request.clearG,
+    clearB: request.clearB,
+    clearA: request.clearA
   )
   guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
     commandBuffer.endCommandBuffer()
     throw fail("renderCommandEncoderWithDescriptor returned nil")
   }
 
-  bindBuffer(frameSlot.arguments, glyphPool, slot: bufferGlyphPool)
-  bindBuffer(frameSlot.arguments, glyphs, slot: bufferGlyphs)
-  bindBuffer(frameSlot.arguments, meshlets, slot: bufferMeshlets)
+  bindBuffer(frameSlot.arguments, resources.glyphPool, slot: bufferGlyphPool)
+  bindBuffer(frameSlot.arguments, resources.glyphs, slot: bufferGlyphs)
+  bindBuffer(frameSlot.arguments, resources.meshlets, slot: bufferMeshlets)
   #if HEAVY_SLUG_SHADER_STATS
-    bindBuffer(frameSlot.arguments, shaderStats, slot: bufferShaderStats)
+    bindBuffer(frameSlot.arguments, resources.shaderStats, slot: bufferShaderStats)
   #endif
 
   encoder.setViewport(
     MTLViewport(
       originX: 0,
       originY: 0,
-      width: Double(width),
-      height: Double(height),
+      width: Double(request.width),
+      height: Double(request.height),
       znear: 0,
       zfar: 1
     ))
-  encoder.setScissorRect(MTLScissorRect(x: 0, y: 0, width: Int(width), height: Int(height)))
+  encoder.setScissorRect(
+    MTLScissorRect(x: 0, y: 0, width: Int(request.width), height: Int(request.height)))
   encoder.setCullMode(.none)
   encoder.setFrontFacing(.counterClockwise)
   encoder.setTriangleFillMode(.fill)
@@ -582,14 +665,14 @@ private func draw(
 
   var meshletBase: UInt32 = 0
   var chunkIndex: UInt32 = 0
-  while meshletBase < workgroupCount {
-    let chunkCount = min(workgroupCount - meshletBase, maxMeshThreadgroupsPerDraw)
+  while meshletBase < request.workgroupCount {
+    let chunkCount = min(request.workgroupCount - meshletBase, maxMeshThreadgroupsPerDraw)
     do {
       try bindFrameParams(
         table: frameSlot.arguments,
-        frameParams: frameParams,
+        frameParams: resources.frameParams,
         chunkIndex: chunkIndex,
-        stride: frameParamsStride
+        stride: request.frameParamsStride
       )
     } catch {
       encoder.endEncoding()
@@ -764,20 +847,8 @@ public func hsMetalBufferContents(_ bufferHandle: OpaquePointer?) -> UnsafeMutab
 @c(hs_metal_context_draw)
 public func hsMetalContextDraw(
   _ contextHandle: OpaquePointer?,
-  _ width: UInt32,
-  _ height: UInt32,
-  _ clearR: Float,
-  _ clearG: Float,
-  _ clearB: Float,
-  _ clearA: Float,
-  _ glyphs: OpaquePointer?,
-  _ meshlets: OpaquePointer?,
-  _ frameParams: OpaquePointer?,
-  _ frameParamsStride: UInt,
-  _ glyphPool: OpaquePointer?,
-  _ shaderStats: OpaquePointer?,
-  _ workgroupCount: UInt32,
-  _ slotIndex: UInt32,
+  _ requestData: UnsafeRawPointer?,
+  _ requestSize: UInt,
   _ errorData: UnsafeMutablePointer<UInt8>?,
   _ errorSize: UInt
 ) -> Int32 {
@@ -785,23 +856,8 @@ public func hsMetalContextDraw(
     let errorSink = ErrorSink(errorData, errorSize)
     do {
       let context = try borrowedContext(contextHandle)
-      try draw(
-        context: context,
-        width: width,
-        height: height,
-        clearR: clearR,
-        clearG: clearG,
-        clearB: clearB,
-        clearA: clearA,
-        glyphsHandle: glyphs,
-        meshletsHandle: meshlets,
-        frameParamsHandle: frameParams,
-        frameParamsStride: frameParamsStride,
-        glyphPoolHandle: glyphPool,
-        shaderStatsHandle: shaderStats,
-        workgroupCount: workgroupCount,
-        slotIndex: slotIndex
-      )
+      let request = try DrawRequest(data: requestData, size: requestSize)
+      try draw(context: context, request: request)
       return statusOK
     } catch {
       errorSink.write(error)

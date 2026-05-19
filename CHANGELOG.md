@@ -12,6 +12,11 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Metal backend ABI tightened:** the Swift bridge draw entry now receives one
+  versioned raw draw-request block instead of a long scalar parameter list,
+  decodes and validates the ABI before touching Metal objects, and Zig-side
+  Metal buffers now carry explicit sizes for resource writes, frame-parameter
+  chunks, and glyph-pool uploads.
 - **Vulkan backend refactored:** device requirement validation, host-coherent
   buffer allocation, and mesh draw planning now live in dedicated modules;
   `Context.requiredFeatureChain()` exposes the renderer feature pNext chain,
