@@ -138,7 +138,7 @@ CPU meshlets -> Mesh -> Fragment shaders
 | Vulkan backend | Lazy `vulkan-zig` and Vulkan Headers packages. | Vulkan 1.4, `VK_EXT_mesh_shader`, `VK_EXT_shader_object`, dynamic rendering, push descriptors. |
 | Windows Vulkan demo | Native Win32 host; links `user32`; embeds a Per-Monitor-V2/long-path/Segment-Heap manifest; loads the Vulkan loader at runtime. | Vulkan-capable Windows 11 system. |
 | Linux Vulkan demo | `wayland-scanner`, `wayland-client`, `xkbcommon`, current Wayland client headers, and pinned `wayland-protocols` 1.48 XML fetched by Zig. | GNOME 50/Mutter 50.x-compatible Wayland session and Vulkan loader/driver. |
-| Metal backend/demo | macOS 26.0 or newer deployment target, Apple Swift `6.3` or newer selected by `xcrun --sdk macosx`, Apple SDK with Metal 4 APIs, `Metal`, `QuartzCore`, `Foundation`, `AppKit`, and `SwiftUI` for the demo. | Metal 4 capable device and native SwiftUI/AppKit host. |
+| Metal backend/demo | macOS 26.0 or newer deployment target, Apple Swift `6.3` or newer selected by `xcrun --sdk macosx`, Apple SDK with Metal 4 APIs, `Metal`, `QuartzCore`, `Foundation`, `AppKit`, `Observation`, and `SwiftUI` for the demo. | Metal 4 capable device and native SwiftUI/AppKit host. |
 
 Important dependency facts:
 
@@ -160,9 +160,9 @@ Important dependency facts:
   write owned handles through explicit out parameters. UTF-8 data crosses as
   pointer/length pairs, and diagnostics are written into caller-provided byte
   buffers.
-- Cocoa exposes borrowed Metal host objects through explicit out pointers for
-  `id<MTLDevice>`, `id<MTL4CommandQueue>`, and `CAMetalLayer *`; the Metal
-  bridge retains those objects internally.
+- Cocoa exposes borrowed Metal host objects through a protocol-versioned host
+  pointer block for `id<MTLDevice>`, `id<MTL4CommandQueue>`, and
+  `CAMetalLayer *`; the Metal bridge retains those objects internally.
 - Swift bridge sources compile with the `xcrun --sdk macosx` selected Apple
   Swift `6.3` or newer compiler, `-swift-version 6`, an explicit macOS SDK,
   and an explicit Apple Swift target triple derived from the Zig target. The
@@ -173,8 +173,10 @@ Important dependency facts:
 - Internal bridge failures are represented without exceptions and mapped back
   to Zig error sets.
 - The demo hosts are deliberately native: Win32 on Windows, Wayland on Linux,
-  and a SwiftUI/AppKit host on macOS. GLFW/SDL-style toolkit dependencies are
-  not part of the current build model.
+  and a SwiftUI/AppKit host on macOS. The macOS host uses SwiftUI Observation
+  for the explicit demo appearance state while AppKit still owns the native
+  window, event pump, and `CAMetalLayer` surface. GLFW/SDL-style toolkit
+  dependencies are not part of the current build model.
 - Linux demo builds can override the protocol scanner with
   `-Dwayland-scanner=`. Protocol XML is generated from the lazy
   `wayland_protocols_src` Zig dependency, not from the system

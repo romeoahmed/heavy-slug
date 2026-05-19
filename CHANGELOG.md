@@ -12,6 +12,12 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Metal demo host rewritten:** the macOS demo now uses protocol-versioned
+  create, snapshot, and Metal-host ABI blocks between Zig and Swift; the
+  SwiftUI surface uses Observation instead of Combine/`ObservableObject`,
+  implements an explicit `NSViewRepresentable` dismantle path, and keeps AppKit
+  responsible for the native window, event pump, responder chain, and
+  `CAMetalLayer` sizing.
 - **Project-owned protocol versions normalized:** internal wire and bridge
   contracts now use one explicit `major.minor` 32-bit protocol-version word;
   `CoverageBlob` v4 separates the `HSBL` protocol magic from the version word,

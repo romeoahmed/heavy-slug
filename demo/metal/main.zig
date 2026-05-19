@@ -32,7 +32,7 @@ pub fn main() !void {
     var stats_log_time = last_time;
 
     while (!window.should_close) {
-        window.pollEvents();
+        try window.pollEvents();
         if (window.should_close or window.input().getKey(.escape)) break;
 
         const now = window.time();

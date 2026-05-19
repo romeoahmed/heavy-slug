@@ -1,17 +1,26 @@
 // SwiftUI/AppKit demo host and Metal 4 object provider for the Zig demo.
 
 import AppKit
-import Combine
 import Foundation
 import Metal
+import Observation
 import QuartzCore
 import SwiftUI
 
 private let statusOK: Int32 = 0
 private let statusError: Int32 = 1
-private let fallbackTitle = "heavy-slug Metal 4 demo"
 private let appName = "heavy-slug"
+private let fallbackTitle = "heavy-slug Metal 4 demo"
 private let preciseScrollScale = 0.1
+private let hostProtocolVersion = protocolVersion(major: 1, minor: 0)
+
+private func protocolVersion(major: UInt32, minor: UInt32) -> UInt32 {
+  (major << 16) | minor
+}
+
+private func protocolVersionDescription(_ version: UInt32) -> String {
+  "\(version >> 16).\(version & 0xffff)"
+}
 
 private enum DemoKey: Int {
   case escape = 0
@@ -31,15 +40,14 @@ private enum MouseButton: Int {
   case right = 1
 }
 
-private enum DemoColorScheme {
-  case light
-  case dark
+private let keyCount = 10
+private let mouseButtonCount = 2
 
-  init(darkModeEnabled: Bool) {
-    self = darkModeEnabled ? .dark : .light
-  }
+private enum DemoColorScheme: UInt32, Equatable {
+  case light = 0
+  case dark = 1
 
-  var appearanceName: NSAppearance.Name {
+  var appKitName: NSAppearance.Name {
     switch self {
     case .light:
       return .aqua
@@ -48,7 +56,7 @@ private enum DemoColorScheme {
     }
   }
 
-  var swiftUIColorScheme: ColorScheme {
+  var swiftUIValue: ColorScheme {
     switch self {
     case .light:
       return .light
@@ -58,12 +66,43 @@ private enum DemoColorScheme {
   }
 }
 
-private let keyCount = 10
-private let mouseButtonCount = 2
-
 @MainActor
-private final class DemoAppearance: ObservableObject {
-  @Published var scheme: DemoColorScheme = .light
+@Observable
+private final class DemoAppearance {
+  var scheme: DemoColorScheme = .light
+}
+
+private enum CreateRequestLayout {
+  static let byteSize = 32
+  static let protocolVersion = 0
+  static let width = 4
+  static let height = 8
+  static let reserved0 = 12
+  static let titleData = 16
+  static let titleSize = 24
+}
+
+private enum SnapshotLayout {
+  static let byteSize = 64
+  static let protocolVersion = 0
+  static let reserved0 = 4
+  static let reserved1 = 8
+  static let reserved2 = 12
+  static let keys = 16
+  static let mouseButtons = 26
+  static let shouldClose = 28
+  static let cursorX = 32
+  static let cursorY = 40
+  static let scrollDelta = 48
+  static let framebufferWidth = 56
+  static let framebufferHeight = 60
+}
+
+private enum MetalHostLayout {
+  static let byteSize = 24
+  static let device = 0
+  static let commandQueue = 8
+  static let layer = 16
 }
 
 private struct HostFailure: Error, CustomStringConvertible {
@@ -130,6 +169,26 @@ private func checkedInt(_ value: UInt, _ label: String) throws -> Int {
   return Int(value)
 }
 
+private func requireMainThread(_ operation: String) throws {
+  guard Thread.isMainThread else {
+    throw fail("\(operation) must be called on the main thread")
+  }
+}
+
+private func requireLayoutSize(_ size: UInt, expected: Int, label: String) throws {
+  guard size >= UInt(expected) else {
+    throw fail("\(label) is smaller than the expected ABI size")
+  }
+}
+
+private func requireProtocolVersion(_ actual: UInt32, label: String) throws {
+  guard actual == hostProtocolVersion else {
+    throw fail(
+      "unsupported \(label) protocol version \(protocolVersionDescription(actual))"
+    )
+  }
+}
+
 private func titleString(_ data: UnsafePointer<UInt8>?, _ size: UInt) throws -> String {
   if data == nil, size != 0 {
     throw fail("Cocoa window title pointer is null")
@@ -144,12 +203,6 @@ private func titleString(_ data: UnsafePointer<UInt8>?, _ size: UInt) throws -> 
     throw fail("Cocoa window title is not valid UTF-8")
   }
   return title
-}
-
-private func requireMainThread() throws {
-  guard Thread.isMainThread else {
-    throw fail("Cocoa demo host must be used on the main thread")
-  }
 }
 
 private func pixelDimension(_ value: CGFloat) -> UInt32 {
@@ -183,6 +236,153 @@ private func contentsScale(logicalBounds: CGRect, backingBounds: CGRect, window:
   return 1
 }
 
+private struct CreateRequest {
+  let width: UInt32
+  let height: UInt32
+  let title: String
+
+  init(data: UnsafeRawPointer?, size: UInt) throws {
+    guard MemoryLayout<UInt>.size == 8, MemoryLayout<UnsafeRawPointer?>.size == 8 else {
+      throw fail("Cocoa host ABI requires a 64-bit target")
+    }
+    guard let data else {
+      throw fail("Cocoa window create received a null request")
+    }
+    try requireLayoutSize(
+      size, expected: CreateRequestLayout.byteSize, label: "Cocoa create request")
+
+    let version = data.load(fromByteOffset: CreateRequestLayout.protocolVersion, as: UInt32.self)
+    try requireProtocolVersion(version, label: "Cocoa create request")
+
+    let reserved0 = data.load(fromByteOffset: CreateRequestLayout.reserved0, as: UInt32.self)
+    guard reserved0 == 0 else {
+      throw fail("Cocoa create request reserved field must be zero")
+    }
+
+    width = data.load(fromByteOffset: CreateRequestLayout.width, as: UInt32.self)
+    height = data.load(fromByteOffset: CreateRequestLayout.height, as: UInt32.self)
+    guard width > 0, height > 0 else {
+      throw fail("Cocoa demo host requires a positive initial window size")
+    }
+
+    let titleData = data.load(
+      fromByteOffset: CreateRequestLayout.titleData, as: UnsafePointer<UInt8>?.self)
+    let titleSize = data.load(fromByteOffset: CreateRequestLayout.titleSize, as: UInt.self)
+    title = try titleString(titleData, titleSize)
+  }
+}
+
+private func zeroBytes(_ pointer: UnsafeMutableRawPointer, count: Int) {
+  for offset in 0..<count {
+    pointer.storeBytes(of: UInt8(0), toByteOffset: offset, as: UInt8.self)
+  }
+}
+
+private func zeroBytes(_ pointer: UnsafeMutableRawPointer, capacity: UInt, limit: Int) {
+  let writable = capacity > UInt(Int.max) ? limit : min(limit, Int(capacity))
+  zeroBytes(pointer, count: writable)
+}
+
+private func writeBoolArray(_ values: [Bool], to pointer: UnsafeMutableRawPointer, offset: Int) {
+  for index in 0..<values.count {
+    pointer.storeBytes(
+      of: values[index] ? UInt8(1) : UInt8(0),
+      toByteOffset: offset + index,
+      as: UInt8.self
+    )
+  }
+}
+
+private func writeEmptySnapshot(_ pointer: UnsafeMutableRawPointer?, size: UInt) {
+  guard let pointer else {
+    return
+  }
+  zeroBytes(pointer, capacity: size, limit: SnapshotLayout.byteSize)
+  if size >= UInt(MemoryLayout<UInt32>.size) {
+    pointer.storeBytes(
+      of: hostProtocolVersion, toByteOffset: SnapshotLayout.protocolVersion, as: UInt32.self)
+  }
+}
+
+@MainActor
+private func writeSnapshot(
+  _ host: DemoWindowHost?, to pointer: UnsafeMutableRawPointer?, size: UInt
+)
+  throws
+{
+  guard let pointer else {
+    throw fail("Cocoa snapshot received a nil out parameter")
+  }
+  try requireLayoutSize(size, expected: SnapshotLayout.byteSize, label: "Cocoa snapshot")
+
+  zeroBytes(pointer, count: SnapshotLayout.byteSize)
+  pointer.storeBytes(
+    of: hostProtocolVersion, toByteOffset: SnapshotLayout.protocolVersion, as: UInt32.self)
+  guard let host else {
+    return
+  }
+
+  writeBoolArray(host.keys, to: pointer, offset: SnapshotLayout.keys)
+  writeBoolArray(host.mouseButtons, to: pointer, offset: SnapshotLayout.mouseButtons)
+  pointer.storeBytes(
+    of: host.shouldClose ? UInt8(1) : UInt8(0),
+    toByteOffset: SnapshotLayout.shouldClose,
+    as: UInt8.self
+  )
+  pointer.storeBytes(of: host.cursorX, toByteOffset: SnapshotLayout.cursorX, as: Double.self)
+  pointer.storeBytes(of: host.cursorY, toByteOffset: SnapshotLayout.cursorY, as: Double.self)
+  pointer.storeBytes(
+    of: host.scrollDelta, toByteOffset: SnapshotLayout.scrollDelta, as: Double.self)
+  pointer.storeBytes(
+    of: host.framebufferWidth,
+    toByteOffset: SnapshotLayout.framebufferWidth,
+    as: UInt32.self
+  )
+  pointer.storeBytes(
+    of: host.framebufferHeight,
+    toByteOffset: SnapshotLayout.framebufferHeight,
+    as: UInt32.self
+  )
+  host.scrollDelta = 0
+}
+
+private func writeEmptyMetalHost(_ pointer: UnsafeMutableRawPointer?, size: UInt) {
+  guard let pointer else {
+    return
+  }
+  zeroBytes(pointer, capacity: size, limit: MetalHostLayout.byteSize)
+}
+
+@MainActor
+private func writeMetalHost(
+  _ host: DemoWindowHost?, to pointer: UnsafeMutableRawPointer?, size: UInt
+)
+  throws
+{
+  guard let pointer else {
+    throw fail("Cocoa Metal host received a nil out parameter")
+  }
+  try requireLayoutSize(size, expected: MetalHostLayout.byteSize, label: "Cocoa Metal host")
+
+  writeEmptyMetalHost(pointer, size: size)
+  guard let host else {
+    throw fail("Cocoa Metal host received a null window handle")
+  }
+
+  let device = Unmanaged.passUnretained(host.device as AnyObject).toOpaque()
+  let commandQueue = Unmanaged.passUnretained(host.commandQueue as AnyObject).toOpaque()
+  let layer = Unmanaged.passUnretained(host.layer).toOpaque()
+  pointer.storeBytes(
+    of: device, toByteOffset: MetalHostLayout.device, as: UnsafeMutableRawPointer?.self)
+  pointer.storeBytes(
+    of: commandQueue,
+    toByteOffset: MetalHostLayout.commandQueue,
+    as: UnsafeMutableRawPointer?.self
+  )
+  pointer.storeBytes(
+    of: layer, toByteOffset: MetalHostLayout.layer, as: UnsafeMutableRawPointer?.self)
+}
+
 @MainActor
 private final class DemoWindowHost {
   var window: NSWindow?
@@ -191,6 +391,9 @@ private final class DemoWindowHost {
   let device: MTLDevice
   let commandQueue: MTL4CommandQueue
   let layer: CAMetalLayer
+  let appearance = DemoAppearance()
+  let startTime = CACurrentMediaTime()
+
   var keys = Array(repeating: false, count: keyCount)
   var mouseButtons = Array(repeating: false, count: mouseButtonCount)
   var cursorX = 0.0
@@ -199,8 +402,6 @@ private final class DemoWindowHost {
   var framebufferWidth: UInt32 = 0
   var framebufferHeight: UInt32 = 0
   var shouldClose = false
-  let appearance = DemoAppearance()
-  let startTime = CACurrentMediaTime()
 
   init(device: MTLDevice, commandQueue: MTL4CommandQueue, layer: CAMetalLayer) {
     self.device = device
@@ -214,29 +415,50 @@ private final class DemoWindowHost {
     scrollDelta = 0
   }
 
-  func updateDrawableSize() {
-    guard let window, let view else {
-      return
-    }
+  func attach(view: HeavySlugDemoView) {
+    self.view = view
+    view.host = self
+    view.wantsLayer = true
+    view.layer = layer
+    view.layerContentsRedrawPolicy = .never
+    applyAppearance()
+    updateDrawableSize()
+  }
 
-    let logicalBounds = view.bounds
-    layer.frame = logicalBounds
-    guard logicalBounds.width > 0, logicalBounds.height > 0 else {
-      layer.drawableSize = .zero
+  func detach(view: HeavySlugDemoView) {
+    if self.view === view {
+      self.view = nil
+    }
+    view.host = nil
+  }
+
+  func updateDrawableSize() {
+    guard let view else {
       framebufferWidth = 0
       framebufferHeight = 0
       return
     }
 
-    let backingBounds = view.convertToBacking(logicalBounds)
+    let bounds = view.bounds
+    layer.frame = bounds
+    guard bounds.width > 0, bounds.height > 0 else {
+      framebufferWidth = 0
+      framebufferHeight = 0
+      return
+    }
+
+    let backingBounds = view.convertToBacking(bounds)
     let width = pixelDimension(backingBounds.width)
     let height = pixelDimension(backingBounds.height)
+    guard width > 0, height > 0 else {
+      framebufferWidth = 0
+      framebufferHeight = 0
+      return
+    }
+
     layer.contentsScale = contentsScale(
-      logicalBounds: logicalBounds,
-      backingBounds: backingBounds,
-      window: window
-    )
-    layer.drawableSize = CGSize(width: Int(width), height: Int(height))
+      logicalBounds: bounds, backingBounds: backingBounds, window: window)
+    layer.drawableSize = CGSize(width: CGFloat(width), height: CGFloat(height))
     framebufferWidth = width
     framebufferHeight = height
   }
@@ -261,16 +483,15 @@ private final class DemoWindowHost {
     mouseButtons[button.rawValue] = pressed
   }
 
-  func setDarkMode(_ enabled: Bool) {
-    let nextScheme = DemoColorScheme(darkModeEnabled: enabled)
-    if appearance.scheme != nextScheme {
-      appearance.scheme = nextScheme
+  func setColorScheme(_ scheme: DemoColorScheme) {
+    if appearance.scheme != scheme {
+      appearance.scheme = scheme
     }
     applyAppearance()
   }
 
   func applyAppearance() {
-    guard let appKitAppearance = NSAppearance(named: appearance.scheme.appearanceName) else {
+    guard let appKitAppearance = NSAppearance(named: appearance.scheme.appKitName) else {
       return
     }
 
@@ -316,7 +537,7 @@ private final class HeavySlugDemoAppDelegate: NSObject, NSApplicationDelegate {
 
 private final class HeavySlugDemoView: NSView {
   weak var host: DemoWindowHost?
-  private var tracking: NSTrackingArea?
+  private var trackingArea: NSTrackingArea?
 
   override var isFlipped: Bool {
     true
@@ -324,6 +545,17 @@ private final class HeavySlugDemoView: NSView {
 
   override var acceptsFirstResponder: Bool {
     true
+  }
+
+  override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+    true
+  }
+
+  func detachHost() {
+    removeCurrentTrackingArea()
+    host?.detach(view: self)
+    host = nil
+    layer = nil
   }
 
   override func viewDidMoveToWindow() {
@@ -350,10 +582,7 @@ private final class HeavySlugDemoView: NSView {
 
   override func updateTrackingAreas() {
     super.updateTrackingAreas()
-    if let tracking {
-      removeTrackingArea(tracking)
-      self.tracking = nil
-    }
+    removeCurrentTrackingArea()
 
     let options: NSTrackingArea.Options = [
       .mouseMoved,
@@ -362,21 +591,13 @@ private final class HeavySlugDemoView: NSView {
       .inVisibleRect,
       .enabledDuringMouseDrag,
     ]
-    let tracking = NSTrackingArea(rect: .zero, options: options, owner: self, userInfo: nil)
-    self.tracking = tracking
-    addTrackingArea(tracking)
+    let trackingArea = NSTrackingArea(rect: .zero, options: options, owner: self, userInfo: nil)
+    self.trackingArea = trackingArea
+    addTrackingArea(trackingArea)
   }
 
   override func cursorUpdate(with event: NSEvent) {
     NSCursor.arrow.set()
-  }
-
-  private func recordCursor(_ event: NSEvent) {
-    guard let host else {
-      return
-    }
-    let point = convert(event.locationInWindow, from: nil)
-    host.updateCursor(in: self, point: point)
   }
 
   override func keyDown(with event: NSEvent) {
@@ -435,6 +656,21 @@ private final class HeavySlugDemoView: NSView {
       : event.scrollingDeltaY
     host?.scrollDelta += delta
   }
+
+  private func removeCurrentTrackingArea() {
+    if let trackingArea {
+      removeTrackingArea(trackingArea)
+      self.trackingArea = nil
+    }
+  }
+
+  private func recordCursor(_ event: NSEvent) {
+    guard let host else {
+      return
+    }
+    let point = convert(event.locationInWindow, from: nil)
+    host.updateCursor(in: self, point: point)
+  }
 }
 
 @MainActor
@@ -473,36 +709,35 @@ private final class HeavySlugDemoWindowDelegate: NSObject, NSWindowDelegate {
 
 private struct HeavySlugMetalSurface: NSViewRepresentable {
   let host: DemoWindowHost
+  let colorScheme: ColorScheme
 
   func makeNSView(context: Context) -> HeavySlugDemoView {
     let view = HeavySlugDemoView(frame: .zero)
-    view.host = host
-    view.wantsLayer = true
-    view.layer = host.layer
-    view.layerContentsRedrawPolicy = .never
-    host.view = view
-    host.applyAppearance()
+    host.attach(view: view)
     return view
   }
 
   func updateNSView(_ nsView: HeavySlugDemoView, context: Context) {
-    nsView.host = host
+    _ = colorScheme
     if nsView.layer !== host.layer {
       nsView.layer = host.layer
     }
-    host.view = nsView
-    host.applyAppearance()
-    host.updateDrawableSize()
+    host.attach(view: nsView)
+  }
+
+  static func dismantleNSView(_ nsView: HeavySlugDemoView, coordinator: ()) {
+    nsView.detachHost()
   }
 }
 
 private struct HeavySlugDemoRootView: View {
-  @ObservedObject var appearance: DemoAppearance
+  let appearance: DemoAppearance
   let host: DemoWindowHost
 
   var body: some View {
-    HeavySlugMetalSurface(host: host)
-      .preferredColorScheme(appearance.scheme.swiftUIColorScheme)
+    let scheme = appearance.scheme.swiftUIValue
+    HeavySlugMetalSurface(host: host, colorScheme: scheme)
+      .preferredColorScheme(scheme)
   }
 }
 
@@ -551,7 +786,7 @@ private func keyForEvent(_ event: NSEvent) -> DemoKey? {
 }
 
 @MainActor
-private func installMainMenu(_ app: NSApplication) throws {
+private func installMainMenu(_ app: NSApplication) {
   let state = AppState.shared
   guard !state.installedMenu else {
     return
@@ -599,7 +834,7 @@ private func installMainMenu(_ app: NSApplication) throws {
 }
 
 @MainActor
-private func ensureApplication() throws {
+private func ensureApplication() {
   let app = NSApplication.shared
   let state = AppState.shared
   if state.delegate == nil {
@@ -609,7 +844,7 @@ private func ensureApplication() throws {
   }
 
   app.setActivationPolicy(.regular)
-  try installMainMenu(app)
+  installMainMenu(app)
   if !state.finishedLaunching {
     app.finishLaunching()
     state.finishedLaunching = true
@@ -635,7 +870,7 @@ private func makeCommandQueue(device: MTLDevice) throws -> MTL4CommandQueue {
 }
 
 @MainActor
-private func makeMetalLayer(device: MTLDevice) throws -> CAMetalLayer {
+private func makeMetalLayer(device: MTLDevice) -> CAMetalLayer {
   let layer = CAMetalLayer()
   layer.device = device
   layer.pixelFormat = .bgra8Unorm
@@ -649,33 +884,32 @@ private func makeMetalLayer(device: MTLDevice) throws -> CAMetalLayer {
 }
 
 @MainActor
-private func makeWindow(width: UInt32, height: UInt32, title: String) throws -> DemoWindowHost {
-  try requireMainThread()
-  guard width > 0, height > 0 else {
-    throw fail("Cocoa demo host requires a positive initial window size")
-  }
+private func makeWindow(_ request: CreateRequest) throws -> DemoWindowHost {
+  try requireMainThread("Cocoa window create")
+  ensureApplication()
 
-  try ensureApplication()
   let device = try makeDevice()
   let commandQueue = try makeCommandQueue(device: device)
-  let layer = try makeMetalLayer(device: device)
+  let layer = makeMetalLayer(device: device)
   let host = DemoWindowHost(device: device, commandQueue: commandQueue, layer: layer)
 
-  let rect = NSRect(x: 0, y: 0, width: Int(width), height: Int(height))
+  let rect = NSRect(x: 0, y: 0, width: Int(request.width), height: Int(request.height))
   let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
   let window = NSWindow(contentRect: rect, styleMask: style, backing: .buffered, defer: false)
-  window.title = title
+  window.title = request.title
   window.isReleasedWhenClosed = false
   window.tabbingMode = .disallowed
+  window.contentMinSize = NSSize(width: 320, height: 200)
 
   let delegate = HeavySlugDemoWindowDelegate()
   delegate.host = host
   host.window = window
   host.delegate = delegate
 
-  let hostingView = NSHostingView(
-    rootView: HeavySlugDemoRootView(appearance: host.appearance, host: host))
+  let rootView = HeavySlugDemoRootView(appearance: host.appearance, host: host)
+  let hostingView = NSHostingView(rootView: rootView)
   hostingView.frame = rect
+  hostingView.autoresizingMask = [.width, .height]
   window.contentView = hostingView
   window.delegate = delegate
   AppState.shared.delegate?.activeHost = host
@@ -700,64 +934,11 @@ private func borrowedHost(_ handle: OpaquePointer?) -> DemoWindowHost? {
   return Unmanaged<DemoWindowHost>.fromOpaque(UnsafeRawPointer(handle)).takeUnretainedValue()
 }
 
-private func writeBoolArray(_ values: [Bool], to pointer: UnsafeMutablePointer<UInt8>?, count: UInt)
-{
-  guard let pointer else {
-    return
-  }
-
-  let writable = count > UInt(Int.max) ? values.count : min(values.count, Int(count))
-  for index in 0..<writable {
-    pointer.advanced(by: index).pointee = values[index] ? 1 : 0
-  }
-}
-
-private func writeRepeatedByte(
-  _ value: UInt8,
-  to pointer: UnsafeMutablePointer<UInt8>?,
-  capacity: UInt,
-  maxCount: Int
-) {
-  guard let pointer else {
-    return
-  }
-
-  let capacityCount = capacity > UInt(Int.max) ? Int.max : Int(capacity)
-  let writable = min(capacityCount, maxCount)
-  for index in 0..<writable {
-    pointer.advanced(by: index).pointee = value
-  }
-}
-
-private func writeEmptySnapshot(
-  keys: UnsafeMutablePointer<UInt8>?,
-  keyCapacity: UInt,
-  mouseButtons: UnsafeMutablePointer<UInt8>?,
-  mouseButtonCapacity: UInt,
-  cursorX: UnsafeMutablePointer<Double>?,
-  cursorY: UnsafeMutablePointer<Double>?,
-  scrollDelta: UnsafeMutablePointer<Double>?,
-  framebufferWidth: UnsafeMutablePointer<UInt32>?,
-  framebufferHeight: UnsafeMutablePointer<UInt32>?,
-  shouldClose: UnsafeMutablePointer<UInt8>?
-) {
-  writeRepeatedByte(0, to: keys, capacity: keyCapacity, maxCount: keyCount)
-  writeRepeatedByte(0, to: mouseButtons, capacity: mouseButtonCapacity, maxCount: mouseButtonCount)
-  cursorX?.pointee = 0
-  cursorY?.pointee = 0
-  scrollDelta?.pointee = 0
-  framebufferWidth?.pointee = 0
-  framebufferHeight?.pointee = 0
-  shouldClose?.pointee = 0
-}
-
 @c(hs_demo_cocoa_window_create)
 public func hsDemoCocoaWindowCreate(
   _ outWindow: UnsafeMutablePointer<OpaquePointer?>?,
-  _ width: UInt32,
-  _ height: UInt32,
-  _ titleData: UnsafePointer<UInt8>?,
-  _ titleSize: UInt,
+  _ requestData: UnsafeRawPointer?,
+  _ requestSize: UInt,
   _ errorData: UnsafeMutablePointer<UInt8>?,
   _ errorSize: UInt
 ) -> Int32 {
@@ -767,7 +948,7 @@ public func hsDemoCocoaWindowCreate(
     return statusError
   }
   nonisolated(unsafe) let unsafeOutWindow = outWindow
-  nonisolated(unsafe) let unsafeTitleData = titleData
+  nonisolated(unsafe) let unsafeRequestData = requestData
   nonisolated(unsafe) let unsafeErrorSink = errorSink
 
   return MainActor.assumeIsolated {
@@ -779,8 +960,8 @@ public func hsDemoCocoaWindowCreate(
       outWindow.pointee = nil
 
       do {
-        let title = try titleString(unsafeTitleData, titleSize)
-        let host = try makeWindow(width: width, height: height, title: title)
+        let request = try CreateRequest(data: unsafeRequestData, size: requestSize)
+        let host = try makeWindow(request)
         outWindow.pointee = retainedHandle(host)
         return statusOK
       } catch {
@@ -806,11 +987,13 @@ public func hsDemoCocoaWindowDestroy(_ hostHandle: OpaquePointer?) {
         AppState.shared.delegate?.activeHost = nil
       }
       host.resetInput()
-      host.view?.host = nil
+      host.view?.detachHost()
       host.delegate?.host = nil
-      host.window?.orderOut(nil)
       host.window?.delegate = nil
       host.window?.contentView = nil
+      host.window?.close()
+      host.window = nil
+      host.delegate = nil
     }
   }
 }
@@ -843,86 +1026,48 @@ public func hsDemoCocoaWindowPollEvents(_ hostHandle: OpaquePointer?) {
   }
 }
 
-@c(hs_demo_cocoa_window_set_dark_mode)
-public func hsDemoCocoaWindowSetDarkMode(_ hostHandle: OpaquePointer?, _ enabled: UInt8) {
+@c(hs_demo_cocoa_window_set_color_scheme)
+public func hsDemoCocoaWindowSetColorScheme(_ hostHandle: OpaquePointer?, _ schemeValue: UInt32) {
   guard Thread.isMainThread else {
     return
   }
   nonisolated(unsafe) let unsafeHostHandle = hostHandle
 
   MainActor.assumeIsolated {
-    guard let host = borrowedHost(unsafeHostHandle) else {
+    guard let host = borrowedHost(unsafeHostHandle),
+      let scheme = DemoColorScheme(rawValue: schemeValue)
+    else {
       return
     }
-    host.setDarkMode(enabled != 0)
+    host.setColorScheme(scheme)
   }
 }
 
 @c(hs_demo_cocoa_window_snapshot)
 public func hsDemoCocoaWindowSnapshot(
   _ hostHandle: OpaquePointer?,
-  _ keys: UnsafeMutablePointer<UInt8>?,
-  _ keyCapacity: UInt,
-  _ mouseButtons: UnsafeMutablePointer<UInt8>?,
-  _ mouseButtonCapacity: UInt,
-  _ cursorX: UnsafeMutablePointer<Double>?,
-  _ cursorY: UnsafeMutablePointer<Double>?,
-  _ scrollDelta: UnsafeMutablePointer<Double>?,
-  _ framebufferWidth: UnsafeMutablePointer<UInt32>?,
-  _ framebufferHeight: UnsafeMutablePointer<UInt32>?,
-  _ shouldClose: UnsafeMutablePointer<UInt8>?
-) {
+  _ snapshotData: UnsafeMutableRawPointer?,
+  _ snapshotSize: UInt
+) -> Int32 {
   guard Thread.isMainThread else {
-    writeEmptySnapshot(
-      keys: keys,
-      keyCapacity: keyCapacity,
-      mouseButtons: mouseButtons,
-      mouseButtonCapacity: mouseButtonCapacity,
-      cursorX: cursorX,
-      cursorY: cursorY,
-      scrollDelta: scrollDelta,
-      framebufferWidth: framebufferWidth,
-      framebufferHeight: framebufferHeight,
-      shouldClose: shouldClose
-    )
-    return
+    writeEmptySnapshot(snapshotData, size: snapshotSize)
+    return statusError
   }
   nonisolated(unsafe) let unsafeHostHandle = hostHandle
-  nonisolated(unsafe) let unsafeKeys = keys
-  nonisolated(unsafe) let unsafeMouseButtons = mouseButtons
-  nonisolated(unsafe) let unsafeCursorX = cursorX
-  nonisolated(unsafe) let unsafeCursorY = cursorY
-  nonisolated(unsafe) let unsafeScrollDelta = scrollDelta
-  nonisolated(unsafe) let unsafeFramebufferWidth = framebufferWidth
-  nonisolated(unsafe) let unsafeFramebufferHeight = framebufferHeight
-  nonisolated(unsafe) let unsafeShouldClose = shouldClose
+  nonisolated(unsafe) let unsafeSnapshotData = snapshotData
 
-  MainActor.assumeIsolated {
-    guard let host = borrowedHost(unsafeHostHandle) else {
-      writeEmptySnapshot(
-        keys: unsafeKeys,
-        keyCapacity: keyCapacity,
-        mouseButtons: unsafeMouseButtons,
-        mouseButtonCapacity: mouseButtonCapacity,
-        cursorX: unsafeCursorX,
-        cursorY: unsafeCursorY,
-        scrollDelta: unsafeScrollDelta,
-        framebufferWidth: unsafeFramebufferWidth,
-        framebufferHeight: unsafeFramebufferHeight,
-        shouldClose: unsafeShouldClose
+  return MainActor.assumeIsolated {
+    do {
+      try writeSnapshot(
+        borrowedHost(unsafeHostHandle),
+        to: unsafeSnapshotData,
+        size: snapshotSize
       )
-      return
+      return statusOK
+    } catch {
+      writeEmptySnapshot(unsafeSnapshotData, size: snapshotSize)
+      return statusError
     }
-
-    writeBoolArray(host.keys, to: unsafeKeys, count: keyCapacity)
-    writeBoolArray(host.mouseButtons, to: unsafeMouseButtons, count: mouseButtonCapacity)
-    unsafeCursorX?.pointee = host.cursorX
-    unsafeCursorY?.pointee = host.cursorY
-    unsafeScrollDelta?.pointee = host.scrollDelta
-    unsafeFramebufferWidth?.pointee = host.framebufferWidth
-    unsafeFramebufferHeight?.pointee = host.framebufferHeight
-    unsafeShouldClose?.pointee = host.shouldClose ? 1 : 0
-    host.scrollDelta = 0
   }
 }
 
@@ -944,34 +1089,23 @@ public func hsDemoCocoaWindowTime(_ hostHandle: OpaquePointer?) -> Double {
 @c(hs_demo_cocoa_window_metal_host)
 public func hsDemoCocoaWindowMetalHost(
   _ hostHandle: OpaquePointer?,
-  _ outDevice: UnsafeMutablePointer<UnsafeMutableRawPointer?>?,
-  _ outCommandQueue: UnsafeMutablePointer<UnsafeMutableRawPointer?>?,
-  _ outLayer: UnsafeMutablePointer<UnsafeMutableRawPointer?>?
+  _ hostData: UnsafeMutableRawPointer?,
+  _ hostSize: UInt
 ) -> Int32 {
-  outDevice?.pointee = nil
-  outCommandQueue?.pointee = nil
-  outLayer?.pointee = nil
-
+  writeEmptyMetalHost(hostData, size: hostSize)
   guard Thread.isMainThread else {
     return statusError
   }
   nonisolated(unsafe) let unsafeHostHandle = hostHandle
-  nonisolated(unsafe) let unsafeOutDevice = outDevice
-  nonisolated(unsafe) let unsafeOutCommandQueue = outCommandQueue
-  nonisolated(unsafe) let unsafeOutLayer = outLayer
+  nonisolated(unsafe) let unsafeHostData = hostData
 
   return MainActor.assumeIsolated {
-    guard let host = borrowedHost(unsafeHostHandle) else {
-      unsafeOutDevice?.pointee = nil
-      unsafeOutCommandQueue?.pointee = nil
-      unsafeOutLayer?.pointee = nil
+    do {
+      try writeMetalHost(borrowedHost(unsafeHostHandle), to: unsafeHostData, size: hostSize)
+      return statusOK
+    } catch {
+      writeEmptyMetalHost(unsafeHostData, size: hostSize)
       return statusError
     }
-
-    unsafeOutDevice?.pointee = Unmanaged.passUnretained(host.device as AnyObject).toOpaque()
-    unsafeOutCommandQueue?.pointee = Unmanaged.passUnretained(host.commandQueue as AnyObject)
-      .toOpaque()
-    unsafeOutLayer?.pointee = Unmanaged.passUnretained(host.layer).toOpaque()
-    return statusOK
   }
 }

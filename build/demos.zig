@@ -114,6 +114,7 @@ pub fn buildMetal(
         .target = target,
         .optimize = optimize,
         .imports = &.{
+            .{ .name = "heavy_slug", .module = core_mod },
             .{ .name = "demo_input", .module = demo_input },
         },
     });
