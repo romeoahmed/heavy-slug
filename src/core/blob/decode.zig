@@ -7,6 +7,7 @@ pub const Error = error{
     BlobTooSmall,
     BlobMisaligned,
     BadMagic,
+    UnsupportedVersion,
     BadFractionBits,
     BadHeader,
     BadOffsets,
@@ -109,7 +110,8 @@ pub const BlobView = struct {
 };
 
 fn validateHeader(header: format.Header, actual_word_count: usize) Error!void {
-    if (header.magic_version != format.magic_version) return error.BadMagic;
+    if (header.protocol_magic != format.protocol_magic) return error.BadMagic;
+    if (!format.protocol_version.matches(header.protocol_version)) return error.UnsupportedVersion;
     if (header.fraction_bits < format.min_fraction_bits or header.fraction_bits > format.max_fraction_bits) {
         return error.BadFractionBits;
     }
@@ -144,7 +146,7 @@ test "BlobView rejects misaligned word storage" {
     );
 }
 
-test "BlobView decodes v3 header and curve" {
+test "BlobView decodes v4 header and curve" {
     const layout = try format.Layout.init(1, 0, 0);
     const words = try std.testing.allocator.alloc(u32, layout.word_count);
     defer std.testing.allocator.free(words);
@@ -185,6 +187,11 @@ test "BlobView rejects invalid header fields" {
     @memset(words, 0);
 
     var header = testHeader(.{ .word_count = layout.word_count });
+    header.protocol_version = format.ProtocolVersion.init(99, 0).word();
+    format.writeHeader(words, header);
+    try std.testing.expectError(error.UnsupportedVersion, BlobView.init(std.mem.sliceAsBytes(words)));
+
+    header.protocol_version = format.protocol_version_word;
     header.flags = 1;
     format.writeHeader(words, header);
     try std.testing.expectError(error.BadHeader, BlobView.init(std.mem.sliceAsBytes(words)));
@@ -290,7 +297,8 @@ const TestHeaderOverrides = struct {
 fn testHeader(overrides: TestHeaderOverrides) format.Header {
     const layout = format.Layout.init(overrides.curve_count, overrides.band_count, overrides.id_count) catch unreachable;
     return .{
-        .magic_version = format.magic_version,
+        .protocol_magic = format.protocol_magic,
+        .protocol_version = format.protocol_version_word,
         .fraction_bits = format.default_fraction_bits,
         .flags = 0,
         .fill_sign = 1,

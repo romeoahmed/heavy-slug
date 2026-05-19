@@ -1,8 +1,13 @@
 //! Explicit 32-bit coverage blob ABI shared by CPU encoders and GPU shaders.
 
 const std = @import("std");
+const protocol = @import("../protocol.zig");
 
-pub const magic_version: u32 = 0x33425348; // "HSB3", little-endian words.
+pub const ProtocolVersion = protocol.ProtocolVersion;
+
+pub const protocol_magic: u32 = protocol.magicWord("HSBL");
+pub const protocol_version = ProtocolVersion.init(4, 0);
+pub const protocol_version_word: u32 = protocol_version.word();
 pub const min_fraction_bits: u8 = 12;
 pub const max_fraction_bits: u8 = 24;
 pub const default_fraction_bits: u8 = 18;
@@ -13,23 +18,24 @@ pub const flags_none: u32 = 0;
 pub const supported_flags: u32 = flags_none;
 
 pub const HeaderWord = enum(u32) {
-    magic_version = 0,
-    fraction_bits = 1,
-    flags = 2,
-    fill_sign = 3,
-    curve_count = 4,
-    band_min = 5,
-    band_count = 6,
-    band_height_q = 7,
-    id_count = 8,
-    word_count = 9,
-    bounds_min_x_q = 10,
-    bounds_min_y_q = 11,
-    bounds_max_x_q = 12,
-    bounds_max_y_q = 13,
-    curve_base_words = 14,
-    band_base_words = 15,
-    id_base_words = 16,
+    protocol_magic = 0,
+    protocol_version = 1,
+    fraction_bits = 2,
+    flags = 3,
+    fill_sign = 4,
+    curve_count = 5,
+    band_min = 6,
+    band_count = 7,
+    band_height_q = 8,
+    id_count = 9,
+    word_count = 10,
+    bounds_min_x_q = 11,
+    bounds_min_y_q = 12,
+    bounds_max_x_q = 13,
+    bounds_max_y_q = 14,
+    curve_base_words = 15,
+    band_base_words = 16,
+    id_base_words = 17,
 };
 
 pub const CurveWord = enum(u32) {
@@ -52,12 +58,13 @@ pub const BandWord = enum(u32) {
     id_count = 1,
 };
 
-pub const header_word_len: u32 = 17;
+pub const header_word_len: u32 = 18;
 pub const curve_word_len: u32 = 12;
 pub const band_word_len: u32 = 2;
 
 pub const Header = struct {
-    magic_version: u32,
+    protocol_magic: u32,
+    protocol_version: u32,
     fraction_bits: u32,
     flags: u32,
     fill_sign: i32,
@@ -197,7 +204,8 @@ pub const CoverageBlob = struct {
 
 pub fn writeHeader(words: []u32, header: Header) void {
     std.debug.assert(words.len >= header_word_len);
-    words[headerIndex(.magic_version)] = header.magic_version;
+    words[headerIndex(.protocol_magic)] = header.protocol_magic;
+    words[headerIndex(.protocol_version)] = header.protocol_version;
     words[headerIndex(.fraction_bits)] = header.fraction_bits;
     words[headerIndex(.flags)] = header.flags;
     words[headerIndex(.fill_sign)] = i32Word(header.fill_sign);
@@ -219,7 +227,8 @@ pub fn writeHeader(words: []u32, header: Header) void {
 pub fn readHeader(words: []const u32) Header {
     std.debug.assert(words.len >= header_word_len);
     return .{
-        .magic_version = words[headerIndex(.magic_version)],
+        .protocol_magic = words[headerIndex(.protocol_magic)],
+        .protocol_version = words[headerIndex(.protocol_version)],
         .fraction_bits = words[headerIndex(.fraction_bits)],
         .flags = words[headerIndex(.flags)],
         .fill_sign = wordI32(words[headerIndex(.fill_sign)]),
@@ -349,20 +358,23 @@ fn addMulU32(a: u32, b: u32, c: u32) error{BlobOffsetOverflow}!u32 {
     return addU32(a, product);
 }
 
-test "Coverage blob v3 word layout is explicit and stable" {
-    try std.testing.expectEqual(@as(u32, 17), header_word_len);
+test "Coverage blob v4 word layout is explicit and stable" {
+    try std.testing.expectEqual(@as(u32, 18), header_word_len);
     try std.testing.expectEqual(@as(u32, 12), curve_word_len);
     try std.testing.expectEqual(@as(u32, 2), band_word_len);
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(HeaderWord.magic_version));
-    try std.testing.expectEqual(@as(u32, 16), @intFromEnum(HeaderWord.id_base_words));
+    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(HeaderWord.protocol_magic));
+    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(HeaderWord.protocol_version));
+    try std.testing.expectEqual(@as(u32, 17), @intFromEnum(HeaderWord.id_base_words));
     try std.testing.expectEqual(@as(u32, 11), @intFromEnum(CurveWord.bbox_max_y_q));
     try std.testing.expectEqual(@as(u32, 1), @intFromEnum(BandWord.id_count));
+    try std.testing.expectEqual(protocol.magicWord("HSBL"), protocol_magic);
+    try std.testing.expectEqual(ProtocolVersion.init(4, 0).word(), protocol_version_word);
 }
 
 test "CoverageBlob owns word storage and exposes upload bytes" {
     const words = try std.testing.allocator.alloc(u32, 4);
-    words[0] = magic_version;
-    words[1] = default_fraction_bits;
+    words[0] = protocol_magic;
+    words[1] = protocol_version_word;
     words[2] = 0;
     words[3] = 0;
 
@@ -390,7 +402,8 @@ test "Coverage blob header, curve, and band round-trip by word offset" {
     @memset(words, 0);
 
     const header = Header{
-        .magic_version = magic_version,
+        .protocol_magic = protocol_magic,
+        .protocol_version = protocol_version_word,
         .fraction_bits = default_fraction_bits,
         .flags = flags_none,
         .fill_sign = -1,

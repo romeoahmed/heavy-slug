@@ -86,7 +86,8 @@ test "hband: reads candidate ids" {
     @memset(words, 0);
 
     const header = format.Header{
-        .magic_version = format.magic_version,
+        .protocol_magic = format.protocol_magic,
+        .protocol_version = format.protocol_version_word,
         .fraction_bits = format.default_fraction_bits,
         .flags = 0,
         .fill_sign = 1,

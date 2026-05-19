@@ -9,7 +9,7 @@ private let statusOK: Int32 = 0
 private let statusError: Int32 = 1
 
 private let frameSlotCount = 3
-private let drawRequestAbiVersion: UInt32 = 1
+private let drawRequestProtocolVersion = protocolVersion(major: 1, minor: 0)
 private let bufferGlyphPool: UInt32 = 0
 private let bufferGlyphs: UInt32 = 1
 private let bufferMeshlets: UInt32 = 2
@@ -26,9 +26,17 @@ private let meshThreadgroupSize = 32
 private let maxMeshThreadgroupsPerDraw: UInt32 = 1024
 private let boundRenderStages: MTLRenderStages = [.mesh, .fragment]
 
+private func protocolVersion(major: UInt32, minor: UInt32) -> UInt32 {
+  (major << 16) | minor
+}
+
+private func protocolVersionDescription(_ version: UInt32) -> String {
+  "\(version >> 16).\(version & 0xffff)"
+}
+
 private enum DrawRequestLayout {
   static let byteSize = 88
-  static let abiVersion = 0
+  static let protocolVersion = 0
   static let width = 4
   static let height = 8
   static let slotIndex = 12
@@ -73,9 +81,12 @@ private struct DrawRequest {
       throw fail("Metal draw request is smaller than the expected ABI size")
     }
 
-    let abiVersion = data.load(fromByteOffset: DrawRequestLayout.abiVersion, as: UInt32.self)
-    guard abiVersion == drawRequestAbiVersion else {
-      throw fail("unsupported Metal draw request ABI version \(abiVersion)")
+    let protocolVersion = data.load(
+      fromByteOffset: DrawRequestLayout.protocolVersion, as: UInt32.self)
+    guard protocolVersion == drawRequestProtocolVersion else {
+      throw fail(
+        "unsupported Metal draw request protocol version \(protocolVersionDescription(protocolVersion))"
+      )
     }
     let reserved0 = data.load(fromByteOffset: DrawRequestLayout.reserved0, as: UInt32.self)
     guard reserved0 == 0 else {

@@ -7,6 +7,7 @@ const backend_options = @import("heavy_slug_backend_options");
 
 const mesh_limits = heavy_slug.gpu.mesh_limits;
 const resource_model = heavy_slug.gpu.resource_model;
+const ProtocolVersion = heavy_slug.core.protocol.ProtocolVersion;
 
 const ContextHandle = opaque {};
 const BufferHandle = opaque {};
@@ -35,7 +36,8 @@ pub const GeometryLimits = struct {
 };
 
 pub const frame_slot_count: usize = 3;
-pub const draw_request_abi_version: u32 = 1;
+pub const draw_request_protocol_version = ProtocolVersion.init(1, 0);
+pub const draw_request_protocol_version_word: u32 = draw_request_protocol_version.word();
 pub const buffer_glyph_pool: u32 = @intFromEnum(resource_model.BufferBinding.glyph_pool);
 pub const buffer_glyphs: u32 = @intFromEnum(resource_model.BufferBinding.glyphs);
 pub const buffer_meshlets: u32 = @intFromEnum(resource_model.BufferBinding.meshlets);
@@ -218,7 +220,7 @@ pub const DrawInfo = struct {
 };
 
 pub const DrawRequest = extern struct {
-    abi_version: u32,
+    protocol_version: u32,
     width: u32,
     height: u32,
     slot_index: u32,
@@ -234,7 +236,7 @@ pub const DrawRequest = extern struct {
 
     pub fn init(info: DrawInfo) DrawRequest {
         return .{
-            .abi_version = draw_request_abi_version,
+            .protocol_version = draw_request_protocol_version_word,
             .width = info.viewport[0],
             .height = info.viewport[1],
             .slot_index = info.slot_index,
@@ -294,7 +296,7 @@ test "Metal context mirrors Swift bridge ABI constants" {
     try std.testing.expectEqual(@as(c_int, 1), @intFromEnum(Status.err));
     try std.testing.expectEqual(@as(usize, 1), @sizeOf(U8));
     try std.testing.expectEqual(@as(usize, 3), frame_slot_count);
-    try std.testing.expectEqual(@as(u32, 1), draw_request_abi_version);
+    try std.testing.expectEqual(ProtocolVersion.init(1, 0).word(), draw_request_protocol_version_word);
     try std.testing.expectEqual(@as(u32, 0), buffer_glyph_pool);
     try std.testing.expectEqual(@as(u32, 1), buffer_glyphs);
     try std.testing.expectEqual(@as(u32, 2), buffer_meshlets);
@@ -304,10 +306,10 @@ test "Metal context mirrors Swift bridge ABI constants" {
     try std.testing.expectEqual(@as(u32, 1024), max_mesh_threadgroups_per_draw);
 }
 
-test "Metal draw request ABI is explicit and pointer-sized" {
+test "Metal draw request protocol layout is explicit and pointer-sized" {
     try std.testing.expectEqual(@as(usize, 8), @alignOf(DrawRequest));
     try std.testing.expectEqual(@as(usize, 88), @sizeOf(DrawRequest));
-    try std.testing.expectEqual(@as(usize, 0), @offsetOf(DrawRequest, "abi_version"));
+    try std.testing.expectEqual(@as(usize, 0), @offsetOf(DrawRequest, "protocol_version"));
     try std.testing.expectEqual(@as(usize, 4), @offsetOf(DrawRequest, "width"));
     try std.testing.expectEqual(@as(usize, 8), @offsetOf(DrawRequest, "height"));
     try std.testing.expectEqual(@as(usize, 12), @offsetOf(DrawRequest, "slot_index"));

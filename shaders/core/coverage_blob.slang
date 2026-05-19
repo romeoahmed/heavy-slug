@@ -3,35 +3,38 @@ module coverage_blob;
 
 import shader_math;
 
-// CoverageBlob v3 decoding. The blob is a 32-bit word ABI; all fixed-point
+// CoverageBlob v4 decoding. The blob is a 32-bit word ABI; all fixed-point
 // coordinates are decoded relative to the current meshlet chart before they
 // become f32.
 
-static const uint BLOB_MAGIC_VERSION = 0x33425348u; // "HSB3", little-endian words.
+static const uint BLOB_PROTOCOL_MAGIC = 0x4c425348u; // "HSBL", little-endian words.
+static const uint BLOB_PROTOCOL_VERSION = 0x00040000u; // 4.0, major in high 16 bits.
 static const uint MIN_FRACTION_BITS = 12;
 static const uint MAX_FRACTION_BITS = 24;
+static const uint SUPPORTED_FLAGS = 0;
 
-static const uint HEADER_WORD_LEN = 17;
+static const uint HEADER_WORD_LEN = 18;
 static const uint CURVE_WORD_LEN = 12;
 static const uint BAND_WORD_LEN = 2;
 
-static const uint HEADER_MAGIC_VERSION = 0;
-static const uint HEADER_FRACTION_BITS = 1;
-static const uint HEADER_FLAGS = 2;
-static const uint HEADER_FILL_SIGN = 3;
-static const uint HEADER_CURVE_COUNT = 4;
-static const uint HEADER_BAND_MIN = 5;
-static const uint HEADER_BAND_COUNT = 6;
-static const uint HEADER_BAND_HEIGHT_Q = 7;
-static const uint HEADER_ID_COUNT = 8;
-static const uint HEADER_WORD_COUNT = 9;
-static const uint HEADER_BOUNDS_MIN_X_Q = 10;
-static const uint HEADER_BOUNDS_MIN_Y_Q = 11;
-static const uint HEADER_BOUNDS_MAX_X_Q = 12;
-static const uint HEADER_BOUNDS_MAX_Y_Q = 13;
-static const uint HEADER_CURVE_BASE_WORDS = 14;
-static const uint HEADER_BAND_BASE_WORDS = 15;
-static const uint HEADER_ID_BASE_WORDS = 16;
+static const uint HEADER_PROTOCOL_MAGIC = 0;
+static const uint HEADER_PROTOCOL_VERSION = 1;
+static const uint HEADER_FRACTION_BITS = 2;
+static const uint HEADER_FLAGS = 3;
+static const uint HEADER_FILL_SIGN = 4;
+static const uint HEADER_CURVE_COUNT = 5;
+static const uint HEADER_BAND_MIN = 6;
+static const uint HEADER_BAND_COUNT = 7;
+static const uint HEADER_BAND_HEIGHT_Q = 8;
+static const uint HEADER_ID_COUNT = 9;
+static const uint HEADER_WORD_COUNT = 10;
+static const uint HEADER_BOUNDS_MIN_X_Q = 11;
+static const uint HEADER_BOUNDS_MIN_Y_Q = 12;
+static const uint HEADER_BOUNDS_MAX_X_Q = 13;
+static const uint HEADER_BOUNDS_MAX_Y_Q = 14;
+static const uint HEADER_CURVE_BASE_WORDS = 15;
+static const uint HEADER_BAND_BASE_WORDS = 16;
+static const uint HEADER_ID_BASE_WORDS = 17;
 
 static const uint CURVE_P0_X_Q = 0;
 static const uint CURVE_P0_Y_Q = 1;
@@ -48,7 +51,8 @@ static const uint CURVE_BBOX_MAX_Y_Q = 11;
 
 public struct BlobHeader
 {
-    public uint magicVersion;
+    public uint protocolMagic;
+    public uint protocolVersion;
     public uint fractionBits;
     public uint flags;
     public float fillSign;
@@ -70,9 +74,13 @@ public struct BlobHeader
 
     public bool isSupported()
     {
-        if (magicVersion != BLOB_MAGIC_VERSION)
+        if (protocolMagic != BLOB_PROTOCOL_MAGIC)
+            return false;
+        if (protocolVersion != BLOB_PROTOCOL_VERSION)
             return false;
         if (fractionBits < MIN_FRACTION_BITS || fractionBits > MAX_FRACTION_BITS)
+            return false;
+        if ((flags & ~SUPPORTED_FLAGS) != 0)
             return false;
         if (curveBaseWords < HEADER_WORD_LEN || wordCount < curveBaseWords)
             return false;
@@ -123,7 +131,8 @@ public struct BlobReader
     public BlobHeader readHeader()
     {
         BlobHeader h;
-        h.magicVersion = loadU32(HEADER_MAGIC_VERSION);
+        h.protocolMagic = loadU32(HEADER_PROTOCOL_MAGIC);
+        h.protocolVersion = loadU32(HEADER_PROTOCOL_VERSION);
         h.fractionBits = loadU32(HEADER_FRACTION_BITS);
         h.flags = loadU32(HEADER_FLAGS);
         h.fillSign = loadI32(HEADER_FILL_SIGN) < 0 ? -1.0 : 1.0;

@@ -3,6 +3,7 @@
 pub const types = @import("types.zig");
 pub const units = @import("units.zig");
 pub const errors = @import("errors.zig");
+pub const protocol = @import("protocol.zig");
 pub const font = @import("font/root.zig");
 pub const outline = @import("outline/root.zig");
 pub const blob = @import("blob/root.zig");
@@ -26,6 +27,7 @@ test {
     _ = types;
     _ = units;
     _ = errors;
+    _ = protocol;
     _ = font;
     _ = outline;
     _ = blob;

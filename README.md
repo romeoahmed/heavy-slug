@@ -152,9 +152,10 @@ Important dependency facts:
 - `-Ddemo-backend=` is interpreted only when `-Ddemo=true`; backend-only builds
   use `-Dvulkan=true` or `-Dmetal=true`.
 - Metal/Cocoa bridge code is Swift. Swift `@c` exports use only pointers,
-  integer sizes, scalar values, explicit out parameters, and versioned raw
-  request blocks for larger calls, so Zig mirrors the ABI directly with
-  `extern` declarations and does not translate bridge headers.
+  integer sizes, scalar values, explicit out parameters, and
+  protocol-versioned raw request blocks for larger calls, so Zig mirrors the
+  ABI directly with `extern` declarations and does not translate bridge
+  headers.
 - Fallible Metal/Cocoa bridge creation calls return named status values and
   write owned handles through explicit out parameters. UTF-8 data crosses as
   pointer/length pairs, and diagnostics are written into caller-provided byte
@@ -210,9 +211,9 @@ devices. The Metal backend also exposes `Host`, the
 used by the Swift bridge. The bridge retains those objects internally, while
 the host keeps the layer attached and configured for presentation. Metal bridge
 calls cross Swift `@c` functions as explicit status/out-handle results plus
-pointer/length UTF-8 buffers and a versioned draw-request byte layout rather
-than implicit null-pointer failures, NUL-terminated strings, or Swift struct
-layout assumptions.
+pointer/length UTF-8 buffers and a protocol-versioned draw-request byte layout
+rather than implicit null-pointer failures, NUL-terminated strings, or Swift
+struct layout assumptions.
 
 `RendererOptions.validate()` is the shared capacity, pool-alignment, and
 precision-policy contract used by the core and backends. The glyph pool buffer
@@ -370,7 +371,7 @@ Backend debug counters are exposed through `Renderer.stats()` in Debug builds.
 | Meshlet planning | Host culling, viewport back-projection, h-band strip bounds, and meshlet ABI writes are isolated in core render planning code. |
 | Font lifetime | FreeType library, face, and HarfBuzz font lifetimes are explicit; memory-backed font sources are copied and released only after the face is destroyed. |
 | Shaping | HarfBuzz buffers are reused per plan, reset with an explicit cluster level, and always guess missing segment properties without overwriting caller-provided direction/script/language. |
-| Blob ABI | `CoverageBlob` v3 is an explicit 32-bit word stream, not a serialized Zig struct; CPU decode validates the header, curve table, and CSR h-band candidate index before upload. |
+| Blob ABI | `CoverageBlob` v4 is an explicit 32-bit word stream, not a serialized Zig struct; the header stores separate `HSBL` protocol magic and `4.0` protocol version words, and CPU decode validates the header, curve table, and CSR h-band candidate index before upload. |
 | Blob precision | Glyph blobs are 32-bit fixed-point and keyed by precision tier. Unsupported precision tiers are rejected before outline regularization. |
 | Blob references | `GlyphBlobRef` values are byte offsets. |
 | GPU ABI | Layouts are generated from Slang reflection; `src/gpu` owns the mesh output budget, resource binding table, and counter ABI names. |

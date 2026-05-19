@@ -58,7 +58,8 @@ pub fn curves(
     @memset(words, 0);
 
     format.writeHeader(words, .{
-        .magic_version = format.magic_version,
+        .protocol_magic = format.protocol_magic,
+        .protocol_version = format.protocol_version_word,
         .fraction_bits = fraction_bits,
         .flags = format.flags_none,
         .fill_sign = fillSignCubics(source_curves),

@@ -12,11 +12,16 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Project-owned protocol versions normalized:** internal wire and bridge
+  contracts now use one explicit `major.minor` 32-bit protocol-version word;
+  `CoverageBlob` v4 separates the `HSBL` protocol magic from the version word,
+  and the Metal draw request uses the same version encoding instead of a raw
+  unstructured integer.
 - **Metal backend ABI tightened:** the Swift bridge draw entry now receives one
-  versioned raw draw-request block instead of a long scalar parameter list,
-  decodes and validates the ABI before touching Metal objects, and Zig-side
-  Metal buffers now carry explicit sizes for resource writes, frame-parameter
-  chunks, and glyph-pool uploads.
+  protocol-versioned raw draw-request block instead of a long scalar parameter
+  list, decodes and validates the request protocol before touching Metal
+  objects, and Zig-side Metal buffers now carry explicit sizes for resource
+  writes, frame-parameter chunks, and glyph-pool uploads.
 - **Vulkan backend refactored:** device requirement validation, host-coherent
   buffer allocation, and mesh draw planning now live in dedicated modules;
   `Context.requiredFeatureChain()` exposes the renderer feature pNext chain,
@@ -48,10 +53,10 @@ implementation notes belong in commits and code review history.
   workgroup, output count, component, shared-memory, and push-descriptor
   limits.
 - **Coverage blob ABI rewritten:** glyph coverage blobs now use an explicit
-  v3 32-bit word layout instead of serializing Zig struct memory, CPU decoding
+  v4 32-bit word layout instead of serializing Zig struct memory, CPU decoding
   validates header invariants, curve bounds, contiguous CSR h-band tables, and
   sorted candidate IDs, and shader blob reads use the same named word offsets
-  with an unsupported-magic guard.
+  with unsupported protocol magic and version guards.
 - **Core byte pool allocator rewritten:** glyph blob pool metadata now uses
   stable free-block nodes, address-ordered coalescing, and power-of-two size
   bins instead of a single linear best-fit list; pool buffer sizes must now be
