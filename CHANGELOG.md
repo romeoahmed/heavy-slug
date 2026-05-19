@@ -55,6 +55,11 @@ implementation notes belong in commits and code review history.
   code page, and Segment Heap, attaches window state during `WM_NCCREATE`,
   rounds DPI client sizing consistently, and clears captured input on focus or
   mode cancellation.
+- **Windows demo host modernized:** the Win32 Vulkan demo now relies on the
+  manifest-owned DPI contract, refreshes framebuffer dimensions from the client
+  rect instead of packed size messages, updates scroll focus from documented
+  screen-space wheel coordinates, handles queued quit messages, and applies
+  best-effort Windows 11 DWM titlebar colors and rounded-corner preference.
 - **Cocoa demo host modernized:** the Metal demo now uses AppKit backing
   coordinate conversion for `CAMetalLayer` drawable sizing, configures the
   layer-hosting view in documented order, routes mouse motion through an

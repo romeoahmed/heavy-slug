@@ -105,12 +105,32 @@ extern "user32" fn LoadCursorW(hInstance: ?windows.HINSTANCE, lpCursorName: wind
 extern "user32" fn PeekMessageW(lpMsg: *MSG, hWnd: ?windows.HWND, wMsgFilterMin: windows.UINT, wMsgFilterMax: windows.UINT, wRemoveMsg: windows.UINT) callconv(.winapi) windows.BOOL;
 extern "user32" fn RegisterClassExW(lpWndClass: *const WNDCLASSEXW) callconv(.winapi) windows.ATOM;
 extern "user32" fn ReleaseCapture() callconv(.winapi) windows.BOOL;
+extern "user32" fn ScreenToClient(hWnd: windows.HWND, lpPoint: *POINT) callconv(.winapi) windows.BOOL;
 extern "user32" fn SetCapture(hWnd: windows.HWND) callconv(.winapi) ?windows.HWND;
-extern "user32" fn SetProcessDpiAwarenessContext(value: windows.HANDLE) callconv(.winapi) windows.BOOL;
 extern "user32" fn SetWindowLongPtrW(hWnd: windows.HWND, nIndex: c_int, dwNewLong: windows.LONG_PTR) callconv(.winapi) windows.LONG_PTR;
 extern "user32" fn SetWindowPos(hWnd: windows.HWND, hWndInsertAfter: ?windows.HWND, X: c_int, Y: c_int, cx: c_int, cy: c_int, uFlags: windows.UINT) callconv(.winapi) windows.BOOL;
 extern "user32" fn ShowWindow(hWnd: windows.HWND, nCmdShow: c_int) callconv(.winapi) windows.BOOL;
 extern "user32" fn TranslateMessage(lpMsg: *const MSG) callconv(.winapi) windows.BOOL;
+
+const ColorRef = windows.DWORD;
+
+const ChromeTheme = enum {
+    light,
+    dark,
+};
+
+const ChromePalette = struct {
+    caption: ColorRef,
+    text: ColorRef,
+    border: ColorRef,
+};
+
+const DwmWindowCornerPreference = enum(windows.DWORD) {
+    default = 0,
+    do_not_round = 1,
+    round = 2,
+    round_small = 3,
+};
 
 const win32 = struct {
     const class_name = std.unicode.utf8ToUtf16LeStringLiteral("HeavySlugDemoWindow");
@@ -122,11 +142,14 @@ const win32 = struct {
 
     const dpi = struct {
         const default_screen: windows.UINT = 96;
-        const per_monitor_v2: windows.HANDLE = @ptrFromInt(@as(usize, @bitCast(@as(isize, -4))));
     };
 
     const dwm = struct {
         const use_immersive_dark_mode: windows.DWORD = 20;
+        const window_corner_preference: windows.DWORD = 33;
+        const border_color: windows.DWORD = 34;
+        const caption_color: windows.DWORD = 35;
+        const text_color: windows.DWORD = 36;
     };
 
     const error_code = struct {
@@ -142,7 +165,9 @@ const win32 = struct {
         const size = 0x0005;
         const kill_focus = 0x0008;
         const close = 0x0010;
+        const quit = 0x0012;
         const erase_background = 0x0014;
+        const activate_app = 0x001C;
         const cancel_mode = 0x001F;
         const nccreate = 0x0081;
         const ncdestroy = 0x0082;
@@ -211,6 +236,8 @@ var vk_get_instance_proc_addr: ?vk.PfnGetInstanceProcAddr = null;
 var dwmapi: ?windows.HMODULE = null;
 var dwm_set_window_attribute: ?DwmSetWindowAttributeFn = null;
 var dwm_dark_mode_available = true;
+var dwm_color_available = true;
+var dwm_corner_preference_available = true;
 
 pub const Window = struct {
     hwnd: windows.HWND = undefined,
@@ -219,12 +246,12 @@ pub const Window = struct {
     framebuffer_width: u32 = 0,
     framebuffer_height: u32 = 0,
     should_close: bool = false,
-    dark_titlebar: ?bool = null,
+    dpi: windows.UINT = win32.dpi.default_screen,
+    chrome_theme: ?ChromeTheme = null,
     qpc_frequency: i64 = 0,
     qpc_start: i64 = 0,
 
     pub fn init(self: *Window, allocator: std.mem.Allocator, width: c_int, height: c_int, title: []const u8) !void {
-        enablePerMonitorDpiFallback();
         try loadVulkanLoader();
 
         const hmodule = GetModuleHandleW(null) orelse return error.ModuleHandleUnavailable;
@@ -259,10 +286,11 @@ pub const Window = struct {
         errdefer _ = DestroyWindow(hwnd);
 
         self.hwnd = hwnd;
-        _ = SetWindowLongPtrW(hwnd, win32.window_long.user_data, windowPtrToLong(self));
+        self.updateDpiFromWindow();
 
         try self.resizeLogicalClientArea(width, height);
         self.refreshFramebufferSize();
+        setDwmWindowCornerPreference(hwnd);
         self.setDarkMode(false);
         _ = ShowWindow(hwnd, win32.show.show);
     }
@@ -275,6 +303,10 @@ pub const Window = struct {
     pub fn pollEvents(self: *Window) void {
         var msg: MSG = undefined;
         while (PeekMessageW(&msg, null, 0, 0, win32.peek.remove).toBool()) {
+            if (msg.message == win32.message.quit) {
+                self.should_close = true;
+                break;
+            }
             _ = TranslateMessage(&msg);
             _ = DispatchMessageW(&msg);
         }
@@ -296,26 +328,10 @@ pub const Window = struct {
     }
 
     pub fn setDarkMode(self: *Window, enabled: bool) void {
-        if (!dwm_dark_mode_available) return;
-        if (self.dark_titlebar != null and self.dark_titlebar.? == enabled) return;
-
-        const set_window_attribute = loadDwmSetWindowAttribute() orelse {
-            dwm_dark_mode_available = false;
-            return;
-        };
-
-        var value = windows.BOOL.fromBool(enabled);
-        const hr = set_window_attribute(
-            self.hwnd,
-            win32.dwm.use_immersive_dark_mode,
-            @ptrCast(&value),
-            @sizeOf(windows.BOOL),
-        );
-        if (hr < 0) {
-            dwm_dark_mode_available = false;
-            return;
-        }
-        self.dark_titlebar = enabled;
+        const theme = chromeThemeFromDarkMode(enabled);
+        if (self.chrome_theme != null and self.chrome_theme.? == theme) return;
+        applyDwmChromeTheme(self.hwnd, theme);
+        self.chrome_theme = theme;
     }
 
     pub fn createSurface(self: *const Window, instance: vk.Instance, idisp: anytype) !vk.SurfaceKHR {
@@ -330,15 +346,20 @@ pub const Window = struct {
         self.framebuffer_width, self.framebuffer_height = clientSize(self.hwnd) orelse return;
     }
 
-    fn resizeLogicalClientArea(self: *Window, width: c_int, height: c_int) !void {
+    fn updateDpiFromWindow(self: *Window) void {
         const dpi = GetDpiForWindow(self.hwnd);
+        if (dpi != 0) self.dpi = dpi;
+    }
+
+    fn resizeLogicalClientArea(self: *Window, width: c_int, height: c_int) !void {
+        self.updateDpiFromWindow();
         var rect = RECT{
             .left = 0,
             .top = 0,
-            .right = try scaleForDpi(width, dpi),
-            .bottom = try scaleForDpi(height, dpi),
+            .right = try scaleForDpi(width, self.dpi),
+            .bottom = try scaleForDpi(height, self.dpi),
         };
-        if (!AdjustWindowRectExForDpi(&rect, win32.style.overlapped_window, .FALSE, 0, dpi).toBool()) {
+        if (!AdjustWindowRectExForDpi(&rect, win32.style.overlapped_window, .FALSE, 0, self.dpi).toBool()) {
             return error.WindowRectFailed;
         }
         if (!SetWindowPos(
@@ -364,11 +385,6 @@ pub fn getInstanceProcAddress(instance: vk.Instance, name: [*:0]const u8) vk.Pfn
     return get_proc(instance, name);
 }
 
-fn enablePerMonitorDpiFallback() void {
-    if (SetProcessDpiAwarenessContext(win32.dpi.per_monitor_v2).toBool()) return;
-    _ = windows.GetLastError();
-}
-
 fn loadVulkanLoader() !void {
     if (vk_get_instance_proc_addr != null) return;
 
@@ -386,6 +402,62 @@ fn loadDwmSetWindowAttribute() ?DwmSetWindowAttributeFn {
     dwmapi = module;
     dwm_set_window_attribute = @ptrCast(proc);
     return dwm_set_window_attribute;
+}
+
+fn setDwmAttribute(hwnd: windows.HWND, attribute: windows.DWORD, comptime T: type, value: *const T) bool {
+    const set_window_attribute = loadDwmSetWindowAttribute() orelse return false;
+    return set_window_attribute(hwnd, attribute, @ptrCast(value), @sizeOf(T)) >= 0;
+}
+
+fn setDwmWindowCornerPreference(hwnd: windows.HWND) void {
+    if (!dwm_corner_preference_available) return;
+
+    const preference: DwmWindowCornerPreference = .round;
+    if (!setDwmAttribute(hwnd, win32.dwm.window_corner_preference, DwmWindowCornerPreference, &preference)) {
+        dwm_corner_preference_available = false;
+    }
+}
+
+fn applyDwmChromeTheme(hwnd: windows.HWND, theme: ChromeTheme) void {
+    if (dwm_dark_mode_available) {
+        const use_dark_titlebar = windows.BOOL.fromBool(theme == .dark);
+        if (!setDwmAttribute(hwnd, win32.dwm.use_immersive_dark_mode, windows.BOOL, &use_dark_titlebar)) {
+            dwm_dark_mode_available = false;
+        }
+    }
+
+    if (dwm_color_available) {
+        const palette = chromePalette(theme);
+        if (!setDwmAttribute(hwnd, win32.dwm.caption_color, ColorRef, &palette.caption) or
+            !setDwmAttribute(hwnd, win32.dwm.text_color, ColorRef, &palette.text) or
+            !setDwmAttribute(hwnd, win32.dwm.border_color, ColorRef, &palette.border))
+        {
+            dwm_color_available = false;
+        }
+    }
+}
+
+fn chromeThemeFromDarkMode(enabled: bool) ChromeTheme {
+    return if (enabled) .dark else .light;
+}
+
+fn chromePalette(theme: ChromeTheme) ChromePalette {
+    return switch (theme) {
+        .light => .{
+            .caption = rgb(255, 255, 255),
+            .text = rgb(18, 18, 18),
+            .border = rgb(214, 214, 214),
+        },
+        .dark => .{
+            .caption = rgb(32, 32, 32),
+            .text = rgb(245, 245, 245),
+            .border = rgb(70, 70, 70),
+        },
+    };
+}
+
+fn rgb(red: u8, green: u8, blue: u8) ColorRef {
+    return @as(ColorRef, red) | (@as(ColorRef, green) << 8) | (@as(ColorRef, blue) << 16);
 }
 
 fn registerClass(hinstance: windows.HINSTANCE) !void {
@@ -407,6 +479,7 @@ fn windowProc(hwnd: windows.HWND, msg: windows.UINT, wparam: WPARAM, lparam: win
         if (create.lpCreateParams) |param| {
             const window: *Window = @ptrCast(@alignCast(param));
             window.hwnd = hwnd;
+            window.updateDpiFromWindow();
             _ = SetWindowLongPtrW(hwnd, win32.window_long.user_data, windowPtrToLong(window));
             window.refreshFramebufferSize();
             return 1;
@@ -425,6 +498,7 @@ fn windowProc(hwnd: windows.HWND, msg: windows.UINT, wparam: WPARAM, lparam: win
             return 0;
         },
         win32.message.ncdestroy => {
+            _ = ReleaseCapture();
             _ = SetWindowLongPtrW(hwnd, win32.window_long.user_data, 0);
             return DefWindowProcW(hwnd, msg, wparam, lparam);
         },
@@ -440,13 +514,15 @@ fn windowProc(hwnd: windows.HWND, msg: windows.UINT, wparam: WPARAM, lparam: win
                 suggested.bottom - suggested.top,
                 win32.set_window_pos.no_z_order | win32.set_window_pos.no_activate,
             );
-            if (maybe_window) |window| window.refreshFramebufferSize();
+            if (maybe_window) |window| {
+                window.dpi = dpiFromWparam(wparam);
+                window.refreshFramebufferSize();
+            }
             return 0;
         },
         win32.message.size => {
             if (maybe_window) |window| {
-                window.framebuffer_width = lowWord(lparam);
-                window.framebuffer_height = highWord(lparam);
+                window.refreshFramebufferSize();
             }
             return 0;
         },
@@ -456,6 +532,16 @@ fn windowProc(hwnd: windows.HWND, msg: windows.UINT, wparam: WPARAM, lparam: win
                 window.input_state.clearMouseButtons();
             }
             _ = ReleaseCapture();
+            return 0;
+        },
+        win32.message.activate_app => {
+            if (wparam == 0) {
+                if (maybe_window) |window| {
+                    window.input_state.clearKeys();
+                    window.input_state.clearMouseButtons();
+                }
+                _ = ReleaseCapture();
+            }
             return 0;
         },
         win32.message.key_down, win32.message.sys_key_down => {
@@ -508,16 +594,17 @@ fn windowProc(hwnd: windows.HWND, msg: windows.UINT, wparam: WPARAM, lparam: win
         },
         win32.message.mouse_move => {
             if (maybe_window) |window| {
-                window.input_state.setCursor(
-                    @floatFromInt(signedLowWord(lparam)),
-                    @floatFromInt(signedHighWord(lparam)),
-                );
+                const cursor = clientPointFromLparam(lparam);
+                window.input_state.setCursor(cursor[0], cursor[1]);
             }
             return 0;
         },
         win32.message.mouse_wheel => {
             if (maybe_window) |window| {
-                window.input_state.addScroll(@as(f64, @floatFromInt(signedHighWordU(wparam))) / win32.wheel_delta);
+                if (screenPointToClient(hwnd, lparam)) |cursor| {
+                    window.input_state.setCursor(cursor[0], cursor[1]);
+                }
+                window.input_state.addScroll(wheelDeltaFromWparam(wparam));
             }
             return 0;
         },
@@ -562,6 +649,10 @@ fn mapKey(wparam: WPARAM) ?demo_input.Key {
 fn clientSize(hwnd: windows.HWND) ?[2]u32 {
     var rect: RECT = undefined;
     if (!GetClientRect(hwnd, &rect).toBool()) return null;
+    return rectSize(rect);
+}
+
+fn rectSize(rect: RECT) [2]u32 {
     return .{
         @intCast(@max(0, rect.right - rect.left)),
         @intCast(@max(0, rect.bottom - rect.top)),
@@ -581,6 +672,25 @@ fn ptrFromLparam(comptime T: type, value: windows.LPARAM) *const T {
     return @ptrFromInt(@as(usize, @bitCast(value)));
 }
 
+fn clientPointFromLparam(value: windows.LPARAM) [2]f64 {
+    return .{
+        @floatFromInt(signedLowWord(value)),
+        @floatFromInt(signedHighWord(value)),
+    };
+}
+
+fn screenPointToClient(hwnd: windows.HWND, value: windows.LPARAM) ?[2]f64 {
+    var point = POINT{
+        .x = signedLowWord(value),
+        .y = signedHighWord(value),
+    };
+    if (!ScreenToClient(hwnd, &point).toBool()) return null;
+    return .{
+        @floatFromInt(point.x),
+        @floatFromInt(point.y),
+    };
+}
+
 fn lowWord(value: windows.LPARAM) u16 {
     return @truncate(@as(usize, @bitCast(value)));
 }
@@ -597,8 +707,22 @@ fn signedHighWord(value: windows.LPARAM) i16 {
     return @bitCast(highWord(value));
 }
 
+fn highWordU(value: WPARAM) u16 {
+    return @truncate(value >> 16);
+}
+
 fn signedHighWordU(value: WPARAM) i16 {
-    return @bitCast(@as(u16, @truncate(value >> 16)));
+    return @bitCast(highWordU(value));
+}
+
+fn dpiFromWparam(value: WPARAM) windows.UINT {
+    const dpi_x: windows.UINT = @intCast(@as(u16, @truncate(value)));
+    const dpi_y: windows.UINT = @intCast(highWordU(value));
+    return if (dpi_x != 0) dpi_x else if (dpi_y != 0) dpi_y else win32.dpi.default_screen;
+}
+
+fn wheelDeltaFromWparam(value: WPARAM) f64 {
+    return @as(f64, @floatFromInt(signedHighWordU(value))) / win32.wheel_delta;
 }
 
 fn queryPerformanceCounter() !i64 {
@@ -627,9 +751,41 @@ test "Win32 word helpers preserve signed mouse coordinates and wheel deltas" {
     const lparam = makeLparamWords(@bitCast(@as(i16, -32)), @bitCast(@as(i16, 48)));
     try std.testing.expectEqual(@as(i16, -32), signedLowWord(lparam));
     try std.testing.expectEqual(@as(i16, 48), signedHighWord(lparam));
+    try std.testing.expectEqual(@as([2]f64, .{ -32, 48 }), clientPointFromLparam(lparam));
 
     const wparam = makeWparamWords(0, @bitCast(@as(i16, -120)));
     try std.testing.expectEqual(@as(i16, -120), signedHighWordU(wparam));
+    try std.testing.expectEqual(@as(f64, -1), wheelDeltaFromWparam(wparam));
+}
+
+test "Win32 DPI and rect helpers normalize platform packed values" {
+    try std.testing.expectEqual(@as(windows.UINT, 144), dpiFromWparam(makeWparamWords(144, 144)));
+    try std.testing.expectEqual(@as(windows.UINT, 168), dpiFromWparam(makeWparamWords(0, 168)));
+    try std.testing.expectEqual(@as(windows.UINT, win32.dpi.default_screen), dpiFromWparam(0));
+
+    try std.testing.expectEqual(@as([2]u32, .{ 640, 480 }), rectSize(.{
+        .left = 20,
+        .top = 10,
+        .right = 660,
+        .bottom = 490,
+    }));
+    try std.testing.expectEqual(@as([2]u32, .{ 0, 0 }), rectSize(.{
+        .left = 10,
+        .top = 10,
+        .right = 5,
+        .bottom = 8,
+    }));
+}
+
+test "Win32 DWM chrome helpers encode COLORREF palettes" {
+    try std.testing.expectEqual(@as(ColorRef, 0x00332211), rgb(0x11, 0x22, 0x33));
+    try std.testing.expectEqual(ChromeTheme.light, chromeThemeFromDarkMode(false));
+    try std.testing.expectEqual(ChromeTheme.dark, chromeThemeFromDarkMode(true));
+
+    const light = chromePalette(.light);
+    const dark = chromePalette(.dark);
+    try std.testing.expect(light.caption != dark.caption);
+    try std.testing.expect(light.text != dark.text);
 }
 
 fn makeLparamWords(low: u16, high: u16) windows.LPARAM {
