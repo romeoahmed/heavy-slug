@@ -83,6 +83,12 @@ implementation notes belong in commits and code review history.
   bridge geometry constants testable against the shared mesh ABI. The Metal
   backend intentionally keeps a mesh render pipeline state rather than adding
   dynamic libraries as a Shader Object analogue.
+- **Metal/Cocoa Objective-C++ bridge rewritten:** the Metal bridge now retains
+  host objects internally, validates buffer ownership before draws, submits both
+  renderer resources and `CAMetalLayer` drawable residency sets with each
+  Metal 4 command buffer, and uses explicit frame-slot reservation state. The
+  Cocoa demo host was rewritten around the same main-thread AppKit contract and
+  Metal 4 layer residency requirement.
 - **Breaking Vulkan shader-object backend:** the Vulkan renderer now requires
   `VK_EXT_shader_object`, creates linked mesh/fragment shader objects, and
   sets the required graphics state dynamically instead of creating a monolithic

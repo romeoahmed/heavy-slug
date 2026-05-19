@@ -8,11 +8,11 @@ pub const ContextHandle = c.hs_metal_context;
 pub const BufferHandle = c.hs_metal_buffer;
 
 pub const Host = struct {
-    /// Borrowed id<MTLDevice>; must outlive Context.
+    /// Borrowed id<MTLDevice>; retained by Context during init.
     device: *anyopaque,
-    /// Borrowed id<MTL4CommandQueue>; must belong to device.
+    /// Borrowed id<MTL4CommandQueue>; retained by Context and must belong to device.
     command_queue: *anyopaque,
-    /// Borrowed CAMetalLayer with device and pixelFormat already configured.
+    /// Borrowed CAMetalLayer with device, pixelFormat, and Metal 4 residencySet configured.
     layer: *anyopaque,
 
     fn cValue(self: Host) c.hs_metal_host_objects {

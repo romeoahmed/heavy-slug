@@ -15,13 +15,15 @@ typedef struct hs_metal_context hs_metal_context;
 typedef struct hs_metal_buffer hs_metal_buffer;
 
 typedef struct hs_metal_host_objects {
-  /* Borrowed id<MTLDevice>; must outlive the context. Must support Metal 4. */
+  /* Borrowed id<MTLDevice>; retained by the created context. */
   void *device;
-  /* Borrowed id<MTL4CommandQueue>; must belong to device. */
+  /* Borrowed id<MTL4CommandQueue>; retained by the context and must belong to device. */
   void *command_queue;
   /*
-   * Borrowed CAMetalLayer*; must outlive the context. Its device must match
-   * device, and its pixelFormat is baked into the Metal render pipeline.
+   * Borrowed CAMetalLayer*; retained by the context. Its device must match
+   * device, its Metal 4 residencySet must be available, and its pixelFormat is
+   * baked into the Metal render pipeline. The layer must stay attached and
+   * configured for presentation while drawing.
    */
   void *layer;
 } hs_metal_host_objects;
@@ -67,7 +69,9 @@ hs_metal_geometry_limits hs_metal_get_geometry_limits(void);
  * Ownership model:
  * - create/destroy pairs transfer ownership of hs_metal_context and
  * hs_metal_buffer.
- * - Host Objective-C objects are borrowed.
+ * - Host Objective-C objects are borrowed at creation and retained internally.
+ * - hs_metal_buffer objects are owned by callers and must not outlive their
+ *   context.
  * - The context owns its internal pipeline, frame slots, argument tables, and
  *   completion handlers. Zig sees only typed opaque C handles.
  * - Errors cross the ABI as a boolean status plus caller-provided UTF-8 text

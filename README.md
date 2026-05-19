@@ -179,9 +179,10 @@ Stable top-level core exports include `FontHandle`, `FontSource`,
 
 Backend modules expose `Context`, `Renderer`, `Frame`, `Target`,
 `RendererOptions`, `FontHandle`, `FrameToken`, `Stats`, and
-`shader_stats_enabled`. The Metal backend also exposes `Host`, the borrowed
-`id<MTLDevice>` / `id<MTL4CommandQueue>` / `CAMetalLayer *` contract used by
-the bridge.
+`shader_stats_enabled`. The Metal backend also exposes `Host`, the
+`id<MTLDevice>` / `id<MTL4CommandQueue>` / `CAMetalLayer *` creation contract
+used by the bridge. The bridge retains those objects internally, while the host
+keeps the layer attached and configured for presentation.
 
 <details>
 <summary>Typical frame shape</summary>
@@ -239,7 +240,7 @@ TextRun
 | Backend | Resource model | Host responsibility |
 | --- | --- | --- |
 | Vulkan | One glyph blob buffer, per-frame glyph and meshlet buffers, shader objects, optional stats buffer. | Provide Vulkan objects, command buffers, render targets, and completed frame tokens. |
-| Metal | Bridge-owned glyph and meshlet buffers, Metal 4 mesh pipeline state, argument tables, and per-command residency. | Provide borrowed Metal 4 device, command queue, layer, and app lifecycle. |
+| Metal | Bridge-owned glyph and meshlet buffers, Metal 4 mesh pipeline state, argument tables, and per-command resource plus drawable residency. | Provide a Metal 4 device, command queue, configured `CAMetalLayer`, and app lifecycle. |
 
 Frame lifetime is explicit. Backends return `FrameToken` values on submit, and
 cached GPU storage is retired only after the host reports completed work.
