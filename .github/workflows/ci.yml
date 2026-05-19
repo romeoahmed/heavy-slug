@@ -1,0 +1,471 @@
+name: CI
+
+"on":
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      zig_version:
+        description: "Zig version: from-zon, stable/latest, master, or an explicit version."
+        required: false
+        default: from-zon
+        type: string
+      slang_version:
+        description: "Slang release version or tag."
+        required: false
+        default: "2026.9"
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  ZIG_VERSION: ${{ inputs.zig_version || 'from-zon' }}
+  SLANG_VERSION: ${{ inputs.slang_version || '2026.9' }}
+
+jobs:
+  format:
+    name: Format and Script Syntax
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Resolve Zig
+        id: zig
+        run: ./.github/scripts/setup-zig.sh --resolve-only
+
+      - name: Restore Zig tool cache
+        id: zig-tool-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ steps.zig.outputs.install_dir }}
+          key: zig-tool-${{ runner.os }}-${{ runner.arch }}-${{ steps.zig.outputs.target }}-${{ steps.zig.outputs.version }}
+
+      - name: Setup Zig
+        run: ./.github/scripts/setup-zig.sh
+        env:
+          ZIG_VERSION: ${{ steps.zig.outputs.version }}
+          ZIG_DOWNLOAD_URL: ${{ steps.zig.outputs.url }}
+          ZIG_DOWNLOAD_SHA256: ${{ steps.zig.outputs.sha256 }}
+
+      - name: Save Zig tool cache
+        if: ${{ github.event_name != 'pull_request' && steps.zig-tool-cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ steps.zig.outputs.install_dir }}
+          key: zig-tool-${{ runner.os }}-${{ runner.arch }}-${{ steps.zig.outputs.target }}-${{ steps.zig.outputs.version }}
+
+      - name: Check Zig formatting
+        run: zig fmt --check build.zig build/ demo/ src/ tools/
+
+      - name: Check Bash syntax
+        run: |
+          bash -n .github/scripts/setup-zig.sh
+          bash -n .github/scripts/setup-slang.sh
+
+  core:
+    name: Core (${{ matrix.name }})
+    needs: format
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu
+            os: ubuntu-24.04
+            windows: false
+            setup_zig: ./.github/scripts/setup-zig.sh
+            resolve_zig: ./.github/scripts/setup-zig.sh --resolve-only
+            cache_scope: ubuntu-core
+          - name: macOS
+            os: macos-26
+            windows: false
+            setup_zig: ./.github/scripts/setup-zig.sh
+            resolve_zig: ./.github/scripts/setup-zig.sh --resolve-only
+            cache_scope: macos-core
+          - name: Windows
+            os: windows-2025-vs2026
+            windows: true
+            setup_zig: ./.github/scripts/setup-zig.ps1
+            resolve_zig: ./.github/scripts/setup-zig.ps1 -ResolveOnly
+            cache_scope: windows-core
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Prepare Windows paths
+        if: ${{ matrix.windows }}
+        id: windows
+        run: ./.github/scripts/prepare-windows-ci.ps1 -Name ${{ matrix.cache_scope }}
+
+      - name: Resolve Zig
+        id: zig
+        run: ${{ matrix.resolve_zig }}
+
+      - name: Restore Zig tool cache
+        id: zig-tool-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ steps.zig.outputs.install_dir }}
+          key: zig-tool-${{ runner.os }}-${{ runner.arch }}-${{ steps.zig.outputs.target }}-${{ steps.zig.outputs.version }}
+
+      - name: Restore Zig package cache
+        id: zig-pkg-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ steps.windows.outputs.zig_global_cache_dir || '~/.cache/zig' }}
+          key: zig-pkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-pkg-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Setup Zig
+        run: ${{ matrix.setup_zig }}
+        env:
+          ZIG_VERSION: ${{ steps.zig.outputs.version }}
+          ZIG_DOWNLOAD_URL: ${{ steps.zig.outputs.url }}
+          ZIG_DOWNLOAD_SHA256: ${{ steps.zig.outputs.sha256 }}
+
+      - name: Save Zig tool cache
+        if: ${{ github.event_name != 'pull_request' && steps.zig-tool-cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ steps.zig.outputs.install_dir }}
+          key: zig-tool-${{ runner.os }}-${{ runner.arch }}-${{ steps.zig.outputs.target }}-${{ steps.zig.outputs.version }}
+
+      - name: Fetch Zig dependencies
+        if: ${{ matrix.windows }}
+        run: ./.github/scripts/fetch-zig-deps-windows.ps1 -Command "zig build test --fetch=needed"
+
+      - name: Run core tests
+        run: zig build test
+
+      - name: Save Zig package cache
+        if: ${{ github.event_name != 'pull_request' && steps.zig-pkg-cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ steps.windows.outputs.zig_global_cache_dir || '~/.cache/zig' }}
+          key: zig-pkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+
+  shaders:
+    name: Shaders (${{ matrix.name }})
+    needs: format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: SPIR-V
+            command: zig build spirv
+            cache_scope: spirv
+          - name: Metal
+            command: zig build msl
+            cache_scope: msl
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Resolve Zig
+        id: zig
+        run: ./.github/scripts/setup-zig.sh --resolve-only
+
+      - name: Resolve Slang
+        id: slang
+        run: ./.github/scripts/setup-slang.sh --resolve-only
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Restore Zig tool cache
+        id: zig-tool-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ steps.zig.outputs.install_dir }}
+          key: zig-tool-${{ runner.os }}-${{ runner.arch }}-${{ steps.zig.outputs.target }}-${{ steps.zig.outputs.version }}
+
+      - name: Restore Slang tool cache
+        id: slang-tool-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ steps.slang.outputs.install_dir }}
+          key: slang-tool-${{ runner.os }}-${{ runner.arch }}-${{ steps.slang.outputs.platform }}-${{ steps.slang.outputs.version }}
+
+      - name: Restore Zig package cache
+        id: zig-pkg-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/.cache/zig
+          key: zig-pkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-pkg-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Setup Zig
+        run: ./.github/scripts/setup-zig.sh
+        env:
+          ZIG_VERSION: ${{ steps.zig.outputs.version }}
+          ZIG_DOWNLOAD_URL: ${{ steps.zig.outputs.url }}
+          ZIG_DOWNLOAD_SHA256: ${{ steps.zig.outputs.sha256 }}
+
+      - name: Setup Slang
+        run: ./.github/scripts/setup-slang.sh
+        env:
+          SLANG_VERSION: ${{ steps.slang.outputs.version }}
+          SLANG_DOWNLOAD_URL: ${{ steps.slang.outputs.url }}
+
+      - name: Save Zig tool cache
+        if: ${{ github.event_name != 'pull_request' && steps.zig-tool-cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ steps.zig.outputs.install_dir }}
+          key: zig-tool-${{ runner.os }}-${{ runner.arch }}-${{ steps.zig.outputs.target }}-${{ steps.zig.outputs.version }}
+
+      - name: Save Slang tool cache
+        if: ${{ github.event_name != 'pull_request' && steps.slang-tool-cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ steps.slang.outputs.install_dir }}
+          key: slang-tool-${{ runner.os }}-${{ runner.arch }}-${{ steps.slang.outputs.platform }}-${{ steps.slang.outputs.version }}
+
+      - name: Compile shaders
+        run: ${{ matrix.command }}
+
+      - name: Save Zig package cache
+        if: ${{ github.event_name != 'pull_request' && steps.zig-pkg-cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.cache/zig
+          key: zig-pkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+
+  backend:
+    name: ${{ matrix.name }}
+    needs: format
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 70
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Vulkan / Ubuntu
+            os: ubuntu-24.04
+            windows: false
+            needs_slang: true
+            install_wayland: false
+            setup_zig: ./.github/scripts/setup-zig.sh
+            resolve_zig: ./.github/scripts/setup-zig.sh --resolve-only
+            setup_slang: ./.github/scripts/setup-slang.sh
+            resolve_slang: ./.github/scripts/setup-slang.sh --resolve-only
+            command: zig build test -Dvulkan=true
+            cache_scope: ubuntu-vulkan
+          - name: Vulkan shader stats / Ubuntu
+            os: ubuntu-24.04
+            windows: false
+            needs_slang: true
+            install_wayland: false
+            setup_zig: ./.github/scripts/setup-zig.sh
+            resolve_zig: ./.github/scripts/setup-zig.sh --resolve-only
+            setup_slang: ./.github/scripts/setup-slang.sh
+            resolve_slang: ./.github/scripts/setup-slang.sh --resolve-only
+            command: zig build test -Dvulkan=true -Dshader-stats=true
+            cache_scope: ubuntu-vulkan-stats
+          - name: Vulkan demo / Ubuntu
+            os: ubuntu-24.04
+            windows: false
+            needs_slang: true
+            install_wayland: true
+            setup_zig: ./.github/scripts/setup-zig.sh
+            resolve_zig: ./.github/scripts/setup-zig.sh --resolve-only
+            setup_slang: ./.github/scripts/setup-slang.sh
+            resolve_slang: ./.github/scripts/setup-slang.sh --resolve-only
+            command: zig build test -Ddemo=true -Ddemo-backend=vulkan
+            cache_scope: ubuntu-vulkan-demo
+          - name: Metal / macOS
+            os: macos-26
+            windows: false
+            needs_slang: true
+            install_wayland: false
+            setup_zig: ./.github/scripts/setup-zig.sh
+            resolve_zig: ./.github/scripts/setup-zig.sh --resolve-only
+            setup_slang: ./.github/scripts/setup-slang.sh
+            resolve_slang: ./.github/scripts/setup-slang.sh --resolve-only
+            command: zig build test -Dmetal=true
+            cache_scope: macos-metal
+          - name: Metal shader stats / macOS
+            os: macos-26
+            windows: false
+            needs_slang: true
+            install_wayland: false
+            setup_zig: ./.github/scripts/setup-zig.sh
+            resolve_zig: ./.github/scripts/setup-zig.sh --resolve-only
+            setup_slang: ./.github/scripts/setup-slang.sh
+            resolve_slang: ./.github/scripts/setup-slang.sh --resolve-only
+            command: zig build test -Dmetal=true -Dshader-stats=true
+            cache_scope: macos-metal-stats
+          - name: Metal demo / macOS
+            os: macos-26
+            windows: false
+            needs_slang: true
+            install_wayland: false
+            setup_zig: ./.github/scripts/setup-zig.sh
+            resolve_zig: ./.github/scripts/setup-zig.sh --resolve-only
+            setup_slang: ./.github/scripts/setup-slang.sh
+            resolve_slang: ./.github/scripts/setup-slang.sh --resolve-only
+            command: zig build test -Ddemo=true -Ddemo-backend=metal
+            cache_scope: macos-metal-demo
+          - name: Vulkan / Windows
+            os: windows-2025-vs2026
+            windows: true
+            needs_slang: true
+            install_wayland: false
+            setup_zig: ./.github/scripts/setup-zig.ps1
+            resolve_zig: ./.github/scripts/setup-zig.ps1 -ResolveOnly
+            setup_slang: ./.github/scripts/setup-slang.ps1
+            resolve_slang: ./.github/scripts/setup-slang.ps1 -ResolveOnly
+            command: zig build test -Dvulkan=true
+            cache_scope: windows-vulkan
+          - name: Vulkan shader stats / Windows
+            os: windows-2025-vs2026
+            windows: true
+            needs_slang: true
+            install_wayland: false
+            setup_zig: ./.github/scripts/setup-zig.ps1
+            resolve_zig: ./.github/scripts/setup-zig.ps1 -ResolveOnly
+            setup_slang: ./.github/scripts/setup-slang.ps1
+            resolve_slang: ./.github/scripts/setup-slang.ps1 -ResolveOnly
+            command: zig build test -Dvulkan=true -Dshader-stats=true
+            cache_scope: windows-vulkan-stats
+          - name: Vulkan demo / Windows
+            os: windows-2025-vs2026
+            windows: true
+            needs_slang: true
+            install_wayland: false
+            setup_zig: ./.github/scripts/setup-zig.ps1
+            resolve_zig: ./.github/scripts/setup-zig.ps1 -ResolveOnly
+            setup_slang: ./.github/scripts/setup-slang.ps1
+            resolve_slang: ./.github/scripts/setup-slang.ps1 -ResolveOnly
+            command: zig build test -Ddemo=true -Ddemo-backend=vulkan
+            cache_scope: windows-vulkan-demo
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Prepare Windows paths
+        if: ${{ matrix.windows }}
+        id: windows
+        run: ./.github/scripts/prepare-windows-ci.ps1 -Name ${{ matrix.cache_scope }}
+
+      - name: Resolve Zig
+        id: zig
+        run: ${{ matrix.resolve_zig }}
+
+      - name: Resolve Slang
+        if: ${{ matrix.needs_slang }}
+        id: slang
+        run: ${{ matrix.resolve_slang }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Restore Zig tool cache
+        id: zig-tool-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ steps.zig.outputs.install_dir }}
+          key: zig-tool-${{ runner.os }}-${{ runner.arch }}-${{ steps.zig.outputs.target }}-${{ steps.zig.outputs.version }}
+
+      - name: Restore Slang tool cache
+        if: ${{ matrix.needs_slang }}
+        id: slang-tool-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ steps.slang.outputs.install_dir }}
+          key: slang-tool-${{ runner.os }}-${{ runner.arch }}-${{ steps.slang.outputs.platform }}-${{ steps.slang.outputs.version }}
+
+      - name: Restore Zig package cache
+        id: zig-pkg-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ steps.windows.outputs.zig_global_cache_dir || '~/.cache/zig' }}
+          key: zig-pkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-pkg-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Install Wayland demo packages
+        if: ${{ matrix.install_wayland }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libwayland-bin libwayland-dev libxkbcommon-dev wayland-protocols
+
+      - name: Setup Zig
+        run: ${{ matrix.setup_zig }}
+        env:
+          ZIG_VERSION: ${{ steps.zig.outputs.version }}
+          ZIG_DOWNLOAD_URL: ${{ steps.zig.outputs.url }}
+          ZIG_DOWNLOAD_SHA256: ${{ steps.zig.outputs.sha256 }}
+
+      - name: Setup Slang
+        if: ${{ matrix.needs_slang }}
+        run: ${{ matrix.setup_slang }}
+        env:
+          SLANG_VERSION: ${{ steps.slang.outputs.version }}
+          SLANG_DOWNLOAD_URL: ${{ steps.slang.outputs.url }}
+
+      - name: Save Zig tool cache
+        if: ${{ github.event_name != 'pull_request' && steps.zig-tool-cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ steps.zig.outputs.install_dir }}
+          key: zig-tool-${{ runner.os }}-${{ runner.arch }}-${{ steps.zig.outputs.target }}-${{ steps.zig.outputs.version }}
+
+      - name: Save Slang tool cache
+        if: ${{ github.event_name != 'pull_request' && matrix.needs_slang && steps.slang-tool-cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ steps.slang.outputs.install_dir }}
+          key: slang-tool-${{ runner.os }}-${{ runner.arch }}-${{ steps.slang.outputs.platform }}-${{ steps.slang.outputs.version }}
+
+      - name: Fetch Zig dependencies
+        if: ${{ matrix.windows }}
+        run: ./.github/scripts/fetch-zig-deps-windows.ps1 -Command "${{ matrix.command }} --fetch=needed"
+
+      - name: Run backend check
+        run: ${{ matrix.command }}
+
+      - name: Save Zig package cache
+        if: ${{ github.event_name != 'pull_request' && steps.zig-pkg-cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ steps.windows.outputs.zig_global_cache_dir || '~/.cache/zig' }}
+          key: zig-pkg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('build.zig.zon') }}

@@ -1,27 +1,25 @@
 #requires -Version 7.0
-# Fetch Zig package dependencies on Windows with retry for transient network or
-# archive-unpack failures. Keep retries scoped to dependency acquisition so
-# compile/test failures remain direct and actionable.
-#
-# Usage:
-#   fetch-zig-deps-windows.ps1 -Command "zig build test -Dvulkan=true --fetch=needed"
+# Fetch Zig package dependencies on Windows with bounded retry.
 
 param(
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
     [string] $Command,
 
+    [ValidateRange(1, 10)]
     [int] $Attempts = 4,
+
+    [ValidateRange(1, 300)]
     [int] $InitialDelaySeconds = 10
 )
 
-Set-StrictMode -Version Latest
+Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 if (Test-Path variable:PSNativeCommandUseErrorActionPreference) {
     $PSNativeCommandUseErrorActionPreference = $false
 }
 
-function Is-TransientFetchFailure([string]$Output) {
+function TestTransientFetchFailure([string] $Output) {
     $patterns = @(
         'HttpConnectionClosing',
         'unable to discover remote git server capabilities',
@@ -43,7 +41,7 @@ function Is-TransientFetchFailure([string]$Output) {
     return $false
 }
 
-function Reset-ZigFetchState {
+function ResetZigFetchState {
     $paths = @(
         $env:ZIG_GLOBAL_CACHE_DIR,
         (Join-Path $env:TEMP 'zig-cache'),
@@ -62,10 +60,6 @@ function Reset-ZigFetchState {
     }
 }
 
-if ($Attempts -lt 1) {
-    throw 'Attempts must be at least 1.'
-}
-
 $exitCode = 1
 for ($attempt = 1; $attempt -le $Attempts; $attempt += 1) {
     Write-Host "Fetching Zig dependencies, attempt ${attempt}/${Attempts}: $Command"
@@ -81,12 +75,12 @@ for ($attempt = 1; $attempt -le $Attempts; $attempt += 1) {
         exit 0
     }
 
-    if ($attempt -ge $Attempts -or -not (Is-TransientFetchFailure $text)) {
+    if ($attempt -ge $Attempts -or -not (TestTransientFetchFailure $text)) {
         Write-Host "Zig dependency fetch failed with exit code $exitCode."
         exit $exitCode
     }
 
-    Reset-ZigFetchState
+    ResetZigFetchState
 
     $delay = [Math]::Min($InitialDelaySeconds * [Math]::Pow(2, $attempt - 1), 120)
     Write-Warning "Transient Zig dependency fetch failure detected; retrying in $delay seconds."

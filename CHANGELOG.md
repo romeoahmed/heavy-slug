@@ -89,14 +89,16 @@ implementation notes belong in commits and code review history.
   graphics pipeline. `heavy_slug_vulkan.Renderer.init` no longer takes a
   swapchain color format because attachment formats are not baked into shader
   object creation.
-- **CI rewritten:** GitHub Actions now use one test matrix across Ubuntu,
-  macOS, and `windows-2025-vs2026`, add native demo build tests through
-  `-Ddemo=true`, and use dedicated PowerShell 7 setup scripts for Windows.
-- **Windows CI hardened:** Windows jobs now prepare short Zig cache/temp paths,
-  enable long paths, and prefetch Zig dependencies through a retry wrapper for
-  transient network/archive failures before running tests normally.
-- **Slang CI setup updated:** the POSIX setup script now accepts current Slang
-  `.zip` release assets and Linux glibc-suffixed asset names.
+- **CI quality gates rewritten:** GitHub Actions now separate formatting,
+  core tests, shader compilation, and backend/demo verification across Ubuntu,
+  macOS, and Windows instead of hiding all behavior in one large test matrix.
+- **CI toolchain setup tightened:** checkout credentials are not persisted,
+  Zig/Slang tool caches are exact-version caches, Zig package caches are
+  restored separately from build artifacts, and cache saves are limited to
+  non-PR runs.
+- **Windows CI hardened:** Windows jobs prepare short Zig cache/temp paths,
+  enable long paths, and prefetch Zig dependencies through a bounded retry
+  wrapper for transient network/archive failures before running tests normally.
 - **Documentation refreshed:** `README.md`, `AGENTS.md`, and `CHANGELOG.md`
   now describe the current native-demo-host architecture at a higher level and
   remove stale or overly specific platform implementation notes.

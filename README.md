@@ -344,15 +344,19 @@ Generated local outputs use the usual Zig paths: `zig-out/`, `.zig-cache/`, and
 
 ## CI
 
-GitHub Actions run formatting, core tests, backend tests, shader-stat variants,
-and demo build tests across Ubuntu, macOS, and Windows runners. Workflow
-dispatch can override Zig and Slang versions; the default Zig version is read
-from `build.zig.zon`.
+GitHub Actions are verification-only. The workflow keeps formatting, core
+library tests, shader compilation, backend tests, shader-stat variants, and
+native demo build tests as separate quality gates so failures identify the
+broken contract directly. Workflow dispatch can override Zig and Slang
+versions; normal CI reads Zig from `build.zig.zon` and pins Slang to the
+repository-supported `2026.9` release.
 
 | Job family | Coverage |
 | --- | --- |
-| Lint | Zig formatting checks. |
-| Test | Core, Vulkan, Metal, shader-stat variants, and native demo hosts. |
+| Format and Script Syntax | Zig formatting plus POSIX shell syntax checks. |
+| Core | Core library and build-tool tests on Ubuntu, macOS, and Windows. |
+| Shaders | `zig build spirv` and `zig build msl`. |
+| Backend | Vulkan, Metal, shader-stat variants, and native demo host build tests. |
 
 ## Credit
 

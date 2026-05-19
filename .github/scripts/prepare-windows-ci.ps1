@@ -1,46 +1,39 @@
 #requires -Version 7.0
-# Prepare Windows GitHub-hosted runners for Zig builds.
-#
-# Zig's package fetcher extracts source archives into its global cache. Keep
-# Windows CI paths short and enable long paths before Zig starts; do not change
-# security scanning or protocol policy here.
-#
-# Usage:
-#   prepare-windows-ci.ps1 -CacheName windows-2025-vs2026-core
+# Prepare short, deterministic Windows paths for Zig package extraction.
 
 param(
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
-    [string] $CacheName
+    [string] $Name
 )
 
-Set-StrictMode -Version Latest
+Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 if (Test-Path variable:PSNativeCommandUseErrorActionPreference) {
     $PSNativeCommandUseErrorActionPreference = $true
 }
 
-function Add-GitHubEnv([string]$Name, [string]$Value) {
-    if ($env:GITHUB_ENV) {
-        Add-Content -Path $env:GITHUB_ENV -Value "$Name=$Value"
-    }
-}
-
-function Add-GitHubOutput([string]$Name, [string]$Value) {
-    if ($env:GITHUB_OUTPUT) {
-        Add-Content -Path $env:GITHUB_OUTPUT -Value "$Name=$Value"
-    }
-}
-
-function Ensure-Directory([string]$Path) {
+function EnsureDirectory([string] $Path) {
     New-Item -ItemType Directory -Path $Path -Force | Out-Null
     return (Resolve-Path -Path $Path).Path
 }
 
-function Enable-LongPaths {
-    $path = 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem'
+function AddGitHubEnv([string] $Key, [string] $Value) {
+    if ($env:GITHUB_ENV) {
+        Add-Content -Path $env:GITHUB_ENV -Value "$Key=$Value"
+    }
+}
+
+function AddGitHubOutput([string] $Key, [string] $Value) {
+    if ($env:GITHUB_OUTPUT) {
+        Add-Content -Path $env:GITHUB_OUTPUT -Value "$Key=$Value"
+    }
+}
+
+function EnableLongPaths {
+    $registryPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem'
     New-ItemProperty `
-        -Path $path `
+        -Path $registryPath `
         -Name 'LongPathsEnabled' `
         -Value 1 `
         -PropertyType DWORD `
@@ -48,32 +41,29 @@ function Enable-LongPaths {
     git config --global core.longpaths true
 }
 
-$root = Ensure-Directory 'D:\a\_hs'
-$tools = Ensure-Directory (Join-Path $root 'tools')
-$temp = Ensure-Directory (Join-Path $root 'tmp')
-$zigGlobal = Ensure-Directory (Join-Path $root 'zg')
-$zigLocal = Ensure-Directory (Join-Path (Join-Path $root 'zl') $CacheName)
-$zigInstall = Ensure-Directory (Join-Path $tools 'zig')
-$slangInstall = Ensure-Directory (Join-Path $tools 'slang')
+$root = EnsureDirectory 'D:\a\_hs'
+$tools = EnsureDirectory (Join-Path $root 'tools')
+$temp = EnsureDirectory (Join-Path $root 'tmp')
+$zigGlobal = EnsureDirectory (Join-Path $root 'zg')
+$zigLocal = EnsureDirectory (Join-Path (Join-Path $root 'zl') $Name)
 
-Enable-LongPaths
+EnableLongPaths
 
-Add-GitHubEnv 'TMP' $temp
-Add-GitHubEnv 'TEMP' $temp
-Add-GitHubEnv 'ZIG_GLOBAL_CACHE_DIR' $zigGlobal
-Add-GitHubEnv 'ZIG_LOCAL_CACHE_DIR' $zigLocal
-Add-GitHubEnv 'ZIG_INSTALL_DIR' $zigInstall
-Add-GitHubEnv 'SLANG_INSTALL_DIR' $slangInstall
-Add-GitHubEnv 'GIT_TERMINAL_PROMPT' '0'
+AddGitHubEnv 'TMP' $temp
+AddGitHubEnv 'TEMP' $temp
+AddGitHubEnv 'HEAVY_SLUG_TOOL_DIR' $tools
+AddGitHubEnv 'ZIG_GLOBAL_CACHE_DIR' $zigGlobal
+AddGitHubEnv 'ZIG_LOCAL_CACHE_DIR' $zigLocal
+AddGitHubEnv 'GIT_TERMINAL_PROMPT' '0'
 
-Add-GitHubOutput 'root' $root
-Add-GitHubOutput 'temp_dir' $temp
-Add-GitHubOutput 'zig_global_cache_dir' $zigGlobal
-Add-GitHubOutput 'zig_local_cache_dir' $zigLocal
-Add-GitHubOutput 'zig_install_dir' $zigInstall
-Add-GitHubOutput 'slang_install_dir' $slangInstall
+AddGitHubOutput 'root' $root
+AddGitHubOutput 'tool_dir' $tools
+AddGitHubOutput 'temp_dir' $temp
+AddGitHubOutput 'zig_global_cache_dir' $zigGlobal
+AddGitHubOutput 'zig_local_cache_dir' $zigLocal
 
 Write-Host "Windows CI root: $root"
+Write-Host "Tool directory: $tools"
 Write-Host "ZIG_GLOBAL_CACHE_DIR: $zigGlobal"
 Write-Host "ZIG_LOCAL_CACHE_DIR: $zigLocal"
 Write-Host "TMP/TEMP: $temp"
