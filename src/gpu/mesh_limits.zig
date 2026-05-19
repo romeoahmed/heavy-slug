@@ -59,6 +59,11 @@ pub fn maxMeshletsForGlyphCapacity(glyph_capacity: u32) u32 {
     return glyph_capacity *| max_subdivisions_per_glyph;
 }
 
+pub fn checkedMaxMeshletsForGlyphCapacity(glyph_capacity: u32) error{FrameCapacityTooLarge}!u32 {
+    return std.math.mul(u32, glyph_capacity, max_subdivisions_per_glyph) catch
+        error.FrameCapacityTooLarge;
+}
+
 fn alignForward(value: u32, alignment: u32) u32 {
     std.debug.assert(alignment != 0);
     const remainder = value % alignment;
@@ -98,4 +103,6 @@ test "maxMeshletsForGlyphCapacity uses per-glyph subdivision cap" {
     try std.testing.expectEqual(@as(u32, 0), maxMeshletsForGlyphCapacity(0));
     try std.testing.expectEqual(@as(u32, max_subdivisions_per_glyph), maxMeshletsForGlyphCapacity(1));
     try std.testing.expectEqual(@as(u32, 64), maxMeshletsForGlyphCapacity(4));
+    try std.testing.expectEqual(@as(u32, 64), try checkedMaxMeshletsForGlyphCapacity(4));
+    try std.testing.expectError(error.FrameCapacityTooLarge, checkedMaxMeshletsForGlyphCapacity(std.math.maxInt(u32)));
 }

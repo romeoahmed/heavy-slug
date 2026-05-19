@@ -3,9 +3,11 @@
 const std = @import("std");
 const blob_format = @import("../blob/format.zig");
 const core_types = @import("../types.zig");
+const mesh_limits = @import("../../gpu/mesh_limits.zig");
 
 pub const Error = error{
     CacheCapacityTooLarge,
+    FrameCapacityTooLarge,
     InvalidRendererOptions,
 };
 
@@ -20,6 +22,7 @@ pub const RendererOptions = struct {
 
     pub fn validate(self: RendererOptions) Error!void {
         if (self.max_glyphs_per_frame == 0) return error.InvalidRendererOptions;
+        _ = try mesh_limits.checkedMaxMeshletsForGlyphCapacity(self.max_glyphs_per_frame);
         if (self.promote_frames == 0) return error.InvalidRendererOptions;
         if (self.hot_slab_count == 0 and self.cold_lru_count == 0) return error.InvalidRendererOptions;
         _ = try self.cacheCapacity();
@@ -71,6 +74,10 @@ test "RendererOptions rejects invalid capacity and alignment contracts" {
             .hot_slab_count = std.math.maxInt(u32),
             .cold_lru_count = 1,
         }).validate(),
+    );
+    try std.testing.expectError(
+        error.FrameCapacityTooLarge,
+        (RendererOptions{ .max_glyphs_per_frame = std.math.maxInt(u32) }).validate(),
     );
     try std.testing.expectError(
         error.InvalidRendererOptions,

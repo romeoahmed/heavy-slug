@@ -12,6 +12,11 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Core outline/render path refactored:** outline regularization now separates
+  cubic geometry, critical-point splitting, and quantization stability checks;
+  renderer meshlet planning now lives outside `RendererCore`, precomputes
+  viewport and dilation bounds once per glyph, and renderer options reject
+  glyph capacities whose worst-case meshlet count overflows.
 - **GPU ABI and mesh budget tightened:** `GlyphInstance` and `GlyphMeshlet`
   now carry only shader-read hot-path fields, per-meshlet records no longer
   duplicate glyph inverse matrices or CPU-only band indices, `src/gpu` now owns

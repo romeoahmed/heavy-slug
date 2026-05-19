@@ -348,6 +348,8 @@ Backend debug counters are exposed through `Renderer.stats()` in Debug builds.
 | Host boundary | Applications own graphics/device/window lifetimes. |
 | Frame math | Draw submission uses a CPU f64 affine `View`; backends no longer accept f32 projection matrices. |
 | Glyph resources | Cached glyph blobs live in a backend-owned, storage-aligned byte pool; visible strips live in per-frame meshlet buffers. |
+| Outline regularization | Cubic geometry, critical-point splitting, and quantization stability checks are separate from HarfBuzz capture. |
+| Meshlet planning | Host culling, viewport back-projection, h-band strip bounds, and meshlet ABI writes are isolated in core render planning code. |
 | Blob ABI | `CoverageBlob` v3 is an explicit 32-bit word stream, not a serialized Zig struct; CPU decode validates the header, curve table, and CSR h-band candidate index before upload. |
 | Blob precision | Glyph blobs are 32-bit fixed-point and keyed by precision tier. Unsupported precision tiers are rejected before outline regularization. |
 | Blob references | `GlyphBlobRef` values are byte offsets. |
@@ -356,7 +358,8 @@ Backend debug counters are exposed through `Renderer.stats()` in Debug builds.
 
 `RendererCore` is the shared spine behind both backends: it loads fonts, shapes
 runs, encodes missing glyphs, maintains cache metadata, writes backend-specific
-glyph instances, and coordinates deferred resource retirement.
+glyph instances, delegates meshlet planning to the shared core render planner,
+and coordinates deferred resource retirement.
 
 ## Dependency Summary
 

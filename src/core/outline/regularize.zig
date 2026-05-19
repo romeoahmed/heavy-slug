@@ -1,8 +1,9 @@
 //! Normalize native outline segments into quantization-stable cubic spans.
 
 const std = @import("std");
-const stream = @import("stream.zig");
 const blob_format = @import("../blob/format.zig");
+const geometry = @import("geometry.zig");
+const stream = @import("stream.zig");
 
 pub const Error = error{
     GlyphTooLarge,
@@ -11,64 +12,16 @@ pub const Error = error{
 };
 
 pub const Point = stream.Point;
-const Vec2 = @Vector(2, f64);
-const Vec4 = @Vector(4, f64);
-
-pub const RegularizedCubicSpan = struct {
-    p0: Point,
-    p1: Point,
-    p2: Point,
-    p3: Point,
-
-    pub fn minX(self: RegularizedCubicSpan) f64 {
-        return @reduce(.Min, self.xValues());
-    }
-
-    pub fn maxX(self: RegularizedCubicSpan) f64 {
-        return @reduce(.Max, self.xValues());
-    }
-
-    pub fn minY(self: RegularizedCubicSpan) f64 {
-        return @reduce(.Min, self.yValues());
-    }
-
-    pub fn maxY(self: RegularizedCubicSpan) f64 {
-        return @reduce(.Max, self.yValues());
-    }
-
-    fn xValues(self: RegularizedCubicSpan) Vec4 {
-        return .{ self.p0.x, self.p1.x, self.p2.x, self.p3.x };
-    }
-
-    fn yValues(self: RegularizedCubicSpan) Vec4 {
-        return .{ self.p0.y, self.p1.y, self.p2.y, self.p3.y };
-    }
-};
+pub const RegularizedCubicSpan = geometry.Cubic;
 
 const max_cubic_prepare_depth = 8;
 
 pub fn lineAsCubic(p0: Point, p1: Point) RegularizedCubicSpan {
-    return .{
-        .p0 = p0,
-        .p1 = lerpPoint(p0, p1, 1.0 / 3.0),
-        .p2 = lerpPoint(p0, p1, 2.0 / 3.0),
-        .p3 = p1,
-    };
+    return geometry.lineAsCubic(p0, p1);
 }
 
 pub fn quadAsCubic(p0: Point, control: Point, p1: Point) RegularizedCubicSpan {
-    return .{
-        .p0 = p0,
-        .p1 = .{
-            .x = p0.x + (2.0 / 3.0) * (control.x - p0.x),
-            .y = p0.y + (2.0 / 3.0) * (control.y - p0.y),
-        },
-        .p2 = .{
-            .x = p1.x + (2.0 / 3.0) * (control.x - p1.x),
-            .y = p1.y + (2.0 / 3.0) * (control.y - p1.y),
-        },
-        .p3 = p1,
-    };
+    return geometry.quadAsCubic(p0, control, p1);
 }
 
 /// Split lines, quadratics, and cubics into spans suitable for blob encoding.
@@ -80,163 +33,128 @@ pub fn appendRegularized(
 ) Error!void {
     try blob_format.validateFractionBits(fraction_bits);
 
-    var current = Point{ .x = 0, .y = 0 };
-    var start = current;
-    var open = false;
-
+    var builder = Regularizer{
+        .out = out,
+        .allocator = allocator,
+        .fraction_bits = fraction_bits,
+    };
     for (outline) |segment| {
+        try builder.append(segment);
+    }
+    try builder.finish();
+}
+
+const Regularizer = struct {
+    out: *std.ArrayList(RegularizedCubicSpan),
+    allocator: std.mem.Allocator,
+    fraction_bits: u8,
+    current: Point = .{ .x = 0, .y = 0 },
+    start: Point = .{ .x = 0, .y = 0 },
+    open: bool = false,
+
+    fn append(self: *Regularizer, segment: stream.Segment) Error!void {
         switch (segment) {
-            .move_to => |p| {
-                if (open and !samePoint(current, start)) {
-                    try appendPrepared(out, allocator, lineAsCubic(current, start), 0, fraction_bits);
-                }
-                current = p;
-                start = p;
-                open = true;
-            },
-            .line_to => |p| {
-                if (!open) {
-                    start = current;
-                    open = true;
-                }
-                if (!samePoint(current, p)) try appendPrepared(out, allocator, lineAsCubic(current, p), 0, fraction_bits);
-                current = p;
-            },
-            .quad_to => |q| {
-                if (!open) {
-                    start = current;
-                    open = true;
-                }
-                if (!samePoint(current, q.to)) try appendSplitCubic(out, allocator, quadAsCubic(current, q.control, q.to), fraction_bits);
-                current = q.to;
-            },
-            .cubic_to => |c| {
-                if (!open) {
-                    start = current;
-                    open = true;
-                }
-                if (!samePoint(current, c.to) or !samePoint(c.control1, c.to) or !samePoint(c.control2, c.to)) {
-                    try appendSplitCubic(out, allocator, .{ .p0 = current, .p1 = c.control1, .p2 = c.control2, .p3 = c.to }, fraction_bits);
-                }
-                current = c.to;
-            },
-            .close => {
-                if (open and !samePoint(current, start)) {
-                    try appendPrepared(out, allocator, lineAsCubic(current, start), 0, fraction_bits);
-                }
-                open = false;
-            },
+            .move_to => |p| try self.moveTo(p),
+            .line_to => |p| try self.lineTo(p),
+            .quad_to => |q| try self.quadTo(q.control, q.to),
+            .cubic_to => |c| try self.cubicTo(c.control1, c.control2, c.to),
+            .close => try self.close(),
         }
     }
 
-    if (open and !samePoint(current, start)) {
-        try appendPrepared(out, allocator, lineAsCubic(current, start), 0, fraction_bits);
-    }
-}
-
-fn appendSplitCubic(
-    out: *std.ArrayList(RegularizedCubicSpan),
-    allocator: std.mem.Allocator,
-    source: RegularizedCubicSpan,
-    fraction_bits: u8,
-) Error!void {
-    var roots: [8]f64 = undefined;
-    var root_count: usize = 0;
-    appendDerivativeRoots(&roots, &root_count, source.p0.x, source.p1.x, source.p2.x, source.p3.x);
-    appendDerivativeRoots(&roots, &root_count, source.p0.y, source.p1.y, source.p2.y, source.p3.y);
-    appendInflectionRoots(&roots, &root_count, source.p0, source.p1, source.p2, source.p3);
-    std.mem.sort(f64, roots[0..root_count], {}, lessThan);
-
-    var curve = source;
-    var previous_t: f64 = 0.0;
-    for (roots[0..root_count]) |t| {
-        if (t <= previous_t or t >= 1.0) continue;
-        const local_t = (t - previous_t) / (1.0 - previous_t);
-        const split = splitCubic(curve, local_t);
-        try appendPrepared(out, allocator, split.left, 0, fraction_bits);
-        curve = split.right;
-        previous_t = t;
-    }
-    try appendPrepared(out, allocator, curve, 0, fraction_bits);
-}
-
-fn appendPrepared(
-    out: *std.ArrayList(RegularizedCubicSpan),
-    allocator: std.mem.Allocator,
-    curve: RegularizedCubicSpan,
-    depth: u8,
-    fraction_bits: u8,
-) Error!void {
-    if (depth >= max_cubic_prepare_depth or cubicControlPolygonMonotoneAfterQuantize(curve, fraction_bits)) {
-        try out.append(allocator, curve);
-        return;
+    fn moveTo(self: *Regularizer, p: Point) Error!void {
+        try validatePoint(p);
+        try self.close();
+        self.current = p;
+        self.start = p;
+        self.open = true;
     }
 
-    const split = splitCubic(curve, 0.5);
-    try appendPrepared(out, allocator, split.left, depth + 1, fraction_bits);
-    try appendPrepared(out, allocator, split.right, depth + 1, fraction_bits);
-}
-
-fn splitCubic(curve: RegularizedCubicSpan, t: f64) struct { left: RegularizedCubicSpan, right: RegularizedCubicSpan } {
-    const p01 = lerpPoint(curve.p0, curve.p1, t);
-    const p12 = lerpPoint(curve.p1, curve.p2, t);
-    const p23 = lerpPoint(curve.p2, curve.p3, t);
-    const p012 = lerpPoint(p01, p12, t);
-    const p123 = lerpPoint(p12, p23, t);
-    const p0123 = lerpPoint(p012, p123, t);
-    return .{
-        .left = .{ .p0 = curve.p0, .p1 = p01, .p2 = p012, .p3 = p0123 },
-        .right = .{ .p0 = p0123, .p1 = p123, .p2 = p23, .p3 = curve.p3 },
-    };
-}
-
-fn appendDerivativeRoots(roots: *[8]f64, count: *usize, p0: f64, p1: f64, p2: f64, p3: f64) void {
-    const a = -p0 + 3.0 * p1 - 3.0 * p2 + p3;
-    const b = 2.0 * (p0 - 2.0 * p1 + p2);
-    const c = p1 - p0;
-    appendQuadraticRoots01(roots, count, 3.0 * a, 3.0 * b, 3.0 * c);
-}
-
-fn appendInflectionRoots(roots: *[8]f64, count: *usize, p0: Point, p1: Point, p2: Point, p3: Point) void {
-    const ax = -p0.x + 3.0 * p1.x - 3.0 * p2.x + p3.x;
-    const ay = -p0.y + 3.0 * p1.y - 3.0 * p2.y + p3.y;
-    const bx = 3.0 * p0.x - 6.0 * p1.x + 3.0 * p2.x;
-    const by = 3.0 * p0.y - 6.0 * p1.y + 3.0 * p2.y;
-    const cx = -3.0 * p0.x + 3.0 * p1.x;
-    const cy = -3.0 * p0.y + 3.0 * p1.y;
-
-    appendQuadraticRoots01(
-        roots,
-        count,
-        -6.0 * cross(.{ .x = ax, .y = ay }, .{ .x = bx, .y = by }),
-        6.0 * cross(.{ .x = cx, .y = cy }, .{ .x = ax, .y = ay }),
-        2.0 * cross(.{ .x = cx, .y = cy }, .{ .x = bx, .y = by }),
-    );
-}
-
-fn appendQuadraticRoots01(roots: *[8]f64, count: *usize, a: f64, b: f64, c: f64) void {
-    const eps = 1.0e-9;
-    if (@abs(a) <= eps) {
-        if (@abs(b) > eps) appendRoot01(roots, count, -c / b);
-        return;
+    fn lineTo(self: *Regularizer, p: Point) Error!void {
+        try validatePoint(p);
+        self.ensureOpen();
+        if (!geometry.samePoint(self.current, p)) {
+            try self.appendPrepared(geometry.lineAsCubic(self.current, p), 0);
+        }
+        self.current = p;
     }
 
-    const disc = b * b - 4.0 * a * c;
-    if (disc < 0.0) return;
-    const d = @sqrt(@max(disc, 0.0));
-    appendRoot01(roots, count, (-b - d) / (2.0 * a));
-    appendRoot01(roots, count, (-b + d) / (2.0 * a));
-}
+    fn quadTo(self: *Regularizer, control: Point, p: Point) Error!void {
+        try validatePoint(control);
+        try validatePoint(p);
+        self.ensureOpen();
+        if (!geometry.samePoint(self.current, p)) {
+            try self.appendSplitCubic(geometry.quadAsCubic(self.current, control, p));
+        }
+        self.current = p;
+    }
 
-fn appendRoot01(roots: *[8]f64, count: *usize, t: f64) void {
-    if (t <= 1.0e-6 or t >= 1.0 - 1.0e-6) return;
-    for (roots[0..count.*]) |existing| {
-        if (@abs(existing - t) < 1.0e-5) return;
+    fn cubicTo(self: *Regularizer, c1: Point, c2: Point, p: Point) Error!void {
+        try validatePoint(c1);
+        try validatePoint(c2);
+        try validatePoint(p);
+        self.ensureOpen();
+        if (!geometry.samePoint(self.current, p) or
+            !geometry.samePoint(c1, p) or
+            !geometry.samePoint(c2, p))
+        {
+            try self.appendSplitCubic(.{ .p0 = self.current, .p1 = c1, .p2 = c2, .p3 = p });
+        }
+        self.current = p;
     }
-    if (count.* < roots.len) {
-        roots[count.*] = t;
-        count.* += 1;
+
+    fn close(self: *Regularizer) Error!void {
+        if (self.open and !geometry.samePoint(self.current, self.start)) {
+            try self.appendPrepared(geometry.lineAsCubic(self.current, self.start), 0);
+        }
+        self.open = false;
     }
+
+    fn finish(self: *Regularizer) Error!void {
+        try self.close();
+    }
+
+    fn ensureOpen(self: *Regularizer) void {
+        if (!self.open) {
+            self.start = self.current;
+            self.open = true;
+        }
+    }
+
+    fn appendSplitCubic(self: *Regularizer, source: RegularizedCubicSpan) Error!void {
+        if (!source.isFinite()) return error.GlyphTooLarge;
+
+        var roots = geometry.RootList{};
+        roots.appendCubicCriticalPoints(source);
+
+        var curve = source;
+        var previous_t: f64 = 0.0;
+        for (roots.sorted()) |t| {
+            if (t <= previous_t or t >= 1.0) continue;
+            const local_t = (t - previous_t) / (1.0 - previous_t);
+            const split = geometry.splitCubic(curve, local_t);
+            try self.appendPrepared(split.left, 0);
+            curve = split.right;
+            previous_t = t;
+        }
+        try self.appendPrepared(curve, 0);
+    }
+
+    fn appendPrepared(self: *Regularizer, curve: RegularizedCubicSpan, depth: u8) Error!void {
+        if (!curve.isFinite()) return error.GlyphTooLarge;
+        if (depth >= max_cubic_prepare_depth or cubicControlPolygonMonotoneAfterQuantize(curve, self.fraction_bits)) {
+            try self.out.append(self.allocator, curve);
+            return;
+        }
+
+        const split = geometry.splitCubic(curve, 0.5);
+        try self.appendPrepared(split.left, depth + 1);
+        try self.appendPrepared(split.right, depth + 1);
+    }
+};
+
+fn validatePoint(p: Point) Error!void {
+    if (!geometry.pointIsFinite(p)) return error.GlyphTooLarge;
 }
 
 fn cubicControlPolygonMonotoneAfterQuantize(curve: RegularizedCubicSpan, fraction_bits: u8) bool {
@@ -267,36 +185,9 @@ fn monotone4(v: [4]i32) bool {
         (v[0] >= v[1] and v[1] >= v[2] and v[2] >= v[3]);
 }
 
-fn samePoint(a: Point, b: Point) bool {
-    return a.x == b.x and a.y == b.y;
-}
-
-fn lerpPoint(a: Point, b: Point, t: f64) Point {
-    const av = pointVec(a);
-    return pointFromVec(av + (pointVec(b) - av) * @as(Vec2, @splat(t)));
-}
-
-fn pointVec(p: Point) Vec2 {
-    return .{ p.x, p.y };
-}
-
-fn pointFromVec(v: Vec2) Point {
-    return .{ .x = v[0], .y = v[1] };
-}
-
-fn cross(a: Point, b: Point) f64 {
-    return a.x * b.y - a.y * b.x;
-}
-
-fn lessThan(_: void, a: f64, b: f64) bool {
-    return a < b;
-}
-
 fn hasInteriorAxisExtremum(p0: f64, p1: f64, p2: f64, p3: f64) bool {
-    var roots: [8]f64 = undefined;
-    var count: usize = 0;
-    appendDerivativeRoots(&roots, &count, p0, p1, p2, p3);
-    return count > 0;
+    var roots = geometry.RootList{};
+    return roots.hasInteriorDerivativeRoot(p0, p1, p2, p3);
 }
 
 test "regularize raises lines and quadratics into cubic spans" {
@@ -326,6 +217,20 @@ test "regularize rejects unsupported blob precision before quantization" {
     try std.testing.expectError(
         error.PrecisionUnsupported,
         appendRegularized(&spans, std.testing.allocator, outline.segments.items, blob_format.max_fraction_bits + 1),
+    );
+}
+
+test "regularize rejects non-finite outline coordinates before subdivision" {
+    const outline = [_]stream.Segment{
+        .{ .move_to = .{ .x = 0, .y = 0 } },
+        .{ .line_to = .{ .x = std.math.inf(f64), .y = 1 } },
+    };
+
+    var spans: std.ArrayList(RegularizedCubicSpan) = .empty;
+    defer spans.deinit(std.testing.allocator);
+    try std.testing.expectError(
+        error.GlyphTooLarge,
+        appendRegularized(&spans, std.testing.allocator, &outline, blob_format.default_fraction_bits),
     );
 }
 

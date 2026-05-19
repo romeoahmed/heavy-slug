@@ -3,6 +3,7 @@
 pub const backend_contract = @import("backend_contract.zig");
 pub const glyph_store = @import("glyph_store.zig");
 pub const frame_batch = @import("frame_batch.zig");
+pub const mesh_plan = @import("mesh_plan.zig");
 pub const options = @import("options.zig");
 
 pub const renderer_core = @import("renderer_core.zig");
@@ -22,5 +23,6 @@ test {
     _ = backend_contract;
     _ = glyph_store;
     _ = frame_batch;
+    _ = mesh_plan;
     _ = renderer_core;
 }
