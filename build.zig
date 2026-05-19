@@ -111,6 +111,12 @@ fn addBuildHelperTests(b: *std.Build, test_step: *std.Build.Step) void {
         .target = b.graph.host,
     });
     addModuleTest(b, test_step, "build_deps", deps_mod);
+
+    const swift_mod = b.createModule(.{
+        .root_source_file = b.path("build/swift.zig"),
+        .target = b.graph.host,
+    });
+    addModuleTest(b, test_step, "build_swift", swift_mod);
 }
 
 fn addToolTests(b: *std.Build, test_step: *std.Build.Step) void {

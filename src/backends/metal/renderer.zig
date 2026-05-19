@@ -18,7 +18,7 @@ pub const GlyphInstance = AbiGlyphInstance;
 pub const GlyphMeshlet = AbiGlyphMeshlet;
 pub const FrameParams = gpu_structs.FrameParams;
 
-const frames_in_flight = 3;
+const frames_in_flight = metal.frame_slot_count;
 
 pub const Context = metal.Context;
 pub const Host = metal.Host;
@@ -90,11 +90,10 @@ pub const Target = struct {
 
 const FrameBatch = heavy_slug.core.render.FrameBatch(GlyphInstance, GlyphMeshlet);
 const ShaderStatsBuffer = if (backend_options.shader_stats) metal.Buffer else void;
-const metal_mesh_threadgroups_per_draw: u32 = 1024;
 
 fn drawChunkCount(meshlet_count: u32) u32 {
-    return (meshlet_count / metal_mesh_threadgroups_per_draw) +
-        @intFromBool(meshlet_count % metal_mesh_threadgroups_per_draw != 0);
+    return (meshlet_count / metal.max_mesh_threadgroups_per_draw) +
+        @intFromBool(meshlet_count % metal.max_mesh_threadgroups_per_draw != 0);
 }
 
 fn frameParamChunkCount(max_glyphs_per_frame: u32) u32 {
@@ -122,17 +121,17 @@ fn viewSizeU32(view: core_types.View) ?[2]u32 {
     {
         return null;
     }
-    return .{
-        @intFromFloat(@round(view.width)),
-        @intFromFloat(@round(view.height)),
-    };
+    const width: u32 = @intFromFloat(@round(view.width));
+    const height: u32 = @intFromFloat(@round(view.height));
+    if (width == 0 or height == 0) return null;
+    return .{ width, height };
 }
 
 fn writeFrameParams(buffer: metal.Buffer, view_size: [2]u32, meshlet_count: u32) void {
     var meshlet_base: u32 = 0;
     var chunk_index: usize = 0;
     while (meshlet_base < meshlet_count) : (chunk_index += 1) {
-        const chunk_count = @min(meshlet_count - meshlet_base, metal_mesh_threadgroups_per_draw);
+        const chunk_count = @min(meshlet_count - meshlet_base, metal.max_mesh_threadgroups_per_draw);
         const params = FrameParams{
             .viewport_size = .{ @floatFromInt(view_size[0]), @floatFromInt(view_size[1]) },
             .screen_from_framebuffer_2x2 = .{ 1, 0, 0, -1 },
@@ -205,7 +204,7 @@ pub const Renderer = struct {
     core: render.RendererCore,
     pool_buffer: metal.Buffer,
     frame_slots: [frames_in_flight]FrameSlot,
-    active_frame: u32,
+    active_frame: usize,
     frame_reserved: bool,
     slot_tokens: [frames_in_flight]render.FrameToken,
     last_submitted_frame: render.FrameToken,
@@ -286,16 +285,16 @@ pub const Renderer = struct {
 
     fn reserveFrameSlot(self: *Renderer) Error!void {
         if (self.frame_reserved) {
-            metal.releaseFrameSlot(self.context, self.active_frame);
+            metal.releaseFrameSlot(self.context, @intCast(self.active_frame));
             self.frame_reserved = false;
         }
 
         self.active_frame = (self.active_frame + 1) % frames_in_flight;
         self.debug_stats.reset();
-        var error_buf: [2048]u8 = undefined;
+        var error_buf: [metal.diagnostic_capacity]u8 = undefined;
         @memset(&error_buf, 0);
         const wait_start = monotonicNs();
-        metal.waitFrameSlot(self.context, self.active_frame, &error_buf) catch {
+        metal.waitFrameSlot(self.context, @intCast(self.active_frame), &error_buf) catch {
             std.log.err("Metal frame slot wait failed: {s}", .{std.mem.sliceTo(&error_buf, 0)});
             return Error.DrawFailed;
         };
@@ -355,7 +354,7 @@ pub const Renderer = struct {
     fn submitFrame(self: *Renderer, target: Target, view: core_types.View, glyph_count: u32, meshlet_count: u32) Error!render.FrameToken {
         if (glyph_count == 0 or meshlet_count == 0) {
             if (self.frame_reserved) {
-                metal.releaseFrameSlot(self.context, self.active_frame);
+                metal.releaseFrameSlot(self.context, @intCast(self.active_frame));
                 self.frame_reserved = false;
             }
             return self.last_submitted_frame;
@@ -376,7 +375,7 @@ pub const Renderer = struct {
         writeFrameParams(frame_slot.frame_params, view_size, meshlet_count);
 
         const workgroup_count = meshlet_count;
-        var error_buf: [2048]u8 = undefined;
+        var error_buf: [metal.diagnostic_capacity]u8 = undefined;
         @memset(&error_buf, 0);
         metal.draw(self.context, .{
             .viewport = view_size,
@@ -388,10 +387,10 @@ pub const Renderer = struct {
             .glyph_pool = self.pool_buffer,
             .shader_stats = shader_stats_buffer,
             .workgroup_count = workgroup_count,
-            .slot_index = self.active_frame,
+            .slot_index = @intCast(self.active_frame),
         }, &error_buf) catch {
             std.log.err("Metal draw failed: {s}", .{std.mem.sliceTo(&error_buf, 0)});
-            metal.releaseFrameSlot(self.context, self.active_frame);
+            metal.releaseFrameSlot(self.context, @intCast(self.active_frame));
             self.frame_reserved = false;
             return Error.DrawFailed;
         };
@@ -410,7 +409,7 @@ pub const Renderer = struct {
 
     pub fn deinit(self: *Renderer) void {
         if (self.frame_reserved) {
-            metal.releaseFrameSlot(self.context, self.active_frame);
+            metal.releaseFrameSlot(self.context, @intCast(self.active_frame));
             self.frame_reserved = false;
         }
         metal.waitSubmitted(self.context);
@@ -437,10 +436,16 @@ test "Metal renderer public API compiles" {
 test "Metal frame params are chunked by mesh threadgroup draw limit" {
     try std.testing.expectEqual(@as(u32, 0), drawChunkCount(0));
     try std.testing.expectEqual(@as(u32, 1), drawChunkCount(1));
-    try std.testing.expectEqual(@as(u32, 2), drawChunkCount(metal_mesh_threadgroups_per_draw + 1));
+    try std.testing.expectEqual(@as(u32, 2), drawChunkCount(metal.max_mesh_threadgroups_per_draw + 1));
     try std.testing.expectEqual(@as(u32, 0), frameParamChunkCount(0));
     try std.testing.expectEqual(@as(u32, 1), frameParamChunkCount(1));
-    try std.testing.expectEqual(@as(u32, 2), frameParamChunkCount((metal_mesh_threadgroups_per_draw / mesh_limits.max_subdivisions_per_glyph) + 1));
+    try std.testing.expectEqual(@as(u32, 2), frameParamChunkCount((metal.max_mesh_threadgroups_per_draw / mesh_limits.max_subdivisions_per_glyph) + 1));
+}
+
+test "Metal view size conversion rejects zero rounded extents" {
+    try std.testing.expect(viewSizeU32(core_types.View.identity(1, 1)) != null);
+    try std.testing.expect(viewSizeU32(core_types.View.identity(0.25, 1)) == null);
+    try std.testing.expect(viewSizeU32(core_types.View.identity(1, 0.25)) == null);
 }
 
 test "Metal bridge resource indices match generated Slang MSL" {
@@ -488,5 +493,5 @@ test "Metal bridge geometry limits match shared mesh ABI" {
     const limits = metal.geometryLimits();
     try std.testing.expectEqual(@as(u32, 0), limits.object_threadgroup_size);
     try std.testing.expectEqual(mesh_limits.mesh_thread_count, limits.mesh_threadgroup_size);
-    try std.testing.expectEqual(metal_mesh_threadgroups_per_draw, limits.max_mesh_threadgroups_per_draw);
+    try std.testing.expectEqual(metal.max_mesh_threadgroups_per_draw, limits.max_mesh_threadgroups_per_draw);
 }

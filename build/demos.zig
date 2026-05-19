@@ -3,7 +3,7 @@
 const std = @import("std");
 const backends = @import("backends.zig");
 const deps = @import("deps.zig");
-const objcxx = @import("objcxx.zig");
+const swift = @import("swift.zig");
 
 const WaylandProtocol = struct {
     xml: []const u8,
@@ -90,6 +90,10 @@ pub fn buildMetal(
     backend: backends.MetalBackend,
     thin_lto: bool,
 ) ?*std.Build.Step.Compile {
+    if (target.result.os.tag != .macos) {
+        @panic("the Swift Metal demo host requires a macOS target");
+    }
+
     const exe = b.addExecutable(.{
         .name = "heavy_slug_demo",
         .root_module = b.createModule(.{
@@ -116,17 +120,13 @@ pub fn buildMetal(
 
     exe.root_module.addImport("demo_scene", demo_scene);
     exe.root_module.addImport("demo_platform", demo_platform);
-    exe.root_module.addIncludePath(b.path("demo/platform"));
-    exe.root_module.link_libcpp = true;
-    exe.root_module.linkFramework("Cocoa", .{});
-    exe.root_module.linkFramework("QuartzCore", .{});
-    exe.root_module.linkFramework("Metal", .{});
-    exe.root_module.linkFramework("Foundation", .{});
-    exe.root_module.addCSourceFiles(.{
-        .root = b.path("demo/platform"),
-        .files = &.{"cocoa.mm"},
-        .flags = objcxx.flags(b, optimize, &.{}),
-    });
+    exe.root_module.addObjectFile(swift.addObject(b, .{
+        .name = "HeavySlugDemoCocoa",
+        .source = b.path("demo/platform/cocoa.swift"),
+        .target = target,
+        .optimize = optimize,
+    }));
+    swift.linkRuntime(b, exe.root_module, .{ .optimize = optimize, .swiftui = true });
 
     deps.enableThinLtoAll(thin_lto, &.{exe});
     return exe;

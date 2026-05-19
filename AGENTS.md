@@ -26,7 +26,7 @@ window-toolkit object.
   model notes, and shader stats types.
 - `src/backends/vulkan/` provides the opt-in `heavy_slug_vulkan` module.
 - `src/backends/metal/` provides the opt-in `heavy_slug_metal` module and the
-  Objective-C++ bridge.
+  Swift bridge.
 - `demo/common/` contains demo-only scene and input helpers.
 - `demo/vulkan/` and `demo/metal/` contain demo entry points.
 - `demo/platform/` contains native Win32, Wayland, and Cocoa hosts.
@@ -100,13 +100,15 @@ dynamically loaded. Preserve per-monitor DPI handling and native system command
 behavior. Do not switch the low-level Vulkan surface demo to WinRT or Windows
 App SDK without a documented architecture decision.
 
-Metal builds are macOS-only and need an Apple SDK exposing Metal 4 APIs,
-Objective-C++ C++23 compilation support, and the `Metal`, `QuartzCore`, and
-`Foundation` frameworks. The Metal demo uses a direct Cocoa host, normal Cocoa
-menu/close/quit handling, native window chrome, and a `CAMetalLayer`.
-Keep Objective-C++ sources on the shared `build/objcxx.zig` compiler policy:
-ARC on, exceptions and RTTI off, warnings as errors, and optimize-mode-specific
-`-O0`/`-O3`/`-Os` flags.
+Metal builds are macOS-only and need a macOS 26.0 or newer deployment target,
+Swift `6.3`, `swiftc`, an Apple SDK exposing Metal 4 APIs, and the `Metal`,
+`QuartzCore`, and `Foundation` frameworks. The Metal demo uses a
+SwiftUI/AppKit host, normal Cocoa menu/close/quit handling, native window
+chrome, and a `CAMetalLayer`.
+Keep Swift bridge sources on the shared `build/swift.zig` compiler policy:
+`-swift-version 6`, explicit Apple Swift target triples derived from the Zig
+target, Zig-cache module caches, and optimize-mode-specific flags (`-Onone`,
+`-O`, or `-Osize`).
 
 Do not add GLFW, SDL, or a similar window toolkit unless a documented
 architecture decision reverses the native-demo-host model.

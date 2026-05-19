@@ -2,11 +2,12 @@
 
 const std = @import("std");
 const msl_shaders = @import("msl_shaders");
+const backend_options = @import("heavy_slug_backend_options");
 
 const ContextHandle = opaque {};
 const BufferHandle = opaque {};
 
-const diagnostic_capacity = 2048;
+pub const diagnostic_capacity = 2048;
 
 const Status = enum(c_int) {
     ok = 0,
@@ -15,23 +16,7 @@ const Status = enum(c_int) {
 
 const U8 = u8;
 
-const U8View = extern struct {
-    data: ?[*]const U8,
-    size: usize,
-};
-
-const U8Buffer = extern struct {
-    data: ?[*]U8,
-    size: usize,
-};
-
-const HostAbi = extern struct {
-    device: ?*anyopaque,
-    command_queue: ?*anyopaque,
-    layer: ?*anyopaque,
-};
-
-pub const ResourceIndices = extern struct {
+pub const ResourceIndices = struct {
     glyph_pool: u32,
     glyphs: u32,
     meshlets: u32,
@@ -39,32 +24,40 @@ pub const ResourceIndices = extern struct {
     shader_stats: u32,
 };
 
-pub const GeometryLimits = extern struct {
+pub const GeometryLimits = struct {
     object_threadgroup_size: u32,
     mesh_threadgroup_size: u32,
     max_mesh_threadgroups_per_draw: u32,
 };
 
-const buffer_glyph_pool: u32 = 0;
-const buffer_glyphs: u32 = 1;
-const buffer_meshlets: u32 = 2;
-const buffer_shader_stats: u32 = 3;
-const object_threadgroup_size: u32 = 0;
-const mesh_threadgroup_size: u32 = 32;
-const max_mesh_threadgroups_per_draw: u32 = 1024;
+pub const frame_slot_count: usize = 3;
+pub const buffer_glyph_pool: u32 = 0;
+pub const buffer_glyphs: u32 = 1;
+pub const buffer_meshlets: u32 = 2;
+pub const buffer_shader_stats: u32 = 3;
+pub const buffer_frame_params: u32 = if (backend_options.shader_stats) 4 else 3;
+pub const object_threadgroup_size: u32 = 0;
+pub const mesh_threadgroup_size: u32 = 32;
+pub const max_mesh_threadgroups_per_draw: u32 = 1024;
 
 extern fn hs_metal_context_create(
     out_context: *?*ContextHandle,
-    host: HostAbi,
-    mesh_source: U8View,
-    fragment_source: U8View,
-    error_buffer: U8Buffer,
+    device: ?*anyopaque,
+    command_queue: ?*anyopaque,
+    layer: ?*anyopaque,
+    mesh_source_data: ?[*]const U8,
+    mesh_source_size: usize,
+    fragment_source_data: ?[*]const U8,
+    fragment_source_size: usize,
+    error_data: ?[*]U8,
+    error_size: usize,
 ) Status;
 extern fn hs_metal_context_destroy(context: ?*ContextHandle) void;
 extern fn hs_metal_context_wait_frame_slot(
     context: ?*ContextHandle,
     slot_index: u32,
-    error_buffer: U8Buffer,
+    error_data: ?[*]U8,
+    error_size: usize,
 ) Status;
 extern fn hs_metal_context_release_frame_slot(context: ?*ContextHandle, slot_index: u32) void;
 extern fn hs_metal_context_wait_submitted(context: ?*ContextHandle) void;
@@ -72,7 +65,8 @@ extern fn hs_metal_buffer_create(
     out_buffer: *?*BufferHandle,
     context: ?*ContextHandle,
     size: usize,
-    error_buffer: U8Buffer,
+    error_data: ?[*]U8,
+    error_size: usize,
 ) Status;
 extern fn hs_metal_buffer_destroy(buffer: ?*BufferHandle) void;
 extern fn hs_metal_buffer_contents(buffer: ?*BufferHandle) ?*anyopaque;
@@ -92,26 +86,17 @@ extern fn hs_metal_context_draw(
     shader_stats: ?*BufferHandle,
     workgroup_count: u32,
     slot_index: u32,
-    error_buffer: U8Buffer,
+    error_data: ?[*]U8,
+    error_size: usize,
 ) Status;
-extern fn hs_metal_get_resource_indices() ResourceIndices;
-extern fn hs_metal_get_geometry_limits() GeometryLimits;
 
 pub const Host = struct {
-    /// Borrowed id<MTLDevice>; retained by Context during init.
+    /// Borrowed id<MTLDevice>; Swift Context retains it for the context lifetime.
     device: *anyopaque,
-    /// Borrowed id<MTL4CommandQueue>; retained by Context and must belong to device.
+    /// Borrowed id<MTL4CommandQueue>; Swift Context retains it and it must belong to device.
     command_queue: *anyopaque,
-    /// Borrowed CAMetalLayer with device, pixelFormat, and Metal 4 residencySet configured.
+    /// Borrowed CAMetalLayer retained by Swift Context with device, pixelFormat, and residencySet configured.
     layer: *anyopaque,
-
-    fn cValue(self: Host) HostAbi {
-        return .{
-            .device = self.device,
-            .command_queue = self.command_queue,
-            .layer = self.layer,
-        };
-    }
 };
 
 pub const Error = error{
@@ -120,16 +105,16 @@ pub const Error = error{
     DrawFailed,
 };
 
-fn u8View(bytes: []const u8) U8View {
-    return .{ .data = bytes.ptr, .size = bytes.len };
-}
-
-fn u8Buffer(bytes: []u8) U8Buffer {
-    return .{ .data = bytes.ptr, .size = bytes.len };
-}
-
 fn emptyDiagnostic() [diagnostic_capacity]u8 {
     return .{0} ** diagnostic_capacity;
+}
+
+fn dataPtr(bytes: []const u8) ?[*]const U8 {
+    return if (bytes.len == 0) null else bytes.ptr;
+}
+
+fn bufferPtr(bytes: []u8) ?[*]U8 {
+    return if (bytes.len == 0) null else bytes.ptr;
 }
 
 pub const Context = struct {
@@ -140,10 +125,15 @@ pub const Context = struct {
         var handle: ?*ContextHandle = null;
         if (hs_metal_context_create(
             &handle,
-            host.cValue(),
-            u8View(msl_shaders.mesh),
-            u8View(msl_shaders.fragment),
-            u8Buffer(error_buf[0..]),
+            host.device,
+            host.command_queue,
+            host.layer,
+            dataPtr(msl_shaders.mesh),
+            msl_shaders.mesh.len,
+            dataPtr(msl_shaders.fragment),
+            msl_shaders.fragment.len,
+            bufferPtr(error_buf[0..]),
+            error_buf.len,
         ) != .ok) {
             std.log.err("Metal init failed: {s}", .{std.mem.sliceTo(&error_buf, 0)});
             return Error.ContextCreateFailed;
@@ -168,7 +158,8 @@ pub const Buffer = struct {
             &handle,
             ctx.handle,
             size,
-            u8Buffer(error_buf[0..]),
+            bufferPtr(error_buf[0..]),
+            error_buf.len,
         ) != .ok) {
             std.log.err("Metal buffer init failed: {s}", .{std.mem.sliceTo(&error_buf, 0)});
             return Error.BufferCreateFailed;
@@ -194,7 +185,8 @@ pub fn waitFrameSlot(ctx: Context, slot_index: u32, error_buffer: []u8) Error!vo
     if (hs_metal_context_wait_frame_slot(
         ctx.handle,
         slot_index,
-        u8Buffer(error_buffer),
+        bufferPtr(error_buffer),
+        error_buffer.len,
     ) != .ok) return Error.DrawFailed;
 }
 
@@ -241,16 +233,27 @@ pub fn draw(ctx: Context, info: DrawInfo, error_buffer: []u8) Error!void {
         shader_stats_handle,
         info.workgroup_count,
         info.slot_index,
-        u8Buffer(error_buffer),
+        bufferPtr(error_buffer),
+        error_buffer.len,
     ) != .ok) return Error.DrawFailed;
 }
 
 pub fn resourceIndices() ResourceIndices {
-    return hs_metal_get_resource_indices();
+    return .{
+        .glyph_pool = buffer_glyph_pool,
+        .glyphs = buffer_glyphs,
+        .meshlets = buffer_meshlets,
+        .frame_params = buffer_frame_params,
+        .shader_stats = buffer_shader_stats,
+    };
 }
 
 pub fn geometryLimits() GeometryLimits {
-    return hs_metal_get_geometry_limits();
+    return .{
+        .object_threadgroup_size = object_threadgroup_size,
+        .mesh_threadgroup_size = mesh_threadgroup_size,
+        .max_mesh_threadgroups_per_draw = max_mesh_threadgroups_per_draw,
+    };
 }
 
 test "Metal context public API compiles" {
@@ -261,17 +264,11 @@ test "Metal context public API compiles" {
     _ = @TypeOf(Context.init);
 }
 
-test "Metal context mirrors C23 bridge ABI" {
+test "Metal context mirrors Swift bridge ABI constants" {
     try std.testing.expectEqual(@as(c_int, 0), @intFromEnum(Status.ok));
     try std.testing.expectEqual(@as(c_int, 1), @intFromEnum(Status.err));
     try std.testing.expectEqual(@as(usize, 1), @sizeOf(U8));
-    try std.testing.expectEqual(@sizeOf(?*anyopaque) + @sizeOf(usize), @sizeOf(U8View));
-    try std.testing.expectEqual(@sizeOf(?*anyopaque) + @sizeOf(usize), @sizeOf(U8Buffer));
-    try std.testing.expectEqual(@as(usize, @sizeOf(?*anyopaque)), @offsetOf(U8View, "size"));
-    try std.testing.expectEqual(@as(usize, @sizeOf(?*anyopaque)), @offsetOf(U8Buffer, "size"));
-    try std.testing.expectEqual(@as(usize, 3 * @sizeOf(?*anyopaque)), @sizeOf(HostAbi));
-    try std.testing.expectEqual(@as(usize, 5 * @sizeOf(u32)), @sizeOf(ResourceIndices));
-    try std.testing.expectEqual(@as(usize, 3 * @sizeOf(u32)), @sizeOf(GeometryLimits));
+    try std.testing.expectEqual(@as(usize, 3), frame_slot_count);
     try std.testing.expectEqual(@as(u32, 0), buffer_glyph_pool);
     try std.testing.expectEqual(@as(u32, 1), buffer_glyphs);
     try std.testing.expectEqual(@as(u32, 2), buffer_meshlets);

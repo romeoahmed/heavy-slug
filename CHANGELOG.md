@@ -56,27 +56,23 @@ implementation notes belong in commits and code review history.
   `NSTrackingArea`, maps keyboard input through AppKit characters instead of
   hardware key codes, and clears captured input on close, quit, focus loss,
   minimization, or app deactivation.
-- **Metal Zig/C ABI boundary tightened:** the Metal backend bridge header and
-  Cocoa demo host header are now modern C23/C++23 ABI contracts using
-  `char8_t`, C23 `bool`, and `static_assert`; Zig mirrors those contracts with
-  explicit `extern` declarations because Zig 0.16 `translate-c` does not parse
-  these C23 headers.
-- **Breaking Objective-C++ C ABI cleanup:** Metal shader sources, Cocoa window
-  titles, and error destinations now cross the C ABI as explicit
-  `*_u8_view`/`*_u8_buffer` structs over one-byte UTF-8 code units. Fallible
-  Metal/Cocoa create calls now return named status values and write handles via
-  out parameters, Cocoa exposes its borrowed Metal objects as a single host
-  struct, and the Objective-C++ implementations use `std::expected` plus
-  `std::span<const char8_t>` internally for non-throwing failure propagation.
-- **Objective-C++ bridge code moved to C++23:** the Metal backend bridge and
-  Cocoa demo host now compile as Objective-C++ C++23 and use `std::span`,
-  `std::array`, `std::optional`, and RAII helpers for internal host/context
-  creation, shader-source validation, input snapshots, and frame-slot cleanup
-  while preserving the explicit C ABI seen by Zig.
-- **Objective-C++ compiler policy hardened:** Metal/Cocoa bridge sources now
-  share one build helper for C++23 ARC flags, optimize-mode-specific
-  `-O0`/`-O3`/`-Os`, disabled C++/Objective-C exceptions and RTTI, stricter
-  diagnostics, and warnings as errors.
+- **Breaking Swift Metal/Cocoa bridge rewrite:** the Objective-C++ bridge and
+  C bridge headers were removed. The Metal backend and macOS demo host are now
+  Swift `6.3` sources compiled by `swiftc` into Zig-linked objects, with Swift
+  `@c` exports using only scalar values, pointers, pointer/length UTF-8 buffers,
+  and explicit out parameters. The Cocoa host now exposes borrowed Metal objects
+  through three out pointers and reports input snapshots through byte arrays
+  plus field out pointers instead of C structs.
+- **Swift bridge build contract tightened:** Swift bridge objects now compile
+  with an explicit Apple Swift target triple derived from Zig's macOS target,
+  require a macOS 26.0 or newer deployment target for Metal 4 APIs, and link
+  Debug-only Swift support libraries only in Debug builds. The Cocoa `@c`
+  entry points are plain C ABI functions that explicitly enter `MainActor`
+  after validating the main-thread contract.
+- **SwiftUI demo host path:** the macOS Metal demo now uses a SwiftUI
+  `NSViewRepresentable` surface to host the `CAMetalLayer` while preserving the
+  Zig-owned frame loop, AppKit menu/window behavior, and main-thread event
+  polling contract.
 - **Wayland demo GNOME 50 cleanup:** the Linux Vulkan host now binds
   GNOME 50/Mutter-compatible Wayland core versions plus the latest generated
   xdg-shell, viewporter, fractional-scale, and cursor-shape objects used by the
@@ -85,18 +81,18 @@ implementation notes belong in commits and code review history.
   geometry atomically with xdg configures, handles constrained/tiled/maximized/
   fullscreen edges, consumes high-resolution `wl_pointer.axis_value120` scroll
   events, and treats `wl_keyboard.key_state.repeated` as pressed.
-- **Metal 4 backend tightened:** the Objective-C++ bridge now validates host
+- **Metal 4 backend tightened:** the Swift bridge now validates host
   device/queue/layer consistency up front, labels Metal 4 command resources,
   uses per-command residency for GPU-address argument table bindings, and keeps
   bridge geometry constants testable against the shared mesh ABI. The Metal
   backend intentionally keeps a mesh render pipeline state rather than adding
   dynamic libraries as a Shader Object analogue.
-- **Metal/Cocoa Objective-C++ bridge rewritten:** the Metal bridge now retains
+- **Metal/Cocoa Swift bridge rewritten:** the Metal bridge now retains
   host objects internally, validates buffer ownership before draws, submits both
   renderer resources and `CAMetalLayer` drawable residency sets with each
   Metal 4 command buffer, and uses explicit frame-slot reservation state. The
-  Cocoa demo host was rewritten around the same main-thread AppKit contract and
-  Metal 4 layer residency requirement.
+  Cocoa demo host was rewritten around the same main-thread SwiftUI/AppKit
+  contract and Metal 4 layer residency requirement.
 - **Breaking Vulkan shader-object backend:** the Vulkan renderer now requires
   `VK_EXT_shader_object`, creates linked mesh/fragment shader objects, and
   sets the required graphics state dynamically instead of creating a monolithic

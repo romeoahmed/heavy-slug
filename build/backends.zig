@@ -1,8 +1,8 @@
 //! Optional backend module wiring for Vulkan and Metal.
 
 const std = @import("std");
-const objcxx = @import("objcxx.zig");
 const shaders = @import("shaders.zig");
+const swift = @import("swift.zig");
 
 pub const VulkanBackend = struct {
     module: *std.Build.Module,
@@ -62,6 +62,10 @@ pub fn buildMetal(
     gpu_structs_mod: *std.Build.Module,
     shader_stats: bool,
 ) MetalBackend {
+    if (target.result.os.tag != .macos) {
+        @panic("the Swift Metal backend requires a macOS target");
+    }
+
     const mod = b.addModule("heavy_slug_metal", .{
         .root_source_file = b.path("src/backends/metal/root.zig"),
         .target = target,
@@ -72,18 +76,14 @@ pub fn buildMetal(
     mod.addImport("msl_shaders", msl.module);
     mod.addImport("gpu_structs", gpu_structs_mod);
     mod.addOptions("heavy_slug_backend_options", options);
-    mod.addIncludePath(b.path("src/backends/metal"));
-    mod.link_libcpp = true;
-    mod.linkFramework("QuartzCore", .{});
-    mod.linkFramework("Metal", .{});
-    mod.linkFramework("Foundation", .{});
-    mod.addCSourceFiles(.{
-        .root = b.path("src/backends/metal"),
-        .files = &.{"bridge.mm"},
-        .flags = objcxx.flags(b, optimize, &.{
-            if (shader_stats) "-DHEAVY_SLUG_SHADER_STATS=1" else "-DHEAVY_SLUG_SHADER_STATS=0",
-        }),
-    });
+    mod.addObjectFile(swift.addObject(b, .{
+        .name = "HeavySlugMetalBridge",
+        .source = b.path("src/backends/metal/bridge.swift"),
+        .target = target,
+        .optimize = optimize,
+        .extra_flags = if (shader_stats) &.{"-DHEAVY_SLUG_SHADER_STATS"} else &.{},
+    }));
+    swift.linkRuntime(b, mod, .{ .optimize = optimize });
 
     return .{ .module = mod };
 }

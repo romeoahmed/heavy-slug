@@ -137,7 +137,7 @@ CPU meshlets -> Mesh -> Fragment shaders
 | Vulkan backend | Lazy `vulkan-zig` and Vulkan Headers packages. | Vulkan 1.4, `VK_EXT_mesh_shader`, `VK_EXT_shader_object`, dynamic rendering, push descriptors. |
 | Windows Vulkan demo | Native Win32 host; links `user32`; embeds a Per-Monitor-V2/long-path/Segment-Heap manifest; loads the Vulkan loader at runtime. | Vulkan-capable Windows 11 system. |
 | Linux Vulkan demo | `wayland-scanner`, `wayland-client`, `xkbcommon`, current Wayland client headers, and pinned `wayland-protocols` 1.48 XML fetched by Zig. | GNOME 50/Mutter 50.x-compatible Wayland session and Vulkan loader/driver. |
-| Metal backend/demo | macOS, Apple SDK with Metal 4 APIs, Objective-C++ C++23 support, `Metal`, `QuartzCore`, `Foundation`, and `Cocoa` for the demo. | Metal 4 capable device and native Cocoa host. |
+| Metal backend/demo | macOS 26.0 or newer deployment target, Swift `6.3`, Apple SDK with Metal 4 APIs, `swiftc`, `Metal`, `QuartzCore`, `Foundation`, `AppKit`, and `SwiftUI` for the demo. | Metal 4 capable device and native SwiftUI/AppKit host. |
 
 Important dependency facts:
 
@@ -150,24 +150,25 @@ Important dependency facts:
   backend or Vulkan demo is requested.
 - `-Ddemo-backend=` is interpreted only when `-Ddemo=true`; backend-only builds
   use `-Dvulkan=true` or `-Dmetal=true`.
-- Metal/Cocoa C ABI headers use explicit `*_u8_view`/`*_u8_buffer` structs over
-  C23/C++23 `char8_t` UTF-8 code units, C23 `bool`, and C23/C++23
-  `static_assert`; Objective-C++ narrows the UTF-8 views to
-  `std::span<const char8_t>` or `std::span<char8_t>` at the boundary.
-- Fallible Metal/Cocoa C ABI creation calls return named status values and
-  write owned handles through explicit out parameters; Cocoa exposes the
-  borrowed Metal host objects as one struct instead of three independent
-  accessors.
-- Zig mirrors the Metal/Cocoa C ABI with explicit `extern` declarations because
-  Zig 0.16 `translate-c` does not currently parse these C23 headers.
-- Metal/Cocoa Objective-C++ sources compile as C++23 with ARC, no C++ or
-  Objective-C exceptions, no RTTI, warnings as errors, and Zig optimize-mode
-  mapped `-O0`/`-O3`/`-Os` flags.
+- Metal/Cocoa bridge code is Swift. Swift `@c` exports use only pointers,
+  integer sizes, scalar values, and explicit out parameters so Zig mirrors the
+  ABI directly with `extern` declarations and does not translate bridge headers.
+- Fallible Metal/Cocoa bridge creation calls return named status values and
+  write owned handles through explicit out parameters. UTF-8 data crosses as
+  pointer/length pairs, and diagnostics are written into caller-provided byte
+  buffers.
+- Cocoa exposes borrowed Metal host objects through explicit out pointers for
+  `id<MTLDevice>`, `id<MTL4CommandQueue>`, and `CAMetalLayer *`; the Metal
+  bridge retains those objects internally.
+- Swift bridge sources compile with `swiftc -swift-version 6` and an explicit
+  Apple Swift target triple derived from the Zig target. The Zig optimize mode
+  maps to `-Onone`, `-O`, or `-Osize`, and Swift module caches are emitted
+  under the Zig build cache.
 - Internal bridge failures are represented without exceptions and mapped back
   to Zig error sets.
 - The demo hosts are deliberately native: Win32 on Windows, Wayland on Linux,
-  and Cocoa on macOS. GLFW/SDL-style toolkit dependencies are not part of the
-  current build model.
+  and a SwiftUI/AppKit host on macOS. GLFW/SDL-style toolkit dependencies are
+  not part of the current build model.
 - Linux demo builds can override the protocol scanner with
   `-Dwayland-scanner=`. Protocol XML is generated from the lazy
   `wayland_protocols_src` Zig dependency, not from the system
@@ -193,11 +194,11 @@ Backend modules expose `Context`, `Renderer`, `Frame`, `Target`,
 `RendererOptions`, `FontHandle`, `FrameToken`, `Stats`, and
 `shader_stats_enabled`. The Metal backend also exposes `Host`, the
 `id<MTLDevice>` / `id<MTL4CommandQueue>` / `CAMetalLayer *` creation contract
-used by the bridge. The bridge retains those objects internally, while the host
-keeps the layer attached and configured for presentation. Metal bridge calls
-that cross Objective-C++ use explicit status/out-handle results and C ABI
-`char8_t` UTF-8 view/buffer structs rather than implicit null-pointer failures
-or NUL-terminated strings.
+used by the Swift bridge. The bridge retains those objects internally, while
+the host keeps the layer attached and configured for presentation. Metal bridge
+calls cross Swift `@c` functions as explicit status/out-handle results plus
+pointer/length UTF-8 buffers rather than implicit null-pointer failures or
+NUL-terminated strings.
 
 <details>
 <summary>Typical frame shape</summary>
@@ -263,8 +264,8 @@ cached GPU storage is retired only after the host reports completed work.
 The Vulkan backend intentionally uses byte-offset `GlyphBlobRef` values rather
 than per-glyph descriptor slots and binds mesh and fragment stages as linked
 `VK_EXT_shader_object` shader objects. The Metal backend follows the
-Metal 4 command and argument-table path exposed through the Objective-C++
-bridge; it keeps a mesh `MTLRenderPipelineState` because Metal dynamic
+Metal 4 command and argument-table path exposed through the Swift bridge; it
+keeps a mesh `MTLRenderPipelineState` because Metal dynamic
 libraries and pipeline dynamic linking do not replace the render pipeline state
 model for this renderer.
 
@@ -319,7 +320,7 @@ Backend debug counters are exposed through `Renderer.stats()` in Debug builds.
 | `src/core/` | Types, fonts, outlines, blob encoding, cache, renderer core. |
 | `src/gpu/` | Backend-neutral GPU ABI markers, mesh limits, shader stats. |
 | `src/backends/vulkan/` | Vulkan backend. |
-| `src/backends/metal/` | Metal backend and Objective-C++ bridge. |
+| `src/backends/metal/` | Metal backend and Swift bridge. |
 | `demo/` | Demo entry points, native platform hosts, shared scene/input code. |
 | `src/c/` | Core C headers translated by build-system `addTranslateC()`. |
 | `build/` | Modular Zig build graph. |
@@ -352,6 +353,7 @@ glyph instances, and coordinates deferred resource retirement.
 | HarfBuzz | `build.zig.zon` source archive | No |
 | `vulkan-zig` | pinned Git dependency | Yes |
 | Vulkan Headers | pinned Git dependency | Yes |
+| Swift toolchain | system macOS Metal backend/demo dependency | No |
 | Wayland client libraries | system Linux demo dependency | No |
 | Wayland protocol XML | pinned `wayland-protocols` 1.48 source archive | Yes |
 

@@ -13,22 +13,6 @@ const Status = enum(c_int) {
 
 const U8 = u8;
 
-const U8View = extern struct {
-    data: ?[*]const U8,
-    size: usize,
-};
-
-const U8Buffer = extern struct {
-    data: ?[*]U8,
-    size: usize,
-};
-
-const MetalHostAbi = extern struct {
-    device: ?*anyopaque,
-    command_queue: ?*anyopaque,
-    layer: ?*anyopaque,
-};
-
 pub const MetalHost = struct {
     device: *anyopaque,
     command_queue: *anyopaque,
@@ -49,33 +33,40 @@ const cocoa_key_count: usize = 10;
 const mouse_left: u32 = 0;
 const mouse_right: u32 = 1;
 const cocoa_mouse_button_count: usize = 2;
-const cocoa_bool_size: usize = 1;
 const key_count = @typeInfo(demo_input.Key).@"enum".fields.len;
 const mouse_button_count = @typeInfo(demo_input.MouseButton).@"enum".fields.len;
-
-const Snapshot = extern struct {
-    keys: [cocoa_key_count]bool,
-    mouse_buttons: [cocoa_mouse_button_count]bool,
-    cursor_x: f64,
-    cursor_y: f64,
-    scroll_delta: f64,
-    framebuffer_width: u32,
-    framebuffer_height: u32,
-    should_close: bool,
-};
 
 extern fn hs_demo_cocoa_window_create(
     out_window: *?*WindowHandle,
     width: u32,
     height: u32,
-    title: U8View,
-    error_buffer: U8Buffer,
+    title_data: ?[*]const U8,
+    title_size: usize,
+    error_data: ?[*]U8,
+    error_size: usize,
 ) Status;
 extern fn hs_demo_cocoa_window_destroy(host: ?*WindowHandle) void;
 extern fn hs_demo_cocoa_window_poll_events(host: ?*WindowHandle) void;
-extern fn hs_demo_cocoa_window_snapshot(host: ?*WindowHandle, snapshot: *Snapshot) void;
+extern fn hs_demo_cocoa_window_snapshot(
+    host: ?*WindowHandle,
+    keys: ?[*]U8,
+    key_capacity: usize,
+    mouse_buttons: ?[*]U8,
+    mouse_button_capacity: usize,
+    cursor_x: ?*f64,
+    cursor_y: ?*f64,
+    scroll_delta: ?*f64,
+    framebuffer_width: ?*u32,
+    framebuffer_height: ?*u32,
+    should_close: ?*U8,
+) void;
 extern fn hs_demo_cocoa_window_time(host: ?*WindowHandle) f64;
-extern fn hs_demo_cocoa_window_metal_host(host: ?*WindowHandle) MetalHostAbi;
+extern fn hs_demo_cocoa_window_metal_host(
+    host: ?*WindowHandle,
+    out_device: *?*anyopaque,
+    out_command_queue: *?*anyopaque,
+    out_layer: *?*anyopaque,
+) Status;
 
 pub const Error = error{
     InvalidWindowSize,
@@ -83,16 +74,16 @@ pub const Error = error{
     MetalHostUnavailable,
 };
 
-fn u8View(bytes: []const u8) U8View {
-    return .{ .data = bytes.ptr, .size = bytes.len };
-}
-
-fn u8Buffer(bytes: []u8) U8Buffer {
-    return .{ .data = bytes.ptr, .size = bytes.len };
-}
-
 fn emptyDiagnostic() [diagnostic_capacity]u8 {
     return .{0} ** diagnostic_capacity;
+}
+
+fn dataPtr(bytes: []const u8) ?[*]const U8 {
+    return if (bytes.len == 0) null else bytes.ptr;
+}
+
+fn bufferPtr(bytes: []u8) ?[*]U8 {
+    return if (bytes.len == 0) null else bytes.ptr;
 }
 
 pub const Window = struct {
@@ -111,8 +102,10 @@ pub const Window = struct {
             &handle,
             @intCast(width),
             @intCast(height),
-            u8View(title),
-            u8Buffer(error_buf[0..]),
+            dataPtr(title),
+            title.len,
+            bufferPtr(error_buf[0..]),
+            error_buf.len,
         ) != .ok) {
             std.log.err("Cocoa host init failed: {s}", .{std.mem.sliceTo(&error_buf, 0)});
             return Error.WindowCreateFailed;
@@ -144,24 +137,56 @@ pub const Window = struct {
     }
 
     pub fn metalHost(self: *const Window) Error!MetalHost {
-        const host = hs_demo_cocoa_window_metal_host(self.handle);
+        var device: ?*anyopaque = null;
+        var command_queue: ?*anyopaque = null;
+        var layer: ?*anyopaque = null;
+        if (hs_demo_cocoa_window_metal_host(
+            self.handle,
+            &device,
+            &command_queue,
+            &layer,
+        ) != .ok) return Error.MetalHostUnavailable;
+
         return .{
-            .device = host.device orelse return Error.MetalHostUnavailable,
-            .command_queue = host.command_queue orelse return Error.MetalHostUnavailable,
-            .layer = host.layer orelse return Error.MetalHostUnavailable,
+            .device = device orelse return Error.MetalHostUnavailable,
+            .command_queue = command_queue orelse return Error.MetalHostUnavailable,
+            .layer = layer orelse return Error.MetalHostUnavailable,
         };
     }
 
     fn refreshSnapshot(self: *Window) void {
-        var snapshot: Snapshot = undefined;
-        hs_demo_cocoa_window_snapshot(self.handle, &snapshot);
-        self.input_state.keys = snapshot.keys;
-        self.input_state.mouse_buttons = snapshot.mouse_buttons;
-        self.input_state.cursor = .{ snapshot.cursor_x, snapshot.cursor_y };
-        self.input_state.addScroll(snapshot.scroll_delta);
-        self.framebuffer_width = snapshot.framebuffer_width;
-        self.framebuffer_height = snapshot.framebuffer_height;
-        self.should_close = snapshot.should_close;
+        var keys: [cocoa_key_count]U8 = undefined;
+        var mouse_buttons: [cocoa_mouse_button_count]U8 = undefined;
+        var cursor_x: f64 = 0;
+        var cursor_y: f64 = 0;
+        var scroll_delta: f64 = 0;
+        var framebuffer_width: u32 = 0;
+        var framebuffer_height: u32 = 0;
+        var should_close: U8 = 0;
+        hs_demo_cocoa_window_snapshot(
+            self.handle,
+            keys[0..].ptr,
+            keys.len,
+            mouse_buttons[0..].ptr,
+            mouse_buttons.len,
+            &cursor_x,
+            &cursor_y,
+            &scroll_delta,
+            &framebuffer_width,
+            &framebuffer_height,
+            &should_close,
+        );
+        for (keys, 0..) |pressed, index| {
+            self.input_state.keys[index] = pressed != 0;
+        }
+        for (mouse_buttons, 0..) |pressed, index| {
+            self.input_state.mouse_buttons[index] = pressed != 0;
+        }
+        self.input_state.cursor = .{ cursor_x, cursor_y };
+        self.input_state.addScroll(scroll_delta);
+        self.framebuffer_width = framebuffer_width;
+        self.framebuffer_height = framebuffer_height;
+        self.should_close = should_close != 0;
     }
 };
 
@@ -171,21 +196,15 @@ fn validInitialExtent(width: c_int, height: c_int) bool {
 
 comptime {
     if (key_count != cocoa_key_count)
-        @compileError("demo_input.Key and demo/platform/cocoa.h key counts must stay in lockstep");
+        @compileError("demo_input.Key and demo/platform/cocoa.swift key counts must stay in lockstep");
     if (mouse_button_count != cocoa_mouse_button_count)
-        @compileError("demo_input.MouseButton and demo/platform/cocoa.h mouse counts must stay in lockstep");
+        @compileError("demo_input.MouseButton and demo/platform/cocoa.swift mouse counts must stay in lockstep");
 }
 
 test "Cocoa ABI input counts match shared demo input" {
     try std.testing.expectEqual(@as(c_int, 0), @intFromEnum(Status.ok));
     try std.testing.expectEqual(@as(c_int, 1), @intFromEnum(Status.err));
     try std.testing.expectEqual(@as(usize, 1), @sizeOf(U8));
-    try std.testing.expectEqual(cocoa_bool_size, @sizeOf(bool));
-    try std.testing.expectEqual(@sizeOf(?*anyopaque) + @sizeOf(usize), @sizeOf(U8View));
-    try std.testing.expectEqual(@sizeOf(?*anyopaque) + @sizeOf(usize), @sizeOf(U8Buffer));
-    try std.testing.expectEqual(@as(usize, @sizeOf(?*anyopaque)), @offsetOf(U8View, "size"));
-    try std.testing.expectEqual(@as(usize, @sizeOf(?*anyopaque)), @offsetOf(U8Buffer, "size"));
-    try std.testing.expectEqual(@as(usize, 3 * @sizeOf(?*anyopaque)), @sizeOf(MetalHostAbi));
     try std.testing.expectEqual(@as(usize, cocoa_key_count), key_count);
     try std.testing.expectEqual(@as(usize, cocoa_mouse_button_count), mouse_button_count);
 }
