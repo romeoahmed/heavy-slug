@@ -192,7 +192,7 @@ package modules.
 
 Stable top-level core exports include `FontHandle`, `FontSource`,
 `FontOptions`, `TextRun`, `FrameToken`, `Color`, `Transform`, `View`,
-`PrecisionPolicy`, `FillRule`, and `ShaderStats`.
+`PrecisionPolicy`, `FillRule`, `RendererOptions`, and `ShaderStats`.
 
 Backend modules expose `Context`, `Renderer`, `Frame`, `Target`,
 `RendererOptions`, `FontHandle`, `FrameToken`, `Stats`, and
@@ -203,6 +203,11 @@ the host keeps the layer attached and configured for presentation. Metal bridge
 calls cross Swift `@c` functions as explicit status/out-handle results plus
 pointer/length UTF-8 buffers rather than implicit null-pointer failures or
 NUL-terminated strings.
+
+`RendererOptions.validate()` is the shared capacity, pool-alignment, and
+precision-policy contract used by the core and backends. Invalid renderer
+configuration is reported as an error before glyph-cache or pool storage is
+created.
 
 <details>
 <summary>Typical frame shape</summary>

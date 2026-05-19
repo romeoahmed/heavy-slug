@@ -20,7 +20,12 @@ pub const LoadedFont = struct {
         self.* = undefined;
     }
 
-    pub fn shape(self: LoadedFont, plan: shape_mod.ShapePlan, text: []const u8, props: shape_mod.SegmentProperties) !shape_mod.ShapedRun {
+    pub fn shape(
+        self: *const LoadedFont,
+        plan: *shape_mod.ShapePlan,
+        text: []const u8,
+        props: shape_mod.SegmentProperties,
+    ) !shape_mod.ShapedRun {
         return plan.shape(self.font, text, props);
     }
 
@@ -45,7 +50,7 @@ pub const FontSystem = struct {
         self.* = undefined;
     }
 
-    pub fn load(self: FontSystem, source: types.FontSource, options: types.FontOptions) !LoadedFont {
+    pub fn load(self: *const FontSystem, source: types.FontSource, options: types.FontOptions) !LoadedFont {
         const path = switch (source) {
             .path => |p| p,
         };
@@ -91,7 +96,7 @@ test "FontSystem shapes and encodes through explicit plan" {
     var plan = try shape_mod.ShapePlan.init();
     defer plan.deinit();
 
-    const run = try loaded.shape(plan, "A", .{});
+    const run = try loaded.shape(&plan, "A", .{});
     try std.testing.expectEqual(@as(usize, 1), run.infos.len);
 
     const encoded = try loaded.encodeGlyph(run.infos[0].codepoint, @import("../blob/format.zig").default_fraction_bits);

@@ -12,6 +12,14 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Core renderer contracts tightened:** renderer options now live in a
+  dedicated core module with explicit validation for cache capacity, pool
+  alignment, and blob-supported precision tiers; glyph-store initialization no
+  longer depends back on `renderer_core.zig`, pool allocator initialization now
+  returns typed errors for invalid capacity/alignment, and blob decoding
+  validates band candidate ranges plus curve IDs before exposing table access.
+  Blob-derived render bounds helpers now propagate decode errors instead of
+  treating malformed blobs as unreachable.
 - **CI Zig cache parsing fixed:** Zig package-cache setup now treats
   `zig env` output as Zig 0.16 object syntax rather than JSON on both Bash and
   PowerShell paths, and the quality gate exercises the parser against the real

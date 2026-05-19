@@ -12,6 +12,7 @@ pub const CacheTier = glyph_cache.CacheTier;
 pub const EmBox = glyph_cache.EmBox;
 pub const EvictedEntry = glyph_cache.EvictedEntry;
 pub const PoolAllocator = byte_pool.PoolAllocator;
+pub const PoolAllocatorError = byte_pool.Error;
 pub const Allocation = byte_pool.Allocation;
 pub const DeferredRetirementQueue = retirement.DeferredRetirementQueue;
 

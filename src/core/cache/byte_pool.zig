@@ -2,6 +2,11 @@ const std = @import("std");
 
 const log = std.log.scoped(.pool);
 
+pub const Error = error{
+    InvalidPoolCapacity,
+    InvalidPoolAlignment,
+};
+
 /// Byte range inside the pool.
 pub const Allocation = struct {
     offset: u32,
@@ -33,9 +38,9 @@ pub const PoolAllocator = struct {
     /// Free list kept sorted by ascending offset.
     free_blocks: std.ArrayList(FreeBlock),
 
-    pub fn init(allocator: std.mem.Allocator, capacity: u32, alignment: u32) PoolAllocator {
-        std.debug.assert(capacity > 0);
-        std.debug.assert(alignment > 0 and (alignment & (alignment - 1)) == 0);
+    pub fn init(allocator: std.mem.Allocator, capacity: u32, alignment: u32) Error!PoolAllocator {
+        if (capacity == 0) return error.InvalidPoolCapacity;
+        if (!isPowerOfTwo(alignment)) return error.InvalidPoolAlignment;
         return .{
             .allocator = allocator,
             .capacity = capacity,
@@ -48,6 +53,10 @@ pub const PoolAllocator = struct {
     pub fn deinit(self: *PoolAllocator) void {
         self.free_blocks.deinit(self.allocator);
         self.* = undefined;
+    }
+
+    pub fn reserveFreeBlocks(self: *PoolAllocator, capacity: u32) !void {
+        try self.free_blocks.ensureTotalCapacity(self.allocator, capacity);
     }
 
     pub fn snapshot(self: *const PoolAllocator) Snapshot {
@@ -239,8 +248,12 @@ pub const PoolAllocator = struct {
     }
 };
 
+fn isPowerOfTwo(value: u32) bool {
+    return value != 0 and (value & (value - 1)) == 0;
+}
+
 test "PoolAllocator: bump allocation returns aligned offsets" {
-    var pa = PoolAllocator.init(std.testing.allocator, 256, 16);
+    var pa = try PoolAllocator.init(std.testing.allocator, 256, 16);
     defer pa.deinit();
 
     const a = pa.alloc(10).?;
@@ -253,7 +266,7 @@ test "PoolAllocator: bump allocation returns aligned offsets" {
 }
 
 test "PoolAllocator: returns null when full" {
-    var pa = PoolAllocator.init(std.testing.allocator, 32, 16);
+    var pa = try PoolAllocator.init(std.testing.allocator, 32, 16);
     defer pa.deinit();
 
     _ = pa.alloc(20).?; // consumes 32 aligned bytes
@@ -261,21 +274,36 @@ test "PoolAllocator: returns null when full" {
 }
 
 test "PoolAllocator: oversized allocation returns null without wrapping" {
-    var pa = PoolAllocator.init(std.testing.allocator, 1024, 256);
+    var pa = try PoolAllocator.init(std.testing.allocator, 1024, 256);
     defer pa.deinit();
 
     try std.testing.expectEqual(@as(?Allocation, null), pa.alloc(std.math.maxInt(u32)));
 }
 
 test "PoolAllocator: zero-size alloc returns null" {
-    var pa = PoolAllocator.init(std.testing.allocator, 256, 16);
+    var pa = try PoolAllocator.init(std.testing.allocator, 256, 16);
     defer pa.deinit();
 
     try std.testing.expectEqual(@as(?Allocation, null), pa.alloc(0));
 }
 
+test "PoolAllocator: init rejects invalid capacity and alignment" {
+    try std.testing.expectError(
+        error.InvalidPoolCapacity,
+        PoolAllocator.init(std.testing.allocator, 0, 16),
+    );
+    try std.testing.expectError(
+        error.InvalidPoolAlignment,
+        PoolAllocator.init(std.testing.allocator, 256, 0),
+    );
+    try std.testing.expectError(
+        error.InvalidPoolAlignment,
+        PoolAllocator.init(std.testing.allocator, 256, 24),
+    );
+}
+
 test "PoolAllocator: free and reuse" {
-    var pa = PoolAllocator.init(std.testing.allocator, 256, 16);
+    var pa = try PoolAllocator.init(std.testing.allocator, 256, 16);
     defer pa.deinit();
 
     const a = pa.alloc(10).?;
@@ -287,7 +315,7 @@ test "PoolAllocator: free and reuse" {
 }
 
 test "PoolAllocator: snapshot reports used bytes and largest free block" {
-    var pa = PoolAllocator.init(std.testing.allocator, 128, 16);
+    var pa = try PoolAllocator.init(std.testing.allocator, 128, 16);
     defer pa.deinit();
 
     const a = pa.alloc(10).?;
@@ -302,7 +330,7 @@ test "PoolAllocator: snapshot reports used bytes and largest free block" {
 }
 
 test "PoolAllocator: free block splitting" {
-    var pa = PoolAllocator.init(std.testing.allocator, 256, 16);
+    var pa = try PoolAllocator.init(std.testing.allocator, 256, 16);
     defer pa.deinit();
 
     const a = pa.alloc(48).?; // 48 bytes aligned = 48 bytes
@@ -317,7 +345,7 @@ test "PoolAllocator: free block splitting" {
 }
 
 test "PoolAllocator: reset clears all state" {
-    var pa = PoolAllocator.init(std.testing.allocator, 256, 16);
+    var pa = try PoolAllocator.init(std.testing.allocator, 256, 16);
     defer pa.deinit();
 
     _ = pa.alloc(100);
@@ -337,7 +365,7 @@ test "PoolAllocator: reset clears all state" {
 }
 
 test "PoolAllocator: best-fit selects smallest suitable block" {
-    var pa = PoolAllocator.init(std.testing.allocator, 4096, 16);
+    var pa = try PoolAllocator.init(std.testing.allocator, 4096, 16);
     defer pa.deinit();
 
     const a = pa.alloc(64).?; // offset 0, aligned 64
@@ -355,7 +383,7 @@ test "PoolAllocator: best-fit selects smallest suitable block" {
 }
 
 test "PoolAllocator: freeing tail allocation rewinds cursor" {
-    var pa = PoolAllocator.init(std.testing.allocator, 256, 16);
+    var pa = try PoolAllocator.init(std.testing.allocator, 256, 16);
     defer pa.deinit();
 
     const a = pa.alloc(16).?;
@@ -371,7 +399,7 @@ test "PoolAllocator: freeing tail allocation rewinds cursor" {
 }
 
 test "PoolAllocator: tail rewind absorbs adjacent free blocks" {
-    var pa = PoolAllocator.init(std.testing.allocator, 256, 16);
+    var pa = try PoolAllocator.init(std.testing.allocator, 256, 16);
     defer pa.deinit();
 
     const a = pa.alloc(16).?;
@@ -389,7 +417,7 @@ test "PoolAllocator: tail rewind absorbs adjacent free blocks" {
 }
 
 test "PoolAllocator: free coalesces adjacent blocks" {
-    var pa = PoolAllocator.init(std.testing.allocator, 4096, 16);
+    var pa = try PoolAllocator.init(std.testing.allocator, 4096, 16);
     defer pa.deinit();
 
     const a = pa.alloc(48).?; // offset 0, aligned 48
@@ -406,7 +434,7 @@ test "PoolAllocator: free coalesces adjacent blocks" {
 }
 
 test "PoolAllocator: free list maintains sorted order" {
-    var pa = PoolAllocator.init(std.testing.allocator, 4096, 16);
+    var pa = try PoolAllocator.init(std.testing.allocator, 4096, 16);
     defer pa.deinit();
 
     const a = pa.alloc(16).?; // offset 0

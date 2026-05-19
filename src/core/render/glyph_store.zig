@@ -4,7 +4,7 @@ const std = @import("std");
 const cache_mod = @import("../cache/glyph_cache.zig");
 const pool_mod = @import("../cache/byte_pool.zig");
 const retirement_mod = @import("../cache/retirement.zig");
-const core_render = @import("renderer_core.zig");
+const render_options = @import("options.zig");
 
 pub const FrameToken = u64;
 pub const GlyphBlobRef = cache_mod.GlyphBlobRef;
@@ -22,7 +22,9 @@ pub const GlyphStore = struct {
     retirements: RetirementQueue,
     retire_after_token: FrameToken,
 
-    pub fn init(allocator: std.mem.Allocator, options: core_render.RendererOptions) !GlyphStore {
+    pub fn init(allocator: std.mem.Allocator, options: render_options.RendererOptions) !GlyphStore {
+        try options.validate();
+
         var glyph_cache = try cache_mod.GlyphCache.init(
             allocator,
             options.hot_slab_count,
@@ -30,20 +32,20 @@ pub const GlyphStore = struct {
             options.promote_frames,
         );
         errdefer glyph_cache.deinit();
-        const total_cache_capacity = options.hot_slab_count + options.cold_lru_count;
-        try glyph_cache.map.ensureTotalCapacity(total_cache_capacity);
+        const total_cache_capacity = try options.cacheCapacity();
+        try glyph_cache.reserveEntries(total_cache_capacity);
 
-        var pool_alloc = pool_mod.PoolAllocator.init(
+        var pool_alloc = try pool_mod.PoolAllocator.init(
             allocator,
             options.pool_buffer_size,
             options.min_storage_alignment,
         );
         errdefer pool_alloc.deinit();
-        try pool_alloc.free_blocks.ensureTotalCapacity(allocator, total_cache_capacity);
+        try pool_alloc.reserveFreeBlocks(total_cache_capacity);
 
         var retirements = RetirementQueue.init(allocator);
         errdefer retirements.deinit();
-        try retirements.entries.ensureTotalCapacity(allocator, total_cache_capacity);
+        try retirements.reserve(total_cache_capacity);
 
         return .{
             .glyph_cache = glyph_cache,

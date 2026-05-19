@@ -9,12 +9,14 @@ const font_mod = @import("../font/root.zig");
 const glyph_store_mod = @import("glyph_store.zig");
 const backend_contract = @import("backend_contract.zig");
 const frame_batch_mod = @import("frame_batch.zig");
+const options_mod = @import("options.zig");
 const core_types = @import("../types.zig");
 const units = @import("../units.zig");
 const mesh_limits = @import("../../gpu/mesh_limits.zig");
 const hb = font_mod.hb;
 
 pub const GlyphBlobRef = cache_mod.GlyphBlobRef;
+pub const RendererOptions = options_mod.RendererOptions;
 
 pub const Error = error{
     GlyphCapacityExceeded,
@@ -25,16 +27,6 @@ pub const Error = error{
     PrecisionUnsupported,
     TextPositionOverflow,
     MeshletCapacityExceeded,
-};
-
-pub const RendererOptions = struct {
-    max_glyphs_per_frame: u32 = 16_384,
-    hot_slab_count: u32 = 4_096,
-    cold_lru_count: u32 = 8_192,
-    promote_frames: u8 = 3,
-    pool_buffer_size: u32 = 32 * 1024 * 1024,
-    min_storage_alignment: u32 = 256,
-    precision_policy: core_types.PrecisionPolicy = .{},
 };
 
 pub const TextRun = struct {
@@ -135,8 +127,11 @@ pub fn emBoxFromExtents(ext: hb.GlyphExtents) cache_mod.EmBox {
     };
 }
 
-pub fn emBoxFromBlobBounds(blob: blob_format.CoverageBlob) cache_mod.EmBox {
-    const view = blob_decode.BlobView.initCoverageBlob(blob) catch unreachable;
+pub fn emBoxFromBlobBounds(blob: blob_format.CoverageBlob) blob_decode.Error!cache_mod.EmBox {
+    return emBoxFromBlobView(try blob_decode.BlobView.initCoverageBlob(blob));
+}
+
+fn emBoxFromBlobView(view: blob_decode.BlobView) cache_mod.EmBox {
     const header = view.header;
     const fraction_bits: u8 = @intCast(header.fraction_bits);
     return .{
@@ -147,8 +142,11 @@ pub fn emBoxFromBlobBounds(blob: blob_format.CoverageBlob) cache_mod.EmBox {
     };
 }
 
-pub fn fixedBoundsFromBlob(blob: blob_format.CoverageBlob) cache_mod.FixedBounds {
-    const view = blob_decode.BlobView.initCoverageBlob(blob) catch unreachable;
+pub fn fixedBoundsFromBlob(blob: blob_format.CoverageBlob) blob_decode.Error!cache_mod.FixedBounds {
+    return fixedBoundsFromBlobView(try blob_decode.BlobView.initCoverageBlob(blob));
+}
+
+fn fixedBoundsFromBlobView(view: blob_decode.BlobView) cache_mod.FixedBounds {
     const header = view.header;
     return .{
         .x_min = header.bounds_min_x_q,
@@ -170,6 +168,8 @@ pub const RendererCore = struct {
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, options: RendererOptions) !RendererCore {
+        try options.validate();
+
         var store = try glyph_store_mod.GlyphStore.init(allocator, options);
         errdefer store.deinit();
 
@@ -288,7 +288,7 @@ pub const RendererCore = struct {
         const font = run.font;
         const font_entry = self.fonts.get(font.id) orelse return Error.ShapingFailed;
 
-        const shaped = font_entry.loaded.shape(self.shape_plan, run.text, .{}) catch return Error.ShapingFailed;
+        const shaped = font_entry.loaded.shape(&self.shape_plan, run.text, .{}) catch return Error.ShapingFailed;
         const infos = shaped.infos;
         const positions = shaped.positions;
         if (@import("builtin").mode == .Debug) {
@@ -493,9 +493,10 @@ pub const RendererCore = struct {
             };
         }
 
-        const em_box = emBoxFromBlobBounds(encoded.blob);
-        const bounds_q = fixedBoundsFromBlob(encoded.blob);
-        var mesh_metadata = try meshMetadataFromBlob(self.allocator, encoded.blob);
+        const blob_view = blob_decode.BlobView.initCoverageBlob(encoded.blob) catch return Error.ShapingFailed;
+        const em_box = emBoxFromBlobView(blob_view);
+        const bounds_q = fixedBoundsFromBlobView(blob_view);
+        var mesh_metadata = try meshMetadataFromView(self.allocator, blob_view);
         var owns_mesh_metadata = true;
         errdefer if (owns_mesh_metadata) mesh_metadata.deinit(self.allocator);
         const pool_alloc = self.store.pool_alloc.alloc(@intCast(encoded.data.len)) orelse {
@@ -525,8 +526,7 @@ pub const RendererCore = struct {
 const target_meshlet_extent_px: f64 = 96.0;
 const no_bounds_max_q: i32 = -2147483647;
 
-fn meshMetadataFromBlob(allocator: std.mem.Allocator, blob: blob_format.CoverageBlob) !cache_mod.MeshMetadata {
-    const view = try blob_decode.BlobView.initCoverageBlob(blob);
+fn meshMetadataFromView(allocator: std.mem.Allocator, view: blob_decode.BlobView) !cache_mod.MeshMetadata {
     const header = view.header;
     if (header.band_count == 0) {
         return .{
@@ -945,6 +945,13 @@ test "RendererOptions mirrors current default capacities" {
     try std.testing.expectEqual(@as(u32, 16_384), opts.max_glyphs_per_frame);
 }
 
+test "render: RendererCore rejects invalid options before resource allocation" {
+    try std.testing.expectError(
+        error.InvalidRendererOptions,
+        RendererCore.init(std.testing.allocator, .{ .min_storage_alignment = 0 }),
+    );
+}
+
 test "render: emBoxFromBlobBounds uses encoded curve bounds" {
     const blob_encode = @import("../blob/encode.zig");
     const regularize = @import("../outline/regularize.zig");
@@ -953,7 +960,7 @@ test "render: emBoxFromBlobBounds uses encoded curve bounds" {
     }, blob_format.default_fraction_bits);
     defer blob.deinit();
 
-    const em_box = emBoxFromBlobBounds(blob);
+    const em_box = try emBoxFromBlobBounds(blob);
     try std.testing.expectApproxEqAbs(@as(f32, -1.0), em_box.x_min, 1.0e-6);
     try std.testing.expectApproxEqAbs(@as(f32, -0.5), em_box.y_min, 1.0e-6);
     try std.testing.expectApproxEqAbs(@as(f32, 3.0), em_box.x_max, 1.0e-6);

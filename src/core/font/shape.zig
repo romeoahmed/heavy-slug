@@ -25,7 +25,7 @@ pub const ShapePlan = struct {
         self.* = undefined;
     }
 
-    pub fn shape(self: ShapePlan, font: hb.Font, text: []const u8, props: SegmentProperties) !ShapedRun {
+    pub fn shape(self: *ShapePlan, font: hb.Font, text: []const u8, props: SegmentProperties) !ShapedRun {
         self.buffer.reset();
         try self.buffer.addUtf8(text);
         if (props.direction) |direction| self.buffer.setDirection(direction);

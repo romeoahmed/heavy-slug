@@ -70,7 +70,10 @@ test "hband: anchored band lookup matches absolute floor division" {
 
 test "hband: reads candidate ids" {
     const format = @import("format.zig");
-    const total_words = format.header_word_len + format.band_word_len + 2;
+    const curve_count = 10;
+    const band_base = format.header_word_len + curve_count * format.curve_word_len;
+    const id_base = band_base + format.band_word_len;
+    const total_words = id_base + 2;
     const words = try std.testing.allocator.alloc(u32, total_words);
     defer std.testing.allocator.free(words);
     @memset(words, 0);
@@ -80,7 +83,7 @@ test "hband: reads candidate ids" {
         .fraction_bits = format.default_fraction_bits,
         .flags = 0,
         .fill_sign = 1,
-        .curve_count = 0,
+        .curve_count = curve_count,
         .band_min = 0,
         .band_count = 1,
         .band_height_q = format.hbandHeightQ(format.default_fraction_bits),
@@ -91,16 +94,16 @@ test "hband: reads candidate ids" {
         .bounds_max_x_q = 0,
         .bounds_max_y_q = 0,
         .curve_base_words = format.header_word_len,
-        .band_base_words = format.header_word_len,
-        .id_base_words = format.header_word_len + format.band_word_len,
+        .band_base_words = band_base,
+        .id_base_words = id_base,
     };
     @memcpy(std.mem.sliceAsBytes(words)[0..@sizeOf(format.Header)], std.mem.asBytes(&header));
 
     const band = format.Band{ .id_start = 0, .id_count = 2 };
-    const band_off = @as(usize, format.header_word_len) * @sizeOf(u32);
+    const band_off = @as(usize, band_base) * @sizeOf(u32);
     @memcpy(std.mem.sliceAsBytes(words)[band_off..][0..@sizeOf(format.Band)], std.mem.asBytes(&band));
-    words[format.header_word_len + format.band_word_len] = 7;
-    words[format.header_word_len + format.band_word_len + 1] = 9;
+    words[id_base] = 7;
+    words[id_base + 1] = 9;
 
     const view = try decode.BlobView.init(std.mem.sliceAsBytes(words));
     const ids = try candidateIds(std.testing.allocator, view, 0);

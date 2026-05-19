@@ -24,6 +24,10 @@ pub fn DeferredRetirementQueue(comptime FrameToken: type, comptime Resource: typ
             self.* = undefined;
         }
 
+        pub fn reserve(self: *Self, capacity: u32) !void {
+            try self.entries.ensureTotalCapacity(self.allocator, capacity);
+        }
+
         pub fn push(self: *Self, token: FrameToken, resource: Resource) !void {
             try self.entries.append(self.allocator, .{ .token = token, .resource = resource });
         }

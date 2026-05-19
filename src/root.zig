@@ -35,7 +35,7 @@ test "integration: shape text and encode all unique glyphs" {
     var shape_plan = try font.ShapePlan.init();
     defer shape_plan.deinit();
 
-    const shaped = try loaded.shape(shape_plan, "Heavy Slug", .{});
+    const shaped = try loaded.shape(&shape_plan, "Heavy Slug", .{});
     const infos = shaped.infos;
     const positions = shaped.positions;
     try std.testing.expect(infos.len > 0);

@@ -213,6 +213,10 @@ pub const GlyphCache = struct {
         self.* = undefined;
     }
 
+    pub fn reserveEntries(self: *GlyphCache, capacity: u32) !void {
+        try self.map.ensureTotalCapacity(capacity);
+    }
+
     pub fn count(self: *const GlyphCache) u32 {
         return self.hot_count + self.cold_count;
     }
@@ -239,6 +243,7 @@ pub const GlyphCache = struct {
         return self.insertHotWithMetadata(key, blob_ref, pool_alloc, em_box, bounds_q, .empty());
     }
 
+    /// Takes ownership of `mesh_metadata`.
     pub fn insertHotWithMetadata(
         self: *GlyphCache,
         key: CacheKey,
@@ -288,6 +293,7 @@ pub const GlyphCache = struct {
         return self.insertColdWithMetadata(key, blob_ref, pool_alloc, em_box, bounds_q, .empty());
     }
 
+    /// Takes ownership of `mesh_metadata`.
     pub fn insertColdWithMetadata(
         self: *GlyphCache,
         key: CacheKey,
