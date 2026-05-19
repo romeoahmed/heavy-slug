@@ -14,6 +14,21 @@ extern "C" {
 typedef struct hs_metal_context hs_metal_context;
 typedef struct hs_metal_buffer hs_metal_buffer;
 
+typedef enum hs_metal_status {
+  HS_METAL_STATUS_ERROR = 0,
+  HS_METAL_STATUS_OK = 1,
+} hs_metal_status;
+
+typedef struct hs_metal_utf8_span {
+  const char *data;
+  size_t len;
+} hs_metal_utf8_span;
+
+typedef struct hs_metal_error_buffer {
+  char *data;
+  size_t len;
+} hs_metal_error_buffer;
+
 typedef struct hs_metal_host_objects {
   /* Borrowed id<MTLDevice>; retained by the created context. */
   void *device;
@@ -74,19 +89,22 @@ hs_metal_geometry_limits hs_metal_get_geometry_limits(void);
  *   context.
  * - The context owns its internal pipeline, frame slots, argument tables, and
  *   completion handlers. Zig sees only typed opaque C handles.
- * - Errors cross the ABI as a boolean status plus caller-provided UTF-8 text
- * buffer.
+ * - UTF-8 crosses the ABI as explicit pointer/length spans. The Objective-C++
+ *   implementation uses char8_t internally; the C ABI remains C-compatible.
+ * - Errors cross the ABI as a named status plus caller-provided UTF-8 text
+ *   buffer.
  */
 hs_metal_context *
-hs_metal_context_create(hs_metal_host_objects host, const char *mesh_source,
-                        size_t mesh_source_len, const char *fragment_source,
-                        size_t fragment_source_len, char *error_buffer,
-                        size_t error_buffer_len);
+hs_metal_context_create(hs_metal_host_objects host,
+                        hs_metal_utf8_span mesh_source,
+                        hs_metal_utf8_span fragment_source,
+                        hs_metal_error_buffer error_buffer);
 
 void hs_metal_context_destroy(hs_metal_context *context);
-int hs_metal_context_wait_frame_slot(hs_metal_context *context,
-                                     uint32_t slot_index, char *error_buffer,
-                                     size_t error_buffer_len);
+hs_metal_status
+hs_metal_context_wait_frame_slot(hs_metal_context *context,
+                                 uint32_t slot_index,
+                                 hs_metal_error_buffer error_buffer);
 void hs_metal_context_release_frame_slot(hs_metal_context *context,
                                          uint32_t slot_index);
 void hs_metal_context_wait_submitted(hs_metal_context *context);
@@ -95,16 +113,13 @@ hs_metal_buffer *hs_metal_buffer_create(hs_metal_context *context, size_t size);
 void hs_metal_buffer_destroy(hs_metal_buffer *buffer);
 void *hs_metal_buffer_contents(hs_metal_buffer *buffer);
 
-int hs_metal_context_draw(hs_metal_context *context, uint32_t width,
-                          uint32_t height, float clear_r, float clear_g,
-                          float clear_b, float clear_a, hs_metal_buffer *glyphs,
-                          hs_metal_buffer *meshlets,
-                          hs_metal_buffer *frame_params,
-                          uint32_t frame_params_stride,
-                          hs_metal_buffer *glyph_pool,
-                          hs_metal_buffer *shader_stats,
-                          uint32_t workgroup_count, uint32_t slot_index,
-                          char *error_buffer, size_t error_buffer_len);
+hs_metal_status hs_metal_context_draw(
+    hs_metal_context *context, uint32_t width, uint32_t height, float clear_r,
+    float clear_g, float clear_b, float clear_a, hs_metal_buffer *glyphs,
+    hs_metal_buffer *meshlets, hs_metal_buffer *frame_params,
+    uint32_t frame_params_stride, hs_metal_buffer *glyph_pool,
+    hs_metal_buffer *shader_stats, uint32_t workgroup_count,
+    uint32_t slot_index, hs_metal_error_buffer error_buffer);
 
 #ifdef __cplusplus
 }

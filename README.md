@@ -153,6 +153,9 @@ Important dependency facts:
 - Metal/Cocoa Objective-C++ sources compile as C++23 with ARC, no C++ or
   Objective-C exceptions, no RTTI, warnings as errors, and Zig optimize-mode
   mapped `-O0`/`-O3`/`-Os` flags.
+- The translated Metal/Cocoa C ABI uses explicit UTF-8 span and error-buffer
+  structs at Objective-C++ boundaries; internal bridge failures are represented
+  without exceptions and mapped back to Zig error sets.
 - The demo hosts are deliberately native: Win32 on Windows, Wayland on Linux,
   and Cocoa on macOS. GLFW/SDL-style toolkit dependencies are not part of the
   current build model.
@@ -182,7 +185,9 @@ Backend modules expose `Context`, `Renderer`, `Frame`, `Target`,
 `shader_stats_enabled`. The Metal backend also exposes `Host`, the
 `id<MTLDevice>` / `id<MTL4CommandQueue>` / `CAMetalLayer *` creation contract
 used by the bridge. The bridge retains those objects internally, while the host
-keeps the layer attached and configured for presentation.
+keeps the layer attached and configured for presentation. Metal bridge calls
+that cross Objective-C++ use explicit C ABI span/error-buffer structs rather
+than implicit NUL-terminated strings.
 
 <details>
 <summary>Typical frame shape</summary>

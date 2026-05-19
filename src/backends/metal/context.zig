@@ -42,12 +42,9 @@ pub const Context = struct {
         @memset(&error_buf, 0);
         const handle = c.hs_metal_context_create(
             host.cValue(),
-            msl_shaders.mesh.ptr,
-            msl_shaders.mesh.len,
-            msl_shaders.fragment.ptr,
-            msl_shaders.fragment.len,
-            &error_buf,
-            error_buf.len,
+            .{ .data = msl_shaders.mesh.ptr, .len = msl_shaders.mesh.len },
+            .{ .data = msl_shaders.fragment.ptr, .len = msl_shaders.fragment.len },
+            .{ .data = error_buf[0..].ptr, .len = error_buf.len },
         ) orelse {
             std.log.err("Metal init failed: {s}", .{std.mem.sliceTo(&error_buf, 0)});
             return Error.MetalInitFailed;
@@ -88,9 +85,8 @@ pub fn waitFrameSlot(ctx: Context, slot_index: u32, error_buffer: []u8) Error!vo
     if (c.hs_metal_context_wait_frame_slot(
         ctx.handle,
         slot_index,
-        error_buffer.ptr,
-        error_buffer.len,
-    ) == 0) return Error.MetalDrawFailed;
+        .{ .data = error_buffer.ptr, .len = error_buffer.len },
+    ) != c.HS_METAL_STATUS_OK) return Error.MetalDrawFailed;
 }
 
 pub fn releaseFrameSlot(ctx: Context, slot_index: u32) void {
@@ -136,9 +132,8 @@ pub fn draw(ctx: Context, info: DrawInfo, error_buffer: []u8) Error!void {
         shader_stats_handle,
         info.workgroup_count,
         info.slot_index,
-        error_buffer.ptr,
-        error_buffer.len,
-    ) == 0) return Error.MetalDrawFailed;
+        .{ .data = error_buffer.ptr, .len = error_buffer.len },
+    ) != c.HS_METAL_STATUS_OK) return Error.MetalDrawFailed;
 }
 
 pub fn resourceIndices() ResourceIndices {

@@ -60,6 +60,11 @@ implementation notes belong in commits and code review history.
   Cocoa demo host header are now translated through build-system
   `addTranslateC()` modules, leaving `bridge.h` and `cocoa.h` as the single
   source of truth for C functions, opaque handles, ABI structs, and constants.
+- **Breaking Objective-C++ C ABI cleanup:** Metal shader sources, Cocoa window
+  titles, and error destinations now cross the C ABI as explicit UTF-8 span or
+  error-buffer structs, Metal draw/wait calls return a named status enum, and
+  the Objective-C++ implementations use `std::expected` plus `char8_t`
+  internally for non-throwing failure propagation.
 - **Objective-C++ bridge code moved to C++23:** the Metal backend bridge and
   Cocoa demo host now compile as Objective-C++ C++23 and use `std::span`,
   `std::array`, `std::optional`, and RAII helpers for internal host/context

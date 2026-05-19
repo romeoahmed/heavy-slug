@@ -19,14 +19,17 @@ pub const Window = struct {
     should_close: bool = false,
 
     pub fn init(self: *Window, allocator: std.mem.Allocator, width: c_int, height: c_int, title: []const u8) !void {
+        _ = allocator;
         if (!validInitialExtent(width, height)) return error.InvalidWindowSize;
-
-        const title_z = try allocator.dupeZ(u8, title);
-        defer allocator.free(title_z);
 
         var error_buf: [2048]u8 = undefined;
         @memset(&error_buf, 0);
-        const handle = c.hs_demo_cocoa_window_create(width, height, title_z.ptr, &error_buf, error_buf.len) orelse {
+        const handle = c.hs_demo_cocoa_window_create(
+            @intCast(width),
+            @intCast(height),
+            .{ .data = title.ptr, .len = title.len },
+            .{ .data = error_buf[0..].ptr, .len = error_buf.len },
+        ) orelse {
             std.log.err("Cocoa host init failed: {s}", .{std.mem.sliceTo(&error_buf, 0)});
             return error.CocoaHostInitFailed;
         };

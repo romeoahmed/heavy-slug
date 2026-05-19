@@ -11,18 +11,31 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <expected>
 #include <limits>
 #include <memory>
 #include <new>
 #include <span>
+#include <string_view>
 #include <utility>
 
 namespace {
+
+using namespace std::string_view_literals;
 
 constexpr std::size_t kFrameSlotCount = 3;
 constexpr NSUInteger kBufferBindCount = HEAVY_SLUG_SHADER_STATS ? 5u : 4u;
 constexpr MTLRenderStages kBoundRenderStages =
     MTLRenderStageMesh | MTLRenderStageFragment;
+
+using Utf8View = std::u8string_view;
+
+struct Failure final {
+  __strong NSString *message = nil;
+};
+
+template <typename T> using Result = std::expected<T, Failure>;
+using Status = std::expected<void, Failure>;
 
 enum class BufferSlot : std::uint32_t {
   glyphPool = HS_METAL_BUFFER_GLYPH_POOL,
@@ -44,68 +57,113 @@ enum class BufferSlot : std::uint32_t {
   return MTLSize{HS_METAL_MESH_THREADGROUP_SIZE, 1, 1};
 }
 
-[[nodiscard]] std::span<char> errorSpan(char *buffer,
-                                        std::size_t length) noexcept {
-  if (buffer == nullptr || length == 0) {
-    return {};
-  }
-  return {buffer, length};
+[[nodiscard]] constexpr const char *charData(Utf8View text) noexcept {
+  return reinterpret_cast<const char *>(text.data());
 }
 
-class ErrorSink final {
+[[nodiscard]] constexpr Utf8View utf8View(const char *data,
+                                          std::size_t length) noexcept {
+  return {reinterpret_cast<const char8_t *>(data), length};
+}
+
+[[nodiscard]] NSString *makeNSString(Utf8View text) {
+  if (text.empty()) {
+    return @"";
+  }
+  return [[NSString alloc] initWithBytes:charData(text)
+                                  length:text.size()
+                                encoding:NSUTF8StringEncoding];
+}
+
+[[nodiscard]] std::unexpected<Failure> fail(NSString *message) {
+  if (!message) {
+    message = @"unknown Metal error";
+  }
+  return std::unexpected<Failure>{Failure{message}};
+}
+
+[[nodiscard]] std::unexpected<Failure> fail(Utf8View message) {
+  NSString *text = makeNSString(message);
+  if (!text) {
+    text = @"invalid UTF-8 diagnostic";
+  }
+  return fail(text);
+}
+
+[[nodiscard]] std::unexpected<Failure> fail(NSString *prefix, NSError *error) {
+  if (error && error.localizedDescription.length > 0) {
+    return fail([NSString stringWithFormat:@"%@: %@", prefix,
+                                           error.localizedDescription]);
+  }
+  return fail(prefix);
+}
+
+class ErrorBuffer final {
 public:
-  explicit ErrorSink(std::span<char> buffer) noexcept : buffer_(buffer) {
-    if (!buffer_.empty()) {
-      buffer_.front() = '\0';
+  explicit ErrorBuffer(hs_metal_error_buffer buffer) noexcept
+      : storage_(buffer.data && buffer.len > 0
+                     ? std::span<char>{buffer.data, buffer.len}
+                     : std::span<char>{}) {
+    if (!storage_.empty()) {
+      storage_.front() = '\0';
     }
   }
 
-  void write(NSString *message) const {
-    if (buffer_.empty()) {
+  void write(const Failure &failure) const {
+    if (storage_.empty()) {
       return;
     }
-    const char *text = message ? [message UTF8String] : "unknown Metal error";
-    std::snprintf(buffer_.data(), buffer_.size(), "%s", text);
-  }
 
-  void write(NSString *prefix, NSError *error) const {
-    if (error.localizedDescription.length > 0) {
-      write([NSString stringWithFormat:@"%@: %@", prefix,
-                                       error.localizedDescription]);
-      return;
+    NSString *message = failure.message;
+    if (!message) {
+      message = @"unknown Metal error";
     }
-    write(prefix);
+    const char *bytes = [message UTF8String];
+    if (!bytes) {
+      bytes = "unknown Metal error";
+    }
+    std::snprintf(storage_.data(), storage_.size(), "%s", bytes);
   }
 
 private:
-  std::span<char> buffer_;
+  std::span<char> storage_;
 };
 
 template <typename T, typename... Args>
-[[nodiscard]] std::unique_ptr<T> allocate(Args &&...args) {
+[[nodiscard]] std::unique_ptr<T> makeOwned(Args &&...args) {
   return std::unique_ptr<T>(
       new (std::nothrow) T(std::forward<Args>(args)...));
 }
 
-struct ShaderText final {
-  std::span<const char> bytes;
-  __strong NSString *label = nil;
+[[nodiscard]] hs_metal_status complete(Status result,
+                                       hs_metal_error_buffer error_buffer) {
+  if (result) {
+    return HS_METAL_STATUS_OK;
+  }
+  ErrorBuffer(error_buffer).write(result.error());
+  return HS_METAL_STATUS_ERROR;
+}
+
+struct ShaderSource final {
+  Utf8View text;
+  Utf8View label;
 };
 
-[[nodiscard]] bool loadShaderText(const char *source, std::size_t length,
-                                  NSString *label, ShaderText &out,
-                                  const ErrorSink &error) {
-  if (source == nullptr) {
-    error.write([NSString stringWithFormat:@"%@ source pointer is null", label]);
-    return false;
+[[nodiscard]] Result<ShaderSource>
+loadShaderSource(hs_metal_utf8_span source, Utf8View label) {
+  NSString *label_string = makeNSString(label);
+  if (!label_string) {
+    label_string = @"shader";
   }
-  if (length == 0) {
-    error.write([NSString stringWithFormat:@"%@ source is empty", label]);
-    return false;
+
+  if (source.data == nullptr) {
+    return fail([NSString stringWithFormat:@"%@ source pointer is null",
+                                           label_string]);
   }
-  out.bytes = std::span<const char>{source, length};
-  out.label = label;
-  return true;
+  if (source.len == 0) {
+    return fail([NSString stringWithFormat:@"%@ source is empty", label_string]);
+  }
+  return ShaderSource{utf8View(source.data, source.len), label};
 }
 
 struct HostObjects final {
@@ -116,76 +174,90 @@ struct HostObjects final {
   MTLPixelFormat colorFormat = MTLPixelFormatInvalid;
 };
 
-[[nodiscard]] bool loadHostObjects(hs_metal_host_objects host,
-                                   HostObjects &out,
-                                   const ErrorSink &error) {
+[[nodiscard]] Result<HostObjects> loadHostObjects(hs_metal_host_objects host) {
   id<MTLDevice> device = (__bridge id<MTLDevice>)host.device;
   if (!device) {
-    error.write(@"Metal context creation received a nil MTLDevice");
-    return false;
+    return fail(u8"Metal context creation received a nil MTLDevice"sv);
   }
   if (![device supportsFamily:MTLGPUFamilyMetal4]) {
-    error.write(@"heavy-slug metal4 requires a Metal 4 family GPU");
-    return false;
+    return fail(u8"heavy-slug metal4 requires a Metal 4 family GPU"sv);
   }
 
   id<MTL4CommandQueue> command_queue =
       (__bridge id<MTL4CommandQueue>)host.command_queue;
   if (!command_queue) {
-    error.write(@"Metal context creation received a nil MTL4CommandQueue");
-    return false;
+    return fail(u8"Metal context creation received a nil MTL4CommandQueue"sv);
   }
   if (command_queue.device != device) {
-    error.write(
-        @"Metal context received a command queue from a different device");
-    return false;
+    return fail(
+        u8"Metal context received a command queue from a different device"sv);
   }
 
   CAMetalLayer *layer = (__bridge CAMetalLayer *)host.layer;
   if (!layer) {
-    error.write(@"Metal context creation received a nil CAMetalLayer");
-    return false;
+    return fail(u8"Metal context creation received a nil CAMetalLayer"sv);
   }
   if (layer.device != device) {
-    error.write(@"Metal context received a CAMetalLayer from a different device");
-    return false;
+    return fail(
+        u8"Metal context received a CAMetalLayer from a different device"sv);
   }
   if (layer.pixelFormat == MTLPixelFormatInvalid) {
-    error.write(
-        @"Metal context received a CAMetalLayer with an invalid pixelFormat");
-    return false;
+    return fail(
+        u8"Metal context received a CAMetalLayer with an invalid pixelFormat"sv);
   }
   if (!layer.residencySet) {
-    error.write(@"Metal context received a CAMetalLayer without a residency set");
-    return false;
+    return fail(
+        u8"Metal context received a CAMetalLayer without a residency set"sv);
   }
 
-  out.device = device;
-  out.commandQueue = command_queue;
-  out.layer = layer;
-  out.drawableResidency = layer.residencySet;
-  out.colorFormat = layer.pixelFormat;
-  return true;
+  return HostObjects{
+      .device = device,
+      .commandQueue = command_queue,
+      .layer = layer,
+      .drawableResidency = layer.residencySet,
+      .colorFormat = layer.pixelFormat,
+  };
 }
 
-[[nodiscard]] id<MTLLibrary> makeLibrary(id<MTL4Compiler> compiler,
-                                         const ShaderText &source,
-                                         const ErrorSink &error) {
-  NSString *source_string =
-      [[NSString alloc] initWithBytes:source.bytes.data()
-                               length:source.bytes.size()
-                             encoding:NSUTF8StringEncoding];
+[[nodiscard]] Result<id<MTL4Compiler>> makeCompiler(id<MTLDevice> device) {
+  MTL4CompilerDescriptor *descriptor = [MTL4CompilerDescriptor new];
+  if (!descriptor) {
+    return fail(u8"failed to allocate MTL4CompilerDescriptor"sv);
+  }
+  descriptor.label = @"heavy-slug compiler";
+
+  NSError *compiler_error = nil;
+  id<MTL4Compiler> compiler = [device newCompilerWithDescriptor:descriptor
+                                                          error:&compiler_error];
+  if (!compiler) {
+    return fail(@"failed to create Metal compiler", compiler_error);
+  }
+  return compiler;
+}
+
+[[nodiscard]] Result<id<MTLLibrary>>
+makeLibrary(id<MTL4Compiler> compiler, const ShaderSource &source) {
+  NSString *source_string = makeNSString(source.text);
+  NSString *label = makeNSString(source.label);
+  if (!label) {
+    label = @"shader";
+  }
   if (!source_string) {
-    error.write([NSString stringWithFormat:@"failed to decode %@ as UTF-8",
-                                           source.label]);
-    return nil;
+    return fail([NSString stringWithFormat:@"failed to decode %@ as UTF-8",
+                                           label]);
   }
 
   MTLCompileOptions *options = [MTLCompileOptions new];
+  if (!options) {
+    return fail(u8"failed to allocate MTLCompileOptions"sv);
+  }
   options.languageVersion = MTLLanguageVersion4_0;
 
   MTL4LibraryDescriptor *descriptor = [MTL4LibraryDescriptor new];
-  descriptor.name = source.label;
+  if (!descriptor) {
+    return fail(u8"failed to allocate MTL4LibraryDescriptor"sv);
+  }
+  descriptor.name = label;
   descriptor.source = source_string;
   descriptor.options = options;
 
@@ -193,60 +265,57 @@ struct HostObjects final {
   id<MTLLibrary> library = [compiler newLibraryWithDescriptor:descriptor
                                                         error:&library_error];
   if (!library) {
-    error.write([NSString stringWithFormat:@"failed to compile %@",
-                                           source.label],
+    return fail([NSString stringWithFormat:@"failed to compile %@", label],
                 library_error);
-    return nil;
   }
   return library;
 }
 
-[[nodiscard]] MTL4LibraryFunctionDescriptor *
-libraryFunction(id<MTLLibrary> library, NSString *name) {
+[[nodiscard]] Result<MTL4LibraryFunctionDescriptor *>
+makeFunctionDescriptor(id<MTLLibrary> library, NSString *name) {
   MTL4LibraryFunctionDescriptor *descriptor =
       [MTL4LibraryFunctionDescriptor new];
+  if (!descriptor) {
+    return fail(u8"failed to allocate MTL4LibraryFunctionDescriptor"sv);
+  }
   descriptor.library = library;
   descriptor.name = name;
   return descriptor;
 }
 
-[[nodiscard]] id<MTL4Compiler> makeCompiler(id<MTLDevice> device,
-                                            const ErrorSink &error) {
-  MTL4CompilerDescriptor *descriptor = [MTL4CompilerDescriptor new];
-  descriptor.label = @"heavy-slug compiler";
-
-  NSError *compiler_error = nil;
-  id<MTL4Compiler> compiler = [device newCompilerWithDescriptor:descriptor
-                                                          error:&compiler_error];
-  if (!compiler) {
-    error.write(@"failed to create Metal compiler", compiler_error);
-    return nil;
-  }
-  return compiler;
-}
-
-[[nodiscard]] id<MTLRenderPipelineState>
+[[nodiscard]] Result<id<MTLRenderPipelineState>>
 makePipeline(id<MTL4Compiler> compiler, MTLPixelFormat color_format,
-             const ShaderText &mesh_source, const ShaderText &fragment_source,
-             const ErrorSink &error) {
-  id<MTLLibrary> mesh_library = makeLibrary(compiler, mesh_source, error);
+             const ShaderSource &mesh_source,
+             const ShaderSource &fragment_source) {
+  auto mesh_library = makeLibrary(compiler, mesh_source);
   if (!mesh_library) {
-    return nil;
+    return std::unexpected<Failure>{mesh_library.error()};
   }
 
-  id<MTLLibrary> fragment_library =
-      makeLibrary(compiler, fragment_source, error);
+  auto fragment_library = makeLibrary(compiler, fragment_source);
   if (!fragment_library) {
-    return nil;
+    return std::unexpected<Failure>{fragment_library.error()};
+  }
+
+  auto mesh_function = makeFunctionDescriptor(*mesh_library, @"meshMain");
+  if (!mesh_function) {
+    return std::unexpected<Failure>{mesh_function.error()};
+  }
+  auto fragment_function =
+      makeFunctionDescriptor(*fragment_library, @"fragmentMain");
+  if (!fragment_function) {
+    return std::unexpected<Failure>{fragment_function.error()};
   }
 
   MTL4MeshRenderPipelineDescriptor *descriptor =
       [MTL4MeshRenderPipelineDescriptor new];
+  if (!descriptor) {
+    return fail(u8"failed to allocate MTL4MeshRenderPipelineDescriptor"sv);
+  }
   descriptor.label = @"heavy-slug mesh pipeline";
   descriptor.objectFunctionDescriptor = nil;
-  descriptor.meshFunctionDescriptor = libraryFunction(mesh_library, @"meshMain");
-  descriptor.fragmentFunctionDescriptor =
-      libraryFunction(fragment_library, @"fragmentMain");
+  descriptor.meshFunctionDescriptor = *mesh_function;
+  descriptor.fragmentFunctionDescriptor = *fragment_function;
   descriptor.maxTotalThreadsPerObjectThreadgroup =
       HS_METAL_OBJECT_THREADGROUP_SIZE;
   descriptor.maxTotalThreadsPerMeshThreadgroup =
@@ -266,6 +335,9 @@ makePipeline(id<MTL4Compiler> compiler, MTLPixelFormat color_format,
       MTL4IndirectCommandBufferSupportStateDisabled;
 
   auto *attachment = descriptor.colorAttachments[0];
+  if (!attachment) {
+    return fail(u8"Metal pipeline descriptor returned a nil color attachment"sv);
+  }
   attachment.pixelFormat = color_format;
   attachment.blendingState = MTL4BlendStateEnabled;
   attachment.rgbBlendOperation = MTLBlendOperationAdd;
@@ -281,15 +353,17 @@ makePipeline(id<MTL4Compiler> compiler, MTLPixelFormat color_format,
                                  compilerTaskOptions:nil
                                                error:&pipeline_error];
   if (!pipeline) {
-    error.write(@"failed to create Metal mesh render pipeline", pipeline_error);
-    return nil;
+    return fail(@"failed to create Metal mesh render pipeline", pipeline_error);
   }
   return pipeline;
 }
 
-[[nodiscard]] id<MTLResidencySet> makeResidencySet(id<MTLDevice> device,
-                                                   const ErrorSink &error) {
+[[nodiscard]] Result<id<MTLResidencySet>>
+makeResidencySet(id<MTLDevice> device) {
   MTLResidencySetDescriptor *descriptor = [MTLResidencySetDescriptor new];
+  if (!descriptor) {
+    return fail(u8"failed to allocate MTLResidencySetDescriptor"sv);
+  }
   descriptor.label = @"heavy-slug resources";
   descriptor.initialCapacity = 8;
 
@@ -297,51 +371,51 @@ makePipeline(id<MTL4Compiler> compiler, MTLPixelFormat color_format,
   id<MTLResidencySet> residency =
       [device newResidencySetWithDescriptor:descriptor error:&residency_error];
   if (!residency) {
-    error.write(@"failed to create Metal residency set", residency_error);
-    return nil;
+    return fail(@"failed to create Metal residency set", residency_error);
   }
   return residency;
 }
 
-[[nodiscard]] id<MTL4ArgumentTable>
-makeArgumentTable(id<MTLDevice> device, NSUInteger slot_index,
-                  const ErrorSink &error) {
+[[nodiscard]] Result<id<MTL4ArgumentTable>>
+makeArgumentTable(id<MTLDevice> device, std::size_t slot_index) {
   MTL4ArgumentTableDescriptor *descriptor = [MTL4ArgumentTableDescriptor new];
+  if (!descriptor) {
+    return fail(u8"failed to allocate MTL4ArgumentTableDescriptor"sv);
+  }
   descriptor.maxBufferBindCount = kBufferBindCount;
   descriptor.maxTextureBindCount = 0;
   descriptor.maxSamplerStateBindCount = 0;
   descriptor.initializeBindings = YES;
   descriptor.supportAttributeStrides = NO;
   descriptor.label =
-      [NSString stringWithFormat:@"heavy-slug arguments %zu",
-                                 static_cast<std::size_t>(slot_index)];
+      [NSString stringWithFormat:@"heavy-slug arguments %zu", slot_index];
 
   NSError *argument_error = nil;
   id<MTL4ArgumentTable> table =
       [device newArgumentTableWithDescriptor:descriptor error:&argument_error];
   if (!table) {
-    error.write(@"failed to create Metal argument table", argument_error);
-    return nil;
+    return fail(@"failed to create Metal argument table", argument_error);
   }
   return table;
 }
 
-[[nodiscard]] id<MTL4CommandAllocator>
-makeCommandAllocator(id<MTLDevice> device, NSUInteger slot_index,
-                     const ErrorSink &error) {
+[[nodiscard]] Result<id<MTL4CommandAllocator>>
+makeCommandAllocator(id<MTLDevice> device, std::size_t slot_index) {
   MTL4CommandAllocatorDescriptor *descriptor =
       [MTL4CommandAllocatorDescriptor new];
+  if (!descriptor) {
+    return fail(u8"failed to allocate MTL4CommandAllocatorDescriptor"sv);
+  }
   descriptor.label =
       [NSString stringWithFormat:@"heavy-slug command allocator %zu",
-                                 static_cast<std::size_t>(slot_index)];
+                                 slot_index];
 
   NSError *allocator_error = nil;
   id<MTL4CommandAllocator> allocator =
       [device newCommandAllocatorWithDescriptor:descriptor
                                           error:&allocator_error];
   if (!allocator) {
-    error.write(@"failed to create Metal command allocator", allocator_error);
-    return nil;
+    return fail(@"failed to create Metal command allocator", allocator_error);
   }
   return allocator;
 }
@@ -360,34 +434,39 @@ struct hs_metal_frame_slot final {
   hs_metal_frame_slot(const hs_metal_frame_slot &) = delete;
   hs_metal_frame_slot &operator=(const hs_metal_frame_slot &) = delete;
 
-  [[nodiscard]] bool init(id<MTLDevice> device, NSUInteger index,
-                          const ErrorSink &error) {
+  [[nodiscard]] Status init(id<MTLDevice> device, std::size_t index) {
     semaphore = dispatch_semaphore_create(1);
     if (!semaphore) {
-      error.write(@"dispatch_semaphore_create returned nil");
-      return false;
+      return fail(u8"dispatch_semaphore_create returned nil"sv);
     }
-    allocator = makeCommandAllocator(device, index, error);
-    if (!allocator) {
-      return false;
+
+    auto new_allocator = makeCommandAllocator(device, index);
+    if (!new_allocator) {
+      return std::unexpected<Failure>{new_allocator.error()};
     }
-    arguments = makeArgumentTable(device, index, error);
-    return arguments != nil;
+    allocator = *new_allocator;
+
+    auto new_arguments = makeArgumentTable(device, index);
+    if (!new_arguments) {
+      return std::unexpected<Failure>{new_arguments.error()};
+    }
+    arguments = *new_arguments;
+    return {};
   }
 
-  [[nodiscard]] bool reserve(const ErrorSink &error) {
+  [[nodiscard]] Status reserve() {
     dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
     if (failed) {
-      error.write(failureMessage);
+      NSString *message = failureMessage;
       failed = false;
       failureMessage = nil;
       dispatch_semaphore_signal(semaphore);
-      return false;
+      return fail(message);
     }
 
     [allocator reset];
     reserved = true;
-    return true;
+    return {};
   }
 
   void releaseReservation() {
@@ -398,14 +477,14 @@ struct hs_metal_frame_slot final {
     dispatch_semaphore_signal(semaphore);
   }
 
-  void submit() {
+  void markSubmitted() {
     reserved = false;
     failed = false;
     failureMessage = nil;
   }
 
   void finish(id<MTL4CommitFeedback> feedback) {
-    NSError *feedback_error = feedback.error;
+    NSError *feedback_error = feedback ? feedback.error : nil;
     if (feedback_error) {
       failed = true;
       failureMessage = [feedback_error.localizedDescription copy];
@@ -491,56 +570,59 @@ void bindBuffer(id<MTL4ArgumentTable> table, hs_metal_buffer *buffer,
   [table setAddress:buffer->buffer.gpuAddress atIndex:tableIndex(slot)];
 }
 
-[[nodiscard]] bool bindFrameParams(id<MTL4ArgumentTable> table,
-                                   hs_metal_buffer *frame_params,
-                                   std::uint32_t chunk_index,
-                                   std::uint32_t stride,
-                                   const ErrorSink &error) {
-  const auto offset =
-      static_cast<MTLGPUAddress>(chunk_index) * static_cast<MTLGPUAddress>(stride);
-  const MTLGPUAddress address = frame_params->buffer.gpuAddress + offset;
-  if (address < frame_params->buffer.gpuAddress) {
-    error.write(@"Metal frame parameter GPU address overflowed");
-    return false;
+[[nodiscard]] Status bindFrameParams(id<MTL4ArgumentTable> table,
+                                     hs_metal_buffer *frame_params,
+                                     std::uint32_t chunk_index,
+                                     std::uint32_t stride) {
+  const auto offset = static_cast<MTLGPUAddress>(chunk_index) *
+                      static_cast<MTLGPUAddress>(stride);
+  const MTLGPUAddress base = frame_params->buffer.gpuAddress;
+  const MTLGPUAddress address = base + offset;
+  if (address < base) {
+    return fail(u8"Metal frame parameter GPU address overflowed"sv);
   }
   [table setAddress:address atIndex:tableIndex(BufferSlot::frameParams)];
-  return true;
+  return {};
 }
 
-[[nodiscard]] MTL4RenderPassDescriptor *
+[[nodiscard]] Result<MTL4RenderPassDescriptor *>
 makeRenderPass(id<CAMetalDrawable> drawable, float clear_r, float clear_g,
                float clear_b, float clear_a) {
   MTL4RenderPassDescriptor *pass = [MTL4RenderPassDescriptor new];
-  pass.colorAttachments[0].texture = drawable.texture;
-  pass.colorAttachments[0].loadAction = MTLLoadActionClear;
-  pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-  pass.colorAttachments[0].clearColor =
-      MTLClearColorMake(clear_r, clear_g, clear_b, clear_a);
+  if (!pass) {
+    return fail(u8"failed to allocate MTL4RenderPassDescriptor"sv);
+  }
+  auto *attachment = pass.colorAttachments[0];
+  if (!attachment) {
+    return fail(
+        u8"Metal render pass descriptor returned a nil color attachment"sv);
+  }
+  attachment.texture = drawable.texture;
+  attachment.loadAction = MTLLoadActionClear;
+  attachment.storeAction = MTLStoreActionStore;
+  attachment.clearColor = MTLClearColorMake(clear_r, clear_g, clear_b, clear_a);
   return pass;
 }
 
-[[nodiscard]] bool validateDrawBuffers(hs_metal_context *context,
-                                       hs_metal_buffer *glyphs,
-                                       hs_metal_buffer *meshlets,
-                                       hs_metal_buffer *frame_params,
-                                       hs_metal_buffer *glyph_pool,
-                                       hs_metal_buffer *shader_stats,
-                                       const ErrorSink &error) {
+[[nodiscard]] Status validateDrawBuffers(hs_metal_context *context,
+                                         hs_metal_buffer *glyphs,
+                                         hs_metal_buffer *meshlets,
+                                         hs_metal_buffer *frame_params,
+                                         hs_metal_buffer *glyph_pool,
+                                         hs_metal_buffer *shader_stats) {
   if (!bufferBelongsTo(context, glyphs) || !bufferBelongsTo(context, meshlets) ||
       !bufferBelongsTo(context, frame_params) ||
       !bufferBelongsTo(context, glyph_pool)) {
-    error.write(@"Metal draw received a null or foreign buffer handle");
-    return false;
+    return fail(u8"Metal draw received a null or foreign buffer handle"sv);
   }
 #if HEAVY_SLUG_SHADER_STATS
   if (!bufferBelongsTo(context, shader_stats)) {
-    error.write(@"Metal draw requires a shader-stats buffer from this context");
-    return false;
+    return fail(u8"Metal draw requires a shader-stats buffer from this context"sv);
   }
 #else
   (void)shader_stats;
 #endif
-  return true;
+  return {};
 }
 
 void waitForSubmittedWork(hs_metal_context *context) {
@@ -548,69 +630,230 @@ void waitForSubmittedWork(hs_metal_context *context) {
     return;
   }
   for (hs_metal_frame_slot &slot : context->slots) {
+    if (!slot.semaphore) {
+      continue;
+    }
     dispatch_semaphore_wait(slot.semaphore, DISPATCH_TIME_FOREVER);
     dispatch_semaphore_signal(slot.semaphore);
   }
 }
 
+[[nodiscard]] Result<std::unique_ptr<hs_metal_context>>
+makeContext(hs_metal_host_objects host, hs_metal_utf8_span mesh_source,
+            hs_metal_utf8_span fragment_source) {
+  auto host_objects = loadHostObjects(host);
+  if (!host_objects) {
+    return std::unexpected<Failure>{host_objects.error()};
+  }
+
+  auto mesh_text = loadShaderSource(mesh_source, u8"mesh shader"sv);
+  if (!mesh_text) {
+    return std::unexpected<Failure>{mesh_text.error()};
+  }
+
+  auto fragment_text =
+      loadShaderSource(fragment_source, u8"fragment shader"sv);
+  if (!fragment_text) {
+    return std::unexpected<Failure>{fragment_text.error()};
+  }
+
+  auto compiler = makeCompiler(host_objects->device);
+  if (!compiler) {
+    return std::unexpected<Failure>{compiler.error()};
+  }
+
+  auto pipeline = makePipeline(*compiler, host_objects->colorFormat, *mesh_text,
+                               *fragment_text);
+  if (!pipeline) {
+    return std::unexpected<Failure>{pipeline.error()};
+  }
+
+  auto resource_residency = makeResidencySet(host_objects->device);
+  if (!resource_residency) {
+    return std::unexpected<Failure>{resource_residency.error()};
+  }
+
+  auto context =
+      makeOwned<hs_metal_context>(*host_objects, *pipeline, *resource_residency);
+  if (!context) {
+    return fail(u8"failed to allocate Metal context"sv);
+  }
+
+  for (std::size_t index = 0; index < context->slots.size(); index += 1) {
+    auto slot_status = context->slots[index].init(host_objects->device, index);
+    if (!slot_status) {
+      return std::unexpected<Failure>{slot_status.error()};
+    }
+  }
+
+  return std::move(context);
+}
+
+[[nodiscard]] Status waitFrameSlot(hs_metal_context *context,
+                                   std::uint32_t slot_index) {
+  if (!context || !validSlotIndex(slot_index)) {
+    return fail(u8"invalid Metal frame slot"sv);
+  }
+  return slotAt(*context, slot_index).reserve();
+}
+
+[[nodiscard]] Status draw(hs_metal_context *context, std::uint32_t width,
+                          std::uint32_t height, float clear_r, float clear_g,
+                          float clear_b, float clear_a, hs_metal_buffer *glyphs,
+                          hs_metal_buffer *meshlets,
+                          hs_metal_buffer *frame_params,
+                          std::uint32_t frame_params_stride,
+                          hs_metal_buffer *glyph_pool,
+                          hs_metal_buffer *shader_stats,
+                          std::uint32_t workgroup_count,
+                          std::uint32_t slot_index) {
+  if (!context) {
+    return fail(u8"Metal draw received a null context"sv);
+  }
+
+  auto buffer_status = validateDrawBuffers(context, glyphs, meshlets,
+                                           frame_params, glyph_pool,
+                                           shader_stats);
+  if (!buffer_status) {
+    return std::unexpected<Failure>{buffer_status.error()};
+  }
+  if (!validSlotIndex(slot_index)) {
+    return fail(u8"invalid Metal frame slot"sv);
+  }
+
+  hs_metal_frame_slot &slot = slotAt(*context, slot_index);
+  if (!slot.reserved) {
+    return fail(u8"Metal draw used an unreserved frame slot"sv);
+  }
+  SlotReservation reservation(slot);
+
+  if (workgroup_count == 0) {
+    return {};
+  }
+  if (width == 0 || height == 0) {
+    return fail(u8"Metal draw requires a nonzero viewport"sv);
+  }
+  if (frame_params_stride == 0) {
+    return fail(u8"Metal draw received a zero frame parameter stride"sv);
+  }
+  if (context->layer.pixelFormat != context->colorFormat) {
+    return fail(
+        u8"CAMetalLayer pixelFormat changed after Metal pipeline creation"sv);
+  }
+
+  context->layer.drawableSize =
+      CGSizeMake(static_cast<CGFloat>(width), static_cast<CGFloat>(height));
+  id<CAMetalDrawable> drawable = [context->layer nextDrawable];
+  if (!drawable) {
+    return fail(u8"CAMetalLayer nextDrawable returned nil"sv);
+  }
+
+  auto pass = makeRenderPass(drawable, clear_r, clear_g, clear_b, clear_a);
+  if (!pass) {
+    return std::unexpected<Failure>{pass.error()};
+  }
+
+  id<MTL4CommandBuffer> command_buffer = [context->device newCommandBuffer];
+  if (!command_buffer) {
+    return fail(u8"newCommandBuffer returned nil"sv);
+  }
+  command_buffer.label = @"heavy-slug draw";
+  [command_buffer beginCommandBufferWithAllocator:slot.allocator];
+  [command_buffer useResidencySet:context->resourceResidency];
+  [command_buffer useResidencySet:context->drawableResidency];
+
+  id<MTL4RenderCommandEncoder> encoder =
+      [command_buffer renderCommandEncoderWithDescriptor:*pass];
+  if (!encoder) {
+    [command_buffer endCommandBuffer];
+    return fail(u8"renderCommandEncoderWithDescriptor returned nil"sv);
+  }
+
+  bindBuffer(slot.arguments, glyph_pool, BufferSlot::glyphPool);
+  bindBuffer(slot.arguments, glyphs, BufferSlot::glyphs);
+  bindBuffer(slot.arguments, meshlets, BufferSlot::meshlets);
+#if HEAVY_SLUG_SHADER_STATS
+  bindBuffer(slot.arguments, shader_stats, BufferSlot::shaderStats);
+#endif
+
+  [encoder setViewport:MTLViewport{0.0, 0.0, static_cast<double>(width),
+                                   static_cast<double>(height), 0.0, 1.0}];
+  [encoder setScissorRect:MTLScissorRect{0, 0, width, height}];
+  [encoder setCullMode:MTLCullModeNone];
+  [encoder setFrontFacingWinding:MTLWindingCounterClockwise];
+  [encoder setTriangleFillMode:MTLTriangleFillModeFill];
+  [encoder setDepthClipMode:MTLDepthClipModeClip];
+  [encoder setDepthStencilState:nil];
+  [encoder setRenderPipelineState:context->pipeline];
+
+  std::uint32_t meshlet_base = 0;
+  std::uint32_t chunk_index = 0;
+  while (meshlet_base < workgroup_count) {
+    const std::uint32_t chunk_count =
+        std::min(workgroup_count - meshlet_base,
+                 static_cast<std::uint32_t>(
+                     HS_METAL_MAX_MESH_THREADGROUPS_PER_DRAW));
+
+    auto bind_status =
+        bindFrameParams(slot.arguments, frame_params, chunk_index,
+                        frame_params_stride);
+    if (!bind_status) {
+      [encoder endEncoding];
+      [command_buffer endCommandBuffer];
+      return std::unexpected<Failure>{bind_status.error()};
+    }
+
+    [encoder setArgumentTable:slot.arguments atStages:kBoundRenderStages];
+    [encoder drawMeshThreadgroups:MTLSize{chunk_count, 1, 1}
+        threadsPerObjectThreadgroup:noObjectThreads()
+          threadsPerMeshThreadgroup:meshThreads()];
+    meshlet_base += chunk_count;
+    chunk_index += 1;
+  }
+
+  [encoder endEncoding];
+  [command_buffer endCommandBuffer];
+
+  MTL4CommitOptions *commit_options = [MTL4CommitOptions new];
+  if (!commit_options) {
+    return fail(u8"failed to allocate MTL4CommitOptions"sv);
+  }
+
+  hs_metal_frame_slot *submitted_slot = &slot;
+  [commit_options addFeedbackHandler:^(id<MTL4CommitFeedback> feedback) {
+    @autoreleasepool {
+      submitted_slot->finish(feedback);
+    }
+  }];
+
+  slot.markSubmitted();
+  reservation.disarm();
+
+  std::array<id<MTL4CommandBuffer>, 1> command_buffers{command_buffer};
+  [context->commandQueue waitForDrawable:drawable];
+  [context->commandQueue commit:command_buffers.data()
+                          count:static_cast<NSUInteger>(command_buffers.size())
+                        options:commit_options];
+  [context->commandQueue signalDrawable:drawable];
+  [drawable present];
+  return {};
+}
+
 } // namespace
 
 hs_metal_context *
-hs_metal_context_create(hs_metal_host_objects host, const char *mesh_source,
-                        size_t mesh_source_len, const char *fragment_source,
-                        size_t fragment_source_len, char *error_buffer,
-                        size_t error_buffer_len) {
+hs_metal_context_create(hs_metal_host_objects host,
+                        hs_metal_utf8_span mesh_source,
+                        hs_metal_utf8_span fragment_source,
+                        hs_metal_error_buffer error_buffer) {
   @autoreleasepool {
-    const ErrorSink error(errorSpan(error_buffer, error_buffer_len));
-
-    HostObjects host_objects;
-    if (!loadHostObjects(host, host_objects, error)) {
-      return nullptr;
-    }
-
-    ShaderText mesh_text;
-    if (!loadShaderText(mesh_source, mesh_source_len, @"mesh shader", mesh_text,
-                        error)) {
-      return nullptr;
-    }
-    ShaderText fragment_text;
-    if (!loadShaderText(fragment_source, fragment_source_len, @"fragment shader",
-                        fragment_text, error)) {
-      return nullptr;
-    }
-
-    id<MTL4Compiler> compiler = makeCompiler(host_objects.device, error);
-    if (!compiler) {
-      return nullptr;
-    }
-
-    id<MTLRenderPipelineState> pipeline =
-        makePipeline(compiler, host_objects.colorFormat, mesh_text, fragment_text,
-                     error);
-    if (!pipeline) {
-      return nullptr;
-    }
-
-    id<MTLResidencySet> resource_residency =
-        makeResidencySet(host_objects.device, error);
-    if (!resource_residency) {
-      return nullptr;
-    }
-
-    auto context = allocate<hs_metal_context>(host_objects, pipeline,
-                                              resource_residency);
+    ErrorBuffer error(error_buffer);
+    auto context = makeContext(host, mesh_source, fragment_source);
     if (!context) {
-      error.write(@"failed to allocate Metal context");
+      error.write(context.error());
       return nullptr;
     }
-
-    for (NSUInteger index = 0; index < context->slots.size(); index += 1) {
-      if (!context->slots[index].init(host_objects.device, index, error)) {
-        return nullptr;
-      }
-    }
-
-    return context.release();
+    return context->release();
   }
 }
 
@@ -622,15 +865,11 @@ void hs_metal_context_destroy(hs_metal_context *context) {
   waitForSubmittedWork(owned.get());
 }
 
-int hs_metal_context_wait_frame_slot(hs_metal_context *context,
-                                     uint32_t slot_index, char *error_buffer,
-                                     size_t error_buffer_len) {
-  const ErrorSink error(errorSpan(error_buffer, error_buffer_len));
-  if (!context || !validSlotIndex(slot_index)) {
-    error.write(@"invalid Metal frame slot");
-    return 0;
-  }
-  return slotAt(*context, slot_index).reserve(error) ? 1 : 0;
+hs_metal_status
+hs_metal_context_wait_frame_slot(hs_metal_context *context,
+                                 uint32_t slot_index,
+                                 hs_metal_error_buffer error_buffer) {
+  return complete(waitFrameSlot(context, slot_index), error_buffer);
 }
 
 void hs_metal_context_release_frame_slot(hs_metal_context *context,
@@ -660,7 +899,7 @@ hs_metal_buffer *hs_metal_buffer_create(hs_metal_context *context, size_t size) 
     }
     buffer.label = @"heavy-slug buffer";
 
-    auto wrapper = allocate<hs_metal_buffer>(context, buffer);
+    auto wrapper = makeOwned<hs_metal_buffer>(context, buffer);
     if (!wrapper) {
       return nullptr;
     }
@@ -680,7 +919,7 @@ void hs_metal_buffer_destroy(hs_metal_buffer *buffer) {
 }
 
 void *hs_metal_buffer_contents(hs_metal_buffer *buffer) {
-  if (!buffer) {
+  if (!buffer || !buffer->buffer) {
     return nullptr;
   }
   return [buffer->buffer contents];
@@ -704,142 +943,18 @@ hs_metal_geometry_limits hs_metal_get_geometry_limits(void) {
   };
 }
 
-int hs_metal_context_draw(hs_metal_context *context, uint32_t width,
-                          uint32_t height, float clear_r, float clear_g,
-                          float clear_b, float clear_a, hs_metal_buffer *glyphs,
-                          hs_metal_buffer *meshlets,
-                          hs_metal_buffer *frame_params,
-                          uint32_t frame_params_stride,
-                          hs_metal_buffer *glyph_pool,
-                          hs_metal_buffer *shader_stats,
-                          uint32_t workgroup_count, uint32_t slot_index,
-                          char *error_buffer, size_t error_buffer_len) {
+hs_metal_status hs_metal_context_draw(
+    hs_metal_context *context, uint32_t width, uint32_t height, float clear_r,
+    float clear_g, float clear_b, float clear_a, hs_metal_buffer *glyphs,
+    hs_metal_buffer *meshlets, hs_metal_buffer *frame_params,
+    uint32_t frame_params_stride, hs_metal_buffer *glyph_pool,
+    hs_metal_buffer *shader_stats, uint32_t workgroup_count,
+    uint32_t slot_index, hs_metal_error_buffer error_buffer) {
   @autoreleasepool {
-    const ErrorSink error(errorSpan(error_buffer, error_buffer_len));
-    if (!context) {
-      error.write(@"Metal draw received a null context");
-      return 0;
-    }
-    if (!validateDrawBuffers(context, glyphs, meshlets, frame_params, glyph_pool,
-                             shader_stats, error)) {
-      return 0;
-    }
-    if (!validSlotIndex(slot_index)) {
-      error.write(@"invalid Metal frame slot");
-      return 0;
-    }
-
-    hs_metal_frame_slot &slot = slotAt(*context, slot_index);
-    if (!slot.reserved) {
-      error.write(@"Metal draw used an unreserved frame slot");
-      return 0;
-    }
-    SlotReservation reservation(slot);
-
-    if (workgroup_count == 0) {
-      return 1;
-    }
-    if (width == 0 || height == 0) {
-      error.write(@"Metal draw requires a nonzero viewport");
-      return 0;
-    }
-    if (frame_params_stride == 0) {
-      error.write(@"Metal draw received a zero frame parameter stride");
-      return 0;
-    }
-    if (context->layer.pixelFormat != context->colorFormat) {
-      error.write(
-          @"CAMetalLayer pixelFormat changed after Metal pipeline creation");
-      return 0;
-    }
-
-    context->layer.drawableSize =
-        CGSizeMake(static_cast<CGFloat>(width), static_cast<CGFloat>(height));
-    id<CAMetalDrawable> drawable = [context->layer nextDrawable];
-    if (!drawable) {
-      error.write(@"CAMetalLayer nextDrawable returned nil");
-      return 0;
-    }
-
-    MTL4RenderPassDescriptor *pass =
-        makeRenderPass(drawable, clear_r, clear_g, clear_b, clear_a);
-    id<MTL4CommandBuffer> command_buffer = [context->device newCommandBuffer];
-    if (!command_buffer) {
-      error.write(@"newCommandBuffer returned nil");
-      return 0;
-    }
-    command_buffer.label = @"heavy-slug draw";
-    [command_buffer beginCommandBufferWithAllocator:slot.allocator];
-    [command_buffer useResidencySet:context->resourceResidency];
-    [command_buffer useResidencySet:context->drawableResidency];
-
-    id<MTL4RenderCommandEncoder> encoder =
-        [command_buffer renderCommandEncoderWithDescriptor:pass];
-    if (!encoder) {
-      error.write(@"renderCommandEncoderWithDescriptor returned nil");
-      [command_buffer endCommandBuffer];
-      return 0;
-    }
-
-    bindBuffer(slot.arguments, glyph_pool, BufferSlot::glyphPool);
-    bindBuffer(slot.arguments, glyphs, BufferSlot::glyphs);
-    bindBuffer(slot.arguments, meshlets, BufferSlot::meshlets);
-#if HEAVY_SLUG_SHADER_STATS
-    bindBuffer(slot.arguments, shader_stats, BufferSlot::shaderStats);
-#endif
-
-    [encoder setViewport:MTLViewport{0.0, 0.0, static_cast<double>(width),
-                                     static_cast<double>(height), 0.0, 1.0}];
-    [encoder setScissorRect:MTLScissorRect{0, 0, width, height}];
-    [encoder setCullMode:MTLCullModeNone];
-    [encoder setFrontFacingWinding:MTLWindingCounterClockwise];
-    [encoder setTriangleFillMode:MTLTriangleFillModeFill];
-    [encoder setDepthClipMode:MTLDepthClipModeClip];
-    [encoder setDepthStencilState:nil];
-    [encoder setRenderPipelineState:context->pipeline];
-
-    std::uint32_t meshlet_base = 0;
-    std::uint32_t chunk_index = 0;
-    while (meshlet_base < workgroup_count) {
-      const std::uint32_t chunk_count =
-          std::min(workgroup_count - meshlet_base,
-                   static_cast<std::uint32_t>(
-                       HS_METAL_MAX_MESH_THREADGROUPS_PER_DRAW));
-      if (!bindFrameParams(slot.arguments, frame_params, chunk_index,
-                           frame_params_stride, error)) {
-        [encoder endEncoding];
-        [command_buffer endCommandBuffer];
-        return 0;
-      }
-      [encoder setArgumentTable:slot.arguments atStages:kBoundRenderStages];
-      [encoder drawMeshThreadgroups:MTLSize{chunk_count, 1, 1}
-          threadsPerObjectThreadgroup:noObjectThreads()
-            threadsPerMeshThreadgroup:meshThreads()];
-      meshlet_base += chunk_count;
-      chunk_index += 1;
-    }
-
-    [encoder endEncoding];
-    [command_buffer endCommandBuffer];
-
-    MTL4CommitOptions *commit_options = [MTL4CommitOptions new];
-    hs_metal_frame_slot *submitted_slot = &slot;
-    [commit_options addFeedbackHandler:^(id<MTL4CommitFeedback> feedback) {
-      @autoreleasepool {
-        submitted_slot->finish(feedback);
-      }
-    }];
-
-    slot.submit();
-    reservation.disarm();
-
-    std::array<id<MTL4CommandBuffer>, 1> command_buffers{command_buffer};
-    [context->commandQueue waitForDrawable:drawable];
-    [context->commandQueue commit:command_buffers.data()
-                            count:command_buffers.size()
-                          options:commit_options];
-    [context->commandQueue signalDrawable:drawable];
-    [drawable present];
-    return 1;
+    return complete(draw(context, width, height, clear_r, clear_g, clear_b,
+                         clear_a, glyphs, meshlets, frame_params,
+                         frame_params_stride, glyph_pool, shader_stats,
+                         workgroup_count, slot_index),
+                    error_buffer);
   }
 }

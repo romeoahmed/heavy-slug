@@ -38,6 +38,16 @@ enum {
 
 typedef struct hs_demo_cocoa_window hs_demo_cocoa_window;
 
+typedef struct hs_demo_cocoa_utf8_span {
+  const char *data;
+  size_t len;
+} hs_demo_cocoa_utf8_span;
+
+typedef struct hs_demo_cocoa_error_buffer {
+  char *data;
+  size_t len;
+} hs_demo_cocoa_error_buffer;
+
 typedef struct hs_demo_cocoa_snapshot {
   bool keys[HS_DEMO_KEY_COUNT];
   bool mouse_buttons[HS_DEMO_MOUSE_COUNT];
@@ -49,10 +59,10 @@ typedef struct hs_demo_cocoa_snapshot {
   bool should_close;
 } hs_demo_cocoa_snapshot;
 
-hs_demo_cocoa_window *hs_demo_cocoa_window_create(int width, int height,
-                                                  const char *title,
-                                                  char *error_buffer,
-                                                  size_t error_buffer_len);
+hs_demo_cocoa_window *
+hs_demo_cocoa_window_create(uint32_t width, uint32_t height,
+                            hs_demo_cocoa_utf8_span title,
+                            hs_demo_cocoa_error_buffer error_buffer);
 
 void hs_demo_cocoa_window_destroy(hs_demo_cocoa_window *host);
 void hs_demo_cocoa_window_poll_events(hs_demo_cocoa_window *host);
