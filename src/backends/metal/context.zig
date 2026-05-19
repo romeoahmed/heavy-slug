@@ -1,8 +1,12 @@
 //! Zig-facing Metal 4 bridge context and host-owned object contract.
 
 const std = @import("std");
+const heavy_slug = @import("heavy_slug");
 const msl_shaders = @import("msl_shaders");
 const backend_options = @import("heavy_slug_backend_options");
+
+const mesh_limits = heavy_slug.gpu.mesh_limits;
+const resource_model = heavy_slug.gpu.resource_model;
 
 const ContextHandle = opaque {};
 const BufferHandle = opaque {};
@@ -31,13 +35,13 @@ pub const GeometryLimits = struct {
 };
 
 pub const frame_slot_count: usize = 3;
-pub const buffer_glyph_pool: u32 = 0;
-pub const buffer_glyphs: u32 = 1;
-pub const buffer_meshlets: u32 = 2;
-pub const buffer_shader_stats: u32 = 3;
-pub const buffer_frame_params: u32 = if (backend_options.shader_stats) 4 else 3;
+pub const buffer_glyph_pool: u32 = @intFromEnum(resource_model.BufferBinding.glyph_pool);
+pub const buffer_glyphs: u32 = @intFromEnum(resource_model.BufferBinding.glyphs);
+pub const buffer_meshlets: u32 = @intFromEnum(resource_model.BufferBinding.meshlets);
+pub const buffer_shader_stats: u32 = @intFromEnum(resource_model.BufferBinding.shader_stats);
+pub const buffer_frame_params: u32 = resource_model.frameParamsBinding(backend_options.shader_stats);
 pub const object_threadgroup_size: u32 = 0;
-pub const mesh_threadgroup_size: u32 = 32;
+pub const mesh_threadgroup_size: u32 = mesh_limits.mesh_thread_count;
 pub const max_mesh_threadgroups_per_draw: u32 = 1024;
 
 extern fn hs_metal_context_create(

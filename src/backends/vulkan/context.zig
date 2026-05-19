@@ -6,7 +6,8 @@ const heavy_slug = @import("heavy_slug");
 const chains = @import("chains.zig");
 
 const mesh_limits = heavy_slug.gpu.mesh_limits;
-const required_push_descriptors: u32 = 4;
+const resource_model = heavy_slug.gpu.resource_model;
+const required_push_descriptors: u32 = resource_model.max_descriptor_binding_count;
 
 /// Device extensions that callers must enable on the VkDevice.
 const required_extensions = [_][*:0]const u8{
@@ -42,7 +43,15 @@ pub fn validateMeshShaderLimits(props: vk.PhysicalDeviceMeshShaderPropertiesEXT)
         props.max_mesh_output_primitives < mesh_limits.mesh_output_primitives or
         props.max_mesh_output_components < mesh_limits.mesh_output_components_per_vertex or
         props.max_mesh_shared_memory_size < mesh_limits.mesh_shared_bytes or
-        props.max_mesh_payload_and_shared_memory_size < mesh_limits.mesh_payload_and_shared_bytes)
+        props.max_mesh_payload_and_shared_memory_size < mesh_limits.mesh_payload_and_shared_bytes or
+        props.max_mesh_output_memory_size < mesh_limits.outputMemoryBytes(
+            props.mesh_output_per_vertex_granularity,
+            props.mesh_output_per_primitive_granularity,
+        ) or
+        props.max_mesh_payload_and_output_memory_size < mesh_limits.payloadAndOutputMemoryBytes(
+            props.mesh_output_per_vertex_granularity,
+            props.mesh_output_per_primitive_granularity,
+        ))
     {
         return FeatureError.MeshShaderLimitsNotSupported;
     }
@@ -315,6 +324,10 @@ fn supportedMeshProps() vk.PhysicalDeviceMeshShaderPropertiesEXT {
     props.max_mesh_output_primitives = mesh_limits.mesh_output_primitives;
     props.max_mesh_output_components = mesh_limits.mesh_output_components_per_vertex;
     props.max_mesh_payload_and_shared_memory_size = mesh_limits.mesh_payload_and_shared_bytes;
+    props.mesh_output_per_vertex_granularity = 1;
+    props.mesh_output_per_primitive_granularity = 1;
+    props.max_mesh_output_memory_size = mesh_limits.outputMemoryBytes(1, 1);
+    props.max_mesh_payload_and_output_memory_size = mesh_limits.payloadAndOutputMemoryBytes(1, 1);
     return props;
 }
 
@@ -365,6 +378,13 @@ test "validateDeviceProperties requires Vulkan 1.4 and mesh shader budgets" {
     try std.testing.expectError(
         FeatureError.MeshShaderLimitsNotSupported,
         validateDeviceProperties(vk.API_VERSION_1_4.toU32(), low_shared, supportedVulkan14Props()),
+    );
+
+    var low_output_memory = supportedMeshProps();
+    low_output_memory.max_mesh_output_memory_size = mesh_limits.outputMemoryBytes(1, 1) - 1;
+    try std.testing.expectError(
+        FeatureError.MeshShaderLimitsNotSupported,
+        validateDeviceProperties(vk.API_VERSION_1_4.toU32(), low_output_memory, supportedVulkan14Props()),
     );
 }
 

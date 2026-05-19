@@ -412,13 +412,6 @@ pub const RendererCore = struct {
                     .blob_ref = cached_glyph.blob_ref.value,
                     .flags = flags,
                     .precision_bits = cached_glyph.precision_bits,
-                    .chart_flags = 0,
-                    .local_bounds_q = .{
-                        cached_glyph.bounds_q.x_min,
-                        cached_glyph.bounds_q.y_min,
-                        cached_glyph.bounds_q.x_max,
-                        cached_glyph.bounds_q.y_max,
-                    },
                     .glyph_anchor_q = glyph_anchor_q,
                     .screen_anchor_px = screen_anchor_px,
                     .screen_from_local_2x2 = screen_from_local_2x2,
@@ -638,13 +631,10 @@ fn appendGlyphMeshlets(
 
         const meshlet: GlyphMeshlet = .{
             .glyph_index = glyph_index,
-            .band_start = band_start,
-            .band_end = band_end,
             .rect_min_q = rect_min_q,
             .rect_max_q = rect_max_q,
             .mesh_anchor_q = mesh_anchor_q,
             .screen_anchor_px = mesh_screen_anchor_px,
-            .local_from_screen_2x2 = glyph.local_from_screen_2x2,
         };
         try batch.appendMeshlet(meshlet);
     }
@@ -860,8 +850,6 @@ const TestGlyphInstance = extern struct {
     blob_ref: u32,
     flags: u32,
     precision_bits: u32,
-    chart_flags: u32,
-    local_bounds_q: [4]i32,
     glyph_anchor_q: [2]i32,
     screen_anchor_px: [2]f32,
     screen_from_local_2x2: [4]f32,
@@ -870,14 +858,11 @@ const TestGlyphInstance = extern struct {
 
 const TestGlyphMeshlet = extern struct {
     glyph_index: u32,
-    band_start: u32,
-    band_end: u32,
     _pad0: u32 = 0,
     rect_min_q: [2]i32,
     rect_max_q: [2]i32,
     mesh_anchor_q: [2]i32,
     screen_anchor_px: [2]f32,
-    local_from_screen_2x2: [4]f32,
 };
 
 test "render: viewport local bounds invert screen corners without double translation" {
@@ -991,10 +976,8 @@ test "render: RendererCore appends shaped glyph instances and caches blobs" {
     try std.testing.expect(backend.next_ref > 0);
     try std.testing.expect(glyphs[0].blob_ref != GlyphBlobRef.empty.value);
     try std.testing.expect(glyphs[0].precision_bits >= blob_format.min_fraction_bits);
-    try std.testing.expect(glyphs[0].local_bounds_q[2] > glyphs[0].local_bounds_q[0]);
     try std.testing.expect(std.math.isFinite(glyphs[0].screen_anchor_px[0]));
     try std.testing.expect(meshlets[0].glyph_index < batch.glyphCount());
-    try std.testing.expect(meshlets[0].band_end > meshlets[0].band_start);
     try std.testing.expect(meshlets[0].rect_max_q[0] > meshlets[0].rect_min_q[0]);
     try std.testing.expect(meshlets[0].rect_max_q[1] > meshlets[0].rect_min_q[1]);
     try std.testing.expect(std.math.isFinite(meshlets[0].screen_anchor_px[0]));

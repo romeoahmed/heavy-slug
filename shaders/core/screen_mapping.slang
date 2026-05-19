@@ -45,7 +45,7 @@ public float2 framebufferToScreenYUp(float2 framebuffer, FrameParams params)
         params.screen_from_framebuffer_offset;
 }
 
-public LocalFrame localFrameFromScreenYUp(float2 screen, int2 meshAnchorQ, float2 screenAnchorPx, float4 localFromScreen)
+public LocalFrame localFrameFromScreenYUp(float2 screen, float2 screenAnchorPx, float4 localFromScreen)
 {
     float2 d = screen - screenAnchorPx;
     LocalFrame frame;

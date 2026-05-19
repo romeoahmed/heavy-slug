@@ -258,7 +258,7 @@ TextRun
 | Cubic encoding | Lines, quadratics, and cubics share one tiered fixed-point GPU representation. |
 | Cache | Glyph blobs are reused through a backend-owned byte pool. |
 | CPU meshlet stream | Visible glyphs are expanded into bounded h-band strips before submission. |
-| GPU culling | Mesh shaders still reject clipped or degenerate strips conservatively. |
+| GPU culling | Mesh shaders emit one clipped triangle fan per meshlet and reject degenerate strips conservatively. |
 | Fragment coverage | Coverage is integrated analytically from the encoded curves. |
 
 ## Backend Notes
@@ -292,7 +292,9 @@ model for this renderer.
 Shader sources use explicit Slang 2026 modules. `build/shaders.zig` compiles
 source-declared entry points to SPIR-V 1.6 for Vulkan and Metal Shading
 Language for Metal. GPU ABI structs are generated from Slang reflection by
-`tools/layout_gen.zig`.
+`tools/layout_gen.zig`; the hot ABI keeps glyph-wide chart transforms in
+`GlyphInstance` and per-strip bounds/anchors in `GlyphMeshlet` to avoid
+duplicating matrices across meshlets.
 
 <details>
 <summary>Shader output paths</summary>
@@ -328,7 +330,7 @@ Backend debug counters are exposed through `Renderer.stats()` in Debug builds.
 | --- | --- |
 | `src/root.zig` | Public core module. |
 | `src/core/` | Types, fonts, outlines, blob encoding, cache, renderer core. |
-| `src/gpu/` | Backend-neutral GPU ABI markers, mesh limits, shader stats. |
+| `src/gpu/` | Backend-neutral GPU ABI provenance, mesh shader budgets, resource bindings, shader stats. |
 | `src/backends/vulkan/` | Vulkan backend. |
 | `src/backends/metal/` | Metal backend and Swift bridge. |
 | `demo/` | Demo entry points, native platform hosts, shared scene/input code. |
@@ -349,7 +351,7 @@ Backend debug counters are exposed through `Renderer.stats()` in Debug builds.
 | Blob ABI | `CoverageBlob` v3 is an explicit 32-bit word stream, not a serialized Zig struct; CPU decode validates the header, curve table, and CSR h-band candidate index before upload. |
 | Blob precision | Glyph blobs are 32-bit fixed-point and keyed by precision tier. Unsupported precision tiers are rejected before outline regularization. |
 | Blob references | `GlyphBlobRef` values are byte offsets. |
-| GPU ABI | Layouts are generated from Slang reflection. |
+| GPU ABI | Layouts are generated from Slang reflection; `src/gpu` owns the mesh output budget, resource binding table, and counter ABI names. |
 | C bindings | C declarations are translated by the build graph, not by source-level `@cImport`. |
 
 `RendererCore` is the shared spine behind both backends: it loads fonts, shapes

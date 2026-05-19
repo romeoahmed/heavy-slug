@@ -10,8 +10,6 @@ public struct GlyphInstance
     public uint   blob_ref;
     public uint   flags;
     public uint   precision_bits;
-    public uint   chart_flags;
-    public int4   local_bounds_q;
     public int2   glyph_anchor_q;
     public float2 screen_anchor_px;
     public float4 screen_from_local_2x2;
@@ -21,14 +19,11 @@ public struct GlyphInstance
 public struct GlyphMeshlet
 {
     public uint   glyph_index;
-    public uint   band_start;
-    public uint   band_end;
     public uint   _pad0;
     public int2   rect_min_q;
     public int2   rect_max_q;
     public int2   mesh_anchor_q;
     public float2 screen_anchor_px;
-    public float4 local_from_screen_2x2;
 };
 
 public struct FrameParams

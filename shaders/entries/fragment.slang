@@ -299,7 +299,7 @@ float4 fragmentMain(FragmentInput input) : SV_Target
     blob.base = glyph.blob_ref;
 
     float2 screen = framebufferToScreenYUp(input.position.xy, pc);
-    LocalFrame frame = localFrameFromScreenYUp(screen, meshlet.mesh_anchor_q, meshlet.screen_anchor_px, meshlet.local_from_screen_2x2);
+    LocalFrame frame = localFrameFromScreenYUp(screen, meshlet.screen_anchor_px, glyph.local_from_screen_2x2);
     float coverage = slugRender(blob, frame, meshlet.mesh_anchor_q, glyph.flags);
     return glyph.color * coverage;
 }

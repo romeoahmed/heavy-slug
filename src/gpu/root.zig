@@ -7,6 +7,7 @@ pub const shader_stats = @import("shader_stats.zig");
 
 pub const MeshLimits = mesh_limits;
 pub const ResourceModel = resource_model.ResourceModel;
+pub const BufferBinding = resource_model.BufferBinding;
 pub const ShaderStats = shader_stats.Stats;
 
 test {

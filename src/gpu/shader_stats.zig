@@ -2,36 +2,39 @@
 
 const std = @import("std");
 
-/// Number of u32 counters exposed by the shader ABI.
-pub const counter_count: usize = 24;
-
-/// Counter order must match `shaders/core/stats.slang`.
 pub const CounterIndex = enum(u32) {
     fragment_invocations = 0,
-    candidate_path_fragments = 1,
-    full_scan_fragments = 2,
-    candidate_curve_tests = 3,
-    full_scan_curve_tests = 4,
-    empty_fragments = 5,
-    submitted_glyphs = 6,
-    submitted_meshlets = 7,
-    draw_chunks = 8,
-    frame_submissions = 9,
-    mesh_workgroups = 10,
-    candidate_curve_bbox_rejects = 11,
-    full_scan_curve_bbox_rejects = 12,
-    candidate_curve_integrations = 13,
-    full_scan_curve_integrations = 14,
-    bbox_empty_fragments = 15,
-    coverage_zero_fragments = 16,
-    meshlets_emitted = 17,
-    meshlets_culled = 18,
-    meshlet_cull_empty_slices = 19,
-    meshlet_cull_invalid_strips = 20,
-    meshlet_cull_zero_area = 21,
-    meshlet_cull_clip_empty = 22,
-    meshlet_cull_non_finite = 23,
+    candidate_path_fragments,
+    full_scan_fragments,
+    candidate_curve_tests,
+    full_scan_curve_tests,
+    empty_fragments,
+    submitted_glyphs,
+    submitted_meshlets,
+    draw_chunks,
+    frame_submissions,
+    mesh_workgroups,
+    candidate_curve_bbox_rejects,
+    full_scan_curve_bbox_rejects,
+    candidate_curve_integrations,
+    full_scan_curve_integrations,
+    bbox_empty_fragments,
+    coverage_zero_fragments,
+    meshlets_emitted,
+    meshlets_culled,
+    meshlet_cull_empty_slices,
+    meshlet_cull_invalid_strips,
+    meshlet_cull_zero_area,
+    meshlet_cull_clip_empty,
+    meshlet_cull_non_finite,
 };
+
+pub const counter_count: usize = @typeInfo(CounterIndex).@"enum".fields.len;
+pub const CounterBuffer = [counter_count]u32;
+
+fn counter(counters: *const CounterBuffer, index: CounterIndex) u32 {
+    return counters[@intFromEnum(index)];
+}
 
 pub const MeshletCull = struct {
     empty_slices: u32 = 0,
@@ -82,30 +85,30 @@ pub const Stats = extern struct {
 
     pub fn fromCounters(counters: *const [counter_count]u32) Stats {
         return .{
-            .fragment_invocations = counters[@intFromEnum(CounterIndex.fragment_invocations)],
-            .candidate_path_fragments = counters[@intFromEnum(CounterIndex.candidate_path_fragments)],
-            .full_scan_fragments = counters[@intFromEnum(CounterIndex.full_scan_fragments)],
-            .candidate_curve_tests = counters[@intFromEnum(CounterIndex.candidate_curve_tests)],
-            .full_scan_curve_tests = counters[@intFromEnum(CounterIndex.full_scan_curve_tests)],
-            .empty_fragments = counters[@intFromEnum(CounterIndex.empty_fragments)],
-            .submitted_glyphs = counters[@intFromEnum(CounterIndex.submitted_glyphs)],
-            .submitted_meshlets = counters[@intFromEnum(CounterIndex.submitted_meshlets)],
-            .draw_chunks = counters[@intFromEnum(CounterIndex.draw_chunks)],
-            .frame_submissions = counters[@intFromEnum(CounterIndex.frame_submissions)],
-            .mesh_workgroups = counters[@intFromEnum(CounterIndex.mesh_workgroups)],
-            .candidate_curve_bbox_rejects = counters[@intFromEnum(CounterIndex.candidate_curve_bbox_rejects)],
-            .full_scan_curve_bbox_rejects = counters[@intFromEnum(CounterIndex.full_scan_curve_bbox_rejects)],
-            .candidate_curve_integrations = counters[@intFromEnum(CounterIndex.candidate_curve_integrations)],
-            .full_scan_curve_integrations = counters[@intFromEnum(CounterIndex.full_scan_curve_integrations)],
-            .bbox_empty_fragments = counters[@intFromEnum(CounterIndex.bbox_empty_fragments)],
-            .coverage_zero_fragments = counters[@intFromEnum(CounterIndex.coverage_zero_fragments)],
-            .meshlets_emitted = counters[@intFromEnum(CounterIndex.meshlets_emitted)],
-            .meshlets_culled = counters[@intFromEnum(CounterIndex.meshlets_culled)],
-            .meshlet_cull_empty_slices = counters[@intFromEnum(CounterIndex.meshlet_cull_empty_slices)],
-            .meshlet_cull_invalid_strips = counters[@intFromEnum(CounterIndex.meshlet_cull_invalid_strips)],
-            .meshlet_cull_zero_area = counters[@intFromEnum(CounterIndex.meshlet_cull_zero_area)],
-            .meshlet_cull_clip_empty = counters[@intFromEnum(CounterIndex.meshlet_cull_clip_empty)],
-            .meshlet_cull_non_finite = counters[@intFromEnum(CounterIndex.meshlet_cull_non_finite)],
+            .fragment_invocations = counter(counters, .fragment_invocations),
+            .candidate_path_fragments = counter(counters, .candidate_path_fragments),
+            .full_scan_fragments = counter(counters, .full_scan_fragments),
+            .candidate_curve_tests = counter(counters, .candidate_curve_tests),
+            .full_scan_curve_tests = counter(counters, .full_scan_curve_tests),
+            .empty_fragments = counter(counters, .empty_fragments),
+            .submitted_glyphs = counter(counters, .submitted_glyphs),
+            .submitted_meshlets = counter(counters, .submitted_meshlets),
+            .draw_chunks = counter(counters, .draw_chunks),
+            .frame_submissions = counter(counters, .frame_submissions),
+            .mesh_workgroups = counter(counters, .mesh_workgroups),
+            .candidate_curve_bbox_rejects = counter(counters, .candidate_curve_bbox_rejects),
+            .full_scan_curve_bbox_rejects = counter(counters, .full_scan_curve_bbox_rejects),
+            .candidate_curve_integrations = counter(counters, .candidate_curve_integrations),
+            .full_scan_curve_integrations = counter(counters, .full_scan_curve_integrations),
+            .bbox_empty_fragments = counter(counters, .bbox_empty_fragments),
+            .coverage_zero_fragments = counter(counters, .coverage_zero_fragments),
+            .meshlets_emitted = counter(counters, .meshlets_emitted),
+            .meshlets_culled = counter(counters, .meshlets_culled),
+            .meshlet_cull_empty_slices = counter(counters, .meshlet_cull_empty_slices),
+            .meshlet_cull_invalid_strips = counter(counters, .meshlet_cull_invalid_strips),
+            .meshlet_cull_zero_area = counter(counters, .meshlet_cull_zero_area),
+            .meshlet_cull_clip_empty = counter(counters, .meshlet_cull_clip_empty),
+            .meshlet_cull_non_finite = counter(counters, .meshlet_cull_non_finite),
         };
     }
 
@@ -191,9 +194,45 @@ fn perMille(numerator: u32, denominator: u32) u32 {
     return @intCast((@as(u64, numerator) * 1000) / denominator);
 }
 
+fn slangConstantName(comptime index: CounterIndex) []const u8 {
+    return switch (index) {
+        .fragment_invocations => "kShaderStatFragmentInvocations",
+        .candidate_path_fragments => "kShaderStatCandidatePathFragments",
+        .full_scan_fragments => "kShaderStatFullScanFragments",
+        .candidate_curve_tests => "kShaderStatCandidateCurveTests",
+        .full_scan_curve_tests => "kShaderStatFullScanCurveTests",
+        .empty_fragments => "kShaderStatEmptyFragments",
+        .submitted_glyphs => "kShaderStatSubmittedGlyphs",
+        .submitted_meshlets => "kShaderStatSubmittedMeshlets",
+        .draw_chunks => "kShaderStatDrawChunks",
+        .frame_submissions => "kShaderStatFrameSubmissions",
+        .mesh_workgroups => "kShaderStatMeshWorkgroups",
+        .candidate_curve_bbox_rejects => "kShaderStatCandidateCurveBboxRejects",
+        .full_scan_curve_bbox_rejects => "kShaderStatFullScanCurveBboxRejects",
+        .candidate_curve_integrations => "kShaderStatCandidateCurveIntegrations",
+        .full_scan_curve_integrations => "kShaderStatFullScanCurveIntegrations",
+        .bbox_empty_fragments => "kShaderStatBboxEmptyFragments",
+        .coverage_zero_fragments => "kShaderStatCoverageZeroFragments",
+        .meshlets_emitted => "kShaderStatMeshletsEmitted",
+        .meshlets_culled => "kShaderStatMeshletsCulled",
+        .meshlet_cull_empty_slices => "kShaderStatMeshletCullEmptySlices",
+        .meshlet_cull_invalid_strips => "kShaderStatMeshletCullInvalidStrips",
+        .meshlet_cull_zero_area => "kShaderStatMeshletCullZeroArea",
+        .meshlet_cull_clip_empty => "kShaderStatMeshletCullClipEmpty",
+        .meshlet_cull_non_finite => "kShaderStatMeshletCullNonFinite",
+    };
+}
+
 test "shader stats counter ABI is a packed u32 array" {
     try std.testing.expectEqual(@as(usize, counter_count * @sizeOf(u32)), @sizeOf(Stats));
     try std.testing.expectEqual(@as(u32, 23), @intFromEnum(CounterIndex.meshlet_cull_non_finite));
+}
+
+test "shader stats counter names document the Slang ABI constants" {
+    inline for (@typeInfo(CounterIndex).@"enum".fields) |field| {
+        const index: CounterIndex = @enumFromInt(field.value);
+        try std.testing.expect(std.mem.startsWith(u8, slangConstantName(index), "kShaderStat"));
+    }
 }
 
 test "shader stats maps submitted glyph and meshlet counters" {

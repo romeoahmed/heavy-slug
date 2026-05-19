@@ -12,6 +12,13 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **GPU ABI and mesh budget tightened:** `GlyphInstance` and `GlyphMeshlet`
+  now carry only shader-read hot-path fields, per-meshlet records no longer
+  duplicate glyph inverse matrices or CPU-only band indices, `src/gpu` now owns
+  explicit mesh output/shared-memory budgets and resource binding indices, and
+  Vulkan device validation now checks mesh output-memory limits in addition to
+  workgroup, output count, component, shared-memory, and push-descriptor
+  limits.
 - **Coverage blob ABI rewritten:** glyph coverage blobs now use an explicit
   v3 32-bit word layout instead of serializing Zig struct memory, CPU decoding
   validates header invariants, curve bounds, contiguous CSR h-band tables, and
