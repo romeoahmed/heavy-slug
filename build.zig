@@ -10,7 +10,132 @@ const swift = @import("build/swift.zig");
 
 pub fn build(b: *std.Build) void {
     const opts = deps.resolve(b);
+    const lazy_deps = deps.resolveLazy(b, opts);
+    if (!lazy_deps.complete) return;
 
+    const core = buildCore(b, opts);
+    b.installArtifact(core.library);
+
+    var shader_cache = ShaderCache{
+        .b = b,
+        .shader_stats = opts.shader_stats,
+    };
+    const spirv_step = b.step("spirv", "Compile Slang shaders to SPIR-V 1.6");
+    shaders.installSpirv(b, spirv_step, shader_cache.spirv());
+
+    const msl_step = b.step("msl", "Compile Slang shaders to Metal Shading Language");
+    shaders.installMsl(b, msl_step, shader_cache.msl());
+
+    const swift_format_step = b.step("swift-format-lint", "Lint Swift sources with swift-format");
+    swift.addFormatLintStep(b, swift_format_step);
+
+    const gpu_structs_mod = if (opts.needsGpuStructs())
+        shader_cache.gpuStructs()
+    else
+        null;
+    const swift_toolchain = if (opts.metal) swift.resolveToolchain(b, opts.target) else null;
+
+    const test_step = b.step("test", "Run tests");
+    addModuleTest(b, test_step, "heavy_slug", core.module);
+    addBuildHelperTests(b, test_step);
+    addToolTests(b, test_step);
+
+    const vulkan_backend = if (opts.vulkan)
+        backends.buildVulkan(
+            b,
+            opts.target,
+            core.module,
+            lazy_deps.vulkan.?,
+            shader_cache.spirv(),
+            gpu_structs_mod.?,
+            opts.shader_stats,
+        )
+    else
+        null;
+    if (vulkan_backend) |backend| {
+        addModuleTest(b, test_step, "heavy_slug_vulkan", backend.module);
+    }
+
+    const metal_backend = if (opts.metal)
+        backends.buildMetal(
+            b,
+            opts.target,
+            opts.optimize,
+            core.module,
+            swift_toolchain.?,
+            shader_cache.msl(),
+            gpu_structs_mod.?,
+            opts.shader_stats,
+        )
+    else
+        null;
+    if (metal_backend) |backend| {
+        addModuleTest(b, test_step, "heavy_slug_metal", backend.module);
+    }
+
+    if (opts.demo) {
+        const exe = switch (opts.demo_backend.?) {
+            .vulkan => demos.buildVulkan(
+                b,
+                opts.target,
+                opts.optimize,
+                core.module,
+                vulkan_backend.?,
+                lazy_deps.wayland_protocols,
+                opts.thin_lto,
+            ),
+            .metal => demos.buildMetal(
+                b,
+                opts.target,
+                opts.optimize,
+                core.module,
+                metal_backend.?,
+                swift_toolchain.?,
+                opts.thin_lto,
+            ),
+        };
+
+        b.installArtifact(exe);
+        addDemoRunStep(b, exe);
+        addModuleTest(b, test_step, "heavy_slug_demo", exe.root_module);
+    }
+}
+
+const CoreBuild = struct {
+    module: *std.Build.Module,
+    library: *std.Build.Step.Compile,
+};
+
+const ShaderCache = struct {
+    b: *std.Build,
+    shader_stats: bool,
+    spirv_bundle: ?shaders.SpirvBundle = null,
+    msl_bundle: ?shaders.MslBundle = null,
+    gpu_structs_mod: ?*std.Build.Module = null,
+
+    fn spirv(self: *ShaderCache) shaders.SpirvBundle {
+        if (self.spirv_bundle == null) {
+            self.spirv_bundle = shaders.compileSpirv(self.b, self.shader_stats);
+        }
+        return self.spirv_bundle.?;
+    }
+
+    fn msl(self: *ShaderCache) shaders.MslBundle {
+        if (self.msl_bundle == null) {
+            self.msl_bundle = shaders.compileMsl(self.b, self.shader_stats);
+        }
+        return self.msl_bundle.?;
+    }
+
+    fn gpuStructs(self: *ShaderCache) *std.Build.Module {
+        if (self.gpu_structs_mod == null) {
+            self.gpu_structs_mod = shaders.buildGpuStructsModule(self.b);
+        }
+        return self.gpu_structs_mod.?;
+    }
+};
+
+fn buildCore(b: *std.Build, opts: deps.BuildOptions) CoreBuild {
     const core_mod = b.addModule("heavy_slug", .{
         .root_source_file = b.path("src/root.zig"),
         .target = opts.target,
@@ -31,69 +156,11 @@ pub fn build(b: *std.Build) void {
         .root_module = core_mod,
     });
     deps.enableThinLtoAll(opts.thin_lto, &.{ ft_lib, hb_lib, core_lib });
-    b.installArtifact(core_lib);
 
-    const spirv_step = b.step("spirv", "Compile Slang shaders to SPIR-V 1.6");
-    const spirv_shaders = shaders.compileSpirv(b, opts.shader_stats);
-    shaders.installSpirv(b, spirv_step, spirv_shaders);
-
-    const msl_step = b.step("msl", "Compile Slang shaders to Metal Shading Language");
-    const msl_shaders = shaders.compileMsl(b, opts.shader_stats);
-    shaders.installMsl(b, msl_step, msl_shaders);
-
-    const swift_format_step = b.step("swift-format-lint", "Lint Swift sources with swift-format");
-    swift.addFormatLintStep(b, swift_format_step);
-
-    const gpu_structs_mod = if (opts.vulkan or opts.metal)
-        shaders.buildGpuStructsModule(b)
-    else
-        null;
-
-    const test_step = b.step("test", "Run tests");
-    addModuleTest(b, test_step, "heavy_slug", core_mod);
-    addBuildHelperTests(b, test_step);
-    addToolTests(b, test_step);
-
-    const vulkan_backend = if (opts.vulkan)
-        backends.buildVulkan(b, opts.target, core_mod, spirv_shaders, gpu_structs_mod.?, opts.shader_stats) orelse return
-    else
-        null;
-    if (vulkan_backend) |backend| {
-        addModuleTest(b, test_step, "heavy_slug_vulkan", backend.module);
-    }
-
-    const metal_backend = if (opts.metal)
-        backends.buildMetal(b, opts.target, opts.optimize, core_mod, msl_shaders, gpu_structs_mod.?, opts.shader_stats)
-    else
-        null;
-    if (metal_backend) |backend| {
-        addModuleTest(b, test_step, "heavy_slug_metal", backend.module);
-    }
-
-    if (opts.demo) {
-        const exe = switch (opts.demo_backend.?) {
-            .vulkan => demos.buildVulkan(
-                b,
-                opts.target,
-                opts.optimize,
-                core_mod,
-                vulkan_backend.?,
-                opts.thin_lto,
-            ) orelse return,
-            .metal => demos.buildMetal(
-                b,
-                opts.target,
-                opts.optimize,
-                core_mod,
-                metal_backend.?,
-                opts.thin_lto,
-            ) orelse return,
-        };
-
-        b.installArtifact(exe);
-        addDemoRunStep(b, exe);
-        addModuleTest(b, test_step, "heavy_slug_demo", exe.root_module);
-    }
+    return .{
+        .module = core_mod,
+        .library = core_lib,
+    };
 }
 
 fn addModuleTest(
@@ -106,7 +173,9 @@ fn addModuleTest(
         .name = name,
         .root_module = module,
     });
-    test_step.dependOn(&b.addRunArtifact(tests).step);
+    const run = b.addRunArtifact(tests);
+    run.skip_foreign_checks = isForeignTarget(b, tests);
+    test_step.dependOn(&run.step);
 }
 
 fn addBuildHelperTests(b: *std.Build, test_step: *std.Build.Step) void {
@@ -139,4 +208,12 @@ fn addDemoRunStep(b: *std.Build, exe: *std.Build.Step.Compile) void {
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
+}
+
+fn isForeignTarget(b: *std.Build, artifact: *std.Build.Step.Compile) bool {
+    const target = artifact.rootModuleTarget();
+    const host = b.graph.host.result;
+    return target.os.tag != host.os.tag or
+        target.cpu.arch != host.cpu.arch or
+        target.abi != host.abi;
 }

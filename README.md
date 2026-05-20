@@ -149,8 +149,15 @@ Important dependency facts:
   Metal, Wayland, Cocoa, or a window toolkit.
 - Vulkan and Vulkan Headers stay lazy; they are fetched only when the Vulkan
   backend or Vulkan demo is requested.
+- Backend lazy dependencies are resolved before backend modules are wired, so
+  Vulkan Headers, `vulkan-zig`, and Linux demo Wayland protocol XML are all
+  discovered in the same Zig configure pass when a Vulkan Wayland demo build is
+  requested.
 - `-Ddemo-backend=` is interpreted only when `-Ddemo=true`; backend-only builds
   use `-Dvulkan=true` or `-Dmetal=true`.
+- Test run steps execute native binaries and skip execution for foreign
+  targets after compilation succeeds, matching Zig's `Run.skip_foreign_checks`
+  model for cross-target build validation.
 - Metal/Cocoa bridge code is Swift. Swift `@c` exports use only pointers,
   integer sizes, scalar values, explicit out parameters, and
   protocol-versioned raw request/response blocks for larger calls, so Zig
@@ -168,7 +175,9 @@ Important dependency facts:
   Swift `6.3` or newer compiler, `-swift-version 6`, an explicit macOS SDK,
   and an explicit Apple Swift target triple derived from the Zig target. The
   Zig optimize mode maps to `-Onone`, `-O`, or `-Osize`, and Swift module
-  caches are emitted under the Zig build cache. Swift sources are linted with
+  caches are emitted under the Zig build cache. The selected Swift toolchain is
+  resolved once per Metal build graph and then passed explicitly to bridge and
+  demo object steps. Swift sources are linted with
   `zig build swift-format-lint`, which runs `swift format lint --strict`
   through `xcrun --sdk macosx`.
 - Internal bridge failures are represented without exceptions and mapped back

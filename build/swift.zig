@@ -5,13 +5,13 @@ const std = @import("std");
 pub const ObjectOptions = struct {
     name: []const u8,
     source: std.Build.LazyPath,
-    target: std.Build.ResolvedTarget,
+    toolchain: Toolchain,
     optimize: std.builtin.OptimizeMode,
     extra_flags: []const []const u8 = &.{},
 };
 
 pub const RuntimeOptions = struct {
-    target: std.Build.ResolvedTarget,
+    toolchain: Toolchain,
     optimize: std.builtin.OptimizeMode,
     swiftui: bool = false,
 };
@@ -24,7 +24,8 @@ const swift_format_sources = [_][]const u8{
     "demo/platform/cocoa.swift",
 };
 
-const Toolchain = struct {
+pub const Toolchain = struct {
+    target_triple: []const u8,
     swiftc_path: []const u8,
     sdk_path: []const u8,
     runtime_library_paths: []const []const u8,
@@ -40,9 +41,7 @@ const SwiftTargetPaths = struct {
 };
 
 pub fn addObject(b: *std.Build, options: ObjectOptions) std.Build.LazyPath {
-    const target_triple = swiftTargetTriple(b, options.target.result);
-    const toolchain = resolveToolchain(b, target_triple);
-    const cmd = addSwiftcCommand(b);
+    const cmd = addSwiftcCommand(b, options.toolchain);
     cmd.setName(b.fmt("swiftc {s}", .{options.name}));
     cmd.addArgs(&.{
         "-parse-as-library",
@@ -50,9 +49,9 @@ pub fn addObject(b: *std.Build, options: ObjectOptions) std.Build.LazyPath {
         "-swift-version",
         swift_language_version,
         "-target",
-        target_triple,
+        options.toolchain.target_triple,
         "-sdk",
-        toolchain.sdk_path,
+        options.toolchain.sdk_path,
         "-module-name",
         options.name,
         "-module-cache-path",
@@ -85,8 +84,7 @@ pub fn addFormatLintStep(b: *std.Build, step: *std.Build.Step) void {
 }
 
 pub fn linkRuntime(b: *std.Build, module: *std.Build.Module, options: RuntimeOptions) void {
-    const target_triple = swiftTargetTriple(b, options.target.result);
-    addRuntimeLibraryPaths(b, module, resolveToolchain(b, target_triple));
+    addRuntimeLibraryPaths(b, module, options.toolchain);
 
     for (swift_libraries) |library| {
         module.linkSystemLibrary(library, .{});
@@ -161,16 +159,12 @@ fn macosVersionString(b: *std.Build, version: std.SemanticVersion) []const u8 {
     return b.fmt("{d}.{d}.{d}", .{ version.major, version.minor, version.patch });
 }
 
-fn addSwiftcCommand(b: *std.Build) *std.Build.Step.Run {
-    return b.addSystemCommand(&.{
-        "xcrun",
-        "--sdk",
-        macos_sdk,
-        "swiftc",
-    });
+fn addSwiftcCommand(b: *std.Build, toolchain: Toolchain) *std.Build.Step.Run {
+    return b.addSystemCommand(&.{toolchain.swiftc_path});
 }
 
-fn resolveToolchain(b: *std.Build, target_triple: []const u8) Toolchain {
+pub fn resolveToolchain(b: *std.Build, target: std.Build.ResolvedTarget) Toolchain {
+    const target_triple = swiftTargetTriple(b, target.result);
     const swiftc_path = trimCommandOutput(b.run(&.{ "xcrun", "--sdk", macos_sdk, "--find", "swiftc" }));
     const sdk_path = trimCommandOutput(b.run(&.{ "xcrun", "--sdk", macos_sdk, "--show-sdk-path" }));
     const target_info = parseSwiftTargetInfo(b, b.run(&.{
@@ -196,6 +190,7 @@ fn resolveToolchain(b: *std.Build, target_triple: []const u8) Toolchain {
     }
 
     return .{
+        .target_triple = target_triple,
         .swiftc_path = swiftc_path,
         .sdk_path = sdk_path,
         .runtime_library_paths = target_info.paths.runtimeLibraryPaths,

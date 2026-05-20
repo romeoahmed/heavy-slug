@@ -1,6 +1,7 @@
 //! Optional backend module wiring for Vulkan and Metal.
 
 const std = @import("std");
+const deps = @import("deps.zig");
 const shaders = @import("shaders.zig");
 const swift = @import("swift.zig");
 
@@ -18,16 +19,13 @@ pub fn buildVulkan(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     core_mod: *std.Build.Module,
+    packages: deps.VulkanDeps,
     spirv: shaders.SpirvBundle,
     gpu_structs_mod: *std.Build.Module,
     shader_stats: bool,
-) ?VulkanBackend {
-    const vk_headers = b.lazyDependency("vulkan_headers", .{});
-    const vk_dep = b.lazyDependency("vulkan", .{});
-    if (vk_headers == null or vk_dep == null) return null;
-
-    const registry = vk_headers.?.path("registry/vk.xml");
-    const vk_gen = vk_dep.?.artifact("vulkan-zig-generator");
+) VulkanBackend {
+    const registry = packages.headers.path("registry/vk.xml");
+    const vk_gen = packages.generator.artifact("vulkan-zig-generator");
     const vk_generate_cmd = b.addRunArtifact(vk_gen);
     vk_generate_cmd.addFileArg(registry);
     const vulkan_zig = b.createModule(.{
@@ -49,7 +47,7 @@ pub fn buildVulkan(
     return .{
         .module = mod,
         .bindings = vulkan_zig,
-        .headers = vk_headers.?,
+        .headers = packages.headers,
     };
 }
 
@@ -58,12 +56,13 @@ pub fn buildMetal(
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     core_mod: *std.Build.Module,
+    toolchain: swift.Toolchain,
     msl: shaders.MslBundle,
     gpu_structs_mod: *std.Build.Module,
     shader_stats: bool,
 ) MetalBackend {
     if (target.result.os.tag != .macos) {
-        @panic("the Swift Metal backend requires a macOS target");
+        std.process.fatal("the Swift Metal backend requires a macOS target", .{});
     }
 
     const mod = b.addModule("heavy_slug_metal", .{
@@ -79,11 +78,14 @@ pub fn buildMetal(
     mod.addObjectFile(swift.addObject(b, .{
         .name = "HeavySlugMetalBridge",
         .source = b.path("src/backends/metal/bridge.swift"),
-        .target = target,
         .optimize = optimize,
+        .toolchain = toolchain,
         .extra_flags = if (shader_stats) &.{"-DHEAVY_SLUG_SHADER_STATS"} else &.{},
     }));
-    swift.linkRuntime(b, mod, .{ .target = target, .optimize = optimize });
+    swift.linkRuntime(b, mod, .{
+        .toolchain = toolchain,
+        .optimize = optimize,
+    });
 
     return .{ .module = mod };
 }

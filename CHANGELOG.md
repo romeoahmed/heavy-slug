@@ -12,6 +12,13 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Zig build graph rewritten:** build options now expose explicit derived
+  backend/demo needs, lazy Vulkan and Wayland packages are resolved before
+  backend module wiring, shader artifacts are cached inside the configure graph
+  instead of rebuilt per consumer, Metal builds resolve the selected Swift
+  toolchain once and pass it explicitly to Swift object/runtime steps, and
+  test run steps now skip foreign-target execution after successful
+  compilation while native tests still execute normally.
 - **Windows demo native-user path tightened:** the Vulkan Windows demo now
   treats Windows 11 as the baseline, resolves `win32u.dll` through
   `ntdll.LdrLoadDll`, requires direct `NtUserDestroyWindow`,

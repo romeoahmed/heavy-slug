@@ -17,6 +17,17 @@ pub const ThinLtoRequest = enum {
     off,
 };
 
+pub const VulkanDeps = struct {
+    generator: *std.Build.Dependency,
+    headers: *std.Build.Dependency,
+};
+
+pub const LazyDeps = struct {
+    vulkan: ?VulkanDeps = null,
+    wayland_protocols: ?*std.Build.Dependency = null,
+    complete: bool = true,
+};
+
 pub const BuildOptions = struct {
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
@@ -26,6 +37,15 @@ pub const BuildOptions = struct {
     metal: bool,
     thin_lto: bool,
     shader_stats: bool,
+
+    pub fn needsGpuStructs(self: BuildOptions) bool {
+        return self.vulkan or self.metal;
+    }
+
+    pub fn needsWaylandProtocols(self: BuildOptions) bool {
+        const backend = self.demo_backend orelse return false;
+        return backend == .vulkan and self.target.result.os.tag == .linux;
+    }
 };
 
 pub fn resolve(b: *std.Build) BuildOptions {
@@ -55,6 +75,36 @@ pub fn resolve(b: *std.Build) BuildOptions {
         .thin_lto = thinLtoEnabled(optimize, target.result, thin_lto_request),
         .shader_stats = shader_stats,
     };
+}
+
+pub fn resolveLazy(b: *std.Build, options: BuildOptions) LazyDeps {
+    var result: LazyDeps = .{};
+
+    if (options.vulkan) {
+        const vulkan_headers = b.lazyDependency("vulkan_headers", .{});
+        const vulkan = b.lazyDependency("vulkan", .{});
+        if (vulkan_headers) |headers| {
+            if (vulkan) |generator| {
+                result.vulkan = .{
+                    .generator = generator,
+                    .headers = headers,
+                };
+            } else {
+                result.complete = false;
+            }
+        } else {
+            result.complete = false;
+        }
+    }
+
+    if (options.needsWaylandProtocols()) {
+        result.wayland_protocols = b.lazyDependency("wayland_protocols_src", .{}) orelse {
+            result.complete = false;
+            return result;
+        };
+    }
+
+    return result;
 }
 
 fn selectDemoBackend(
@@ -124,6 +174,36 @@ pub fn enableThinLtoAll(enabled: bool, compile_steps: []const *std.Build.Step.Co
 test "enabledDemoBackend ignores demo-backend unless demo is enabled" {
     try std.testing.expectEqual(@as(?DemoBackend, null), enabledDemoBackend(.linux, false, .metal));
     try std.testing.expectEqual(DemoBackend.vulkan, enabledDemoBackend(.linux, true, .auto).?);
+}
+
+test "BuildOptions: derived build needs are explicit" {
+    var target = @import("builtin").target;
+    target.os.tag = .linux;
+    var options = BuildOptions{
+        .target = .{
+            .query = .{},
+            .result = target,
+        },
+        .optimize = .Debug,
+        .demo = false,
+        .demo_backend = null,
+        .vulkan = false,
+        .metal = false,
+        .thin_lto = false,
+        .shader_stats = false,
+    };
+
+    try std.testing.expect(!options.needsGpuStructs());
+    try std.testing.expect(!options.needsWaylandProtocols());
+
+    options.vulkan = true;
+    options.demo = true;
+    options.demo_backend = .vulkan;
+    try std.testing.expect(options.needsGpuStructs());
+    try std.testing.expect(options.needsWaylandProtocols());
+
+    options.target.result.os.tag = .windows;
+    try std.testing.expect(!options.needsWaylandProtocols());
 }
 
 test "selectDemoBackend maps supported requests" {

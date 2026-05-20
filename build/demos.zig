@@ -60,8 +60,9 @@ pub fn buildVulkan(
     optimize: std.builtin.OptimizeMode,
     core_mod: *std.Build.Module,
     backend: backends.VulkanBackend,
+    wayland_protocols_src: ?*std.Build.Dependency,
     thin_lto: bool,
-) ?*std.Build.Step.Compile {
+) *std.Build.Step.Compile {
     const exe = b.addExecutable(.{
         .name = "heavy_slug_demo",
         .root_module = b.createModule(.{
@@ -78,7 +79,15 @@ pub fn buildVulkan(
 
     const demo_input = buildDemoInputModule(b, target, optimize);
     const demo_scene = buildDemoSceneModule(b, target, optimize, core_mod, demo_input);
-    const demo_platform = buildVulkanPlatformModule(b, target, optimize, backend.bindings, demo_input, exe) orelse return null;
+    const demo_platform = buildVulkanPlatformModule(
+        b,
+        target,
+        optimize,
+        backend.bindings,
+        demo_input,
+        wayland_protocols_src,
+        exe,
+    );
 
     exe.root_module.addImport("demo_scene", demo_scene);
     exe.root_module.addImport("demo_platform", demo_platform);
@@ -93,10 +102,11 @@ pub fn buildMetal(
     optimize: std.builtin.OptimizeMode,
     core_mod: *std.Build.Module,
     backend: backends.MetalBackend,
+    toolchain: swift.Toolchain,
     thin_lto: bool,
-) ?*std.Build.Step.Compile {
+) *std.Build.Step.Compile {
     if (target.result.os.tag != .macos) {
-        @panic("the Swift Metal demo host requires a macOS target");
+        std.process.fatal("the Swift Metal demo host requires a macOS target", .{});
     }
 
     const exe = b.addExecutable(.{
@@ -129,10 +139,14 @@ pub fn buildMetal(
     exe.root_module.addObjectFile(swift.addObject(b, .{
         .name = "HeavySlugDemoCocoa",
         .source = b.path("demo/platform/cocoa.swift"),
-        .target = target,
         .optimize = optimize,
+        .toolchain = toolchain,
     }));
-    swift.linkRuntime(b, exe.root_module, .{ .target = target, .optimize = optimize, .swiftui = true });
+    swift.linkRuntime(b, exe.root_module, .{
+        .toolchain = toolchain,
+        .optimize = optimize,
+        .swiftui = true,
+    });
 
     deps.enableThinLtoAll(thin_lto, &.{exe});
     return exe;
@@ -174,8 +188,9 @@ fn buildVulkanPlatformModule(
     optimize: std.builtin.OptimizeMode,
     vulkan_mod: *std.Build.Module,
     demo_input: *std.Build.Module,
+    wayland_protocols_src: ?*std.Build.Dependency,
     exe: *std.Build.Step.Compile,
-) ?*std.Build.Module {
+) *std.Build.Module {
     return switch (target.result.os.tag) {
         .windows => blk: {
             exe.root_module.linkSystemLibrary("ntdll", .{});
@@ -192,8 +207,11 @@ fn buildVulkanPlatformModule(
             });
         },
         .linux => blk: {
-            const wayland_protocols_src = b.lazyDependency("wayland_protocols_src", .{}) orelse return null;
-            const generated_protocols = generateWaylandProtocols(b, wayland_protocols_src);
+            const protocols_src = wayland_protocols_src orelse std.process.fatal(
+                "Linux Vulkan demo requires the lazy wayland_protocols_src package",
+                .{},
+            );
+            const generated_protocols = generateWaylandProtocols(b, protocols_src);
             const wayland_c = translateWaylandC(b, target, optimize, generated_protocols);
             exe.root_module.link_libc = true;
             exe.root_module.linkSystemLibrary("wayland-client", .{});
@@ -214,7 +232,7 @@ fn buildVulkanPlatformModule(
                 },
             });
         },
-        else => @panic("Vulkan demo platform is supported only on Windows and Linux"),
+        else => std.process.fatal("Vulkan demo platform is supported only on Windows and Linux", .{}),
     };
 }
 
