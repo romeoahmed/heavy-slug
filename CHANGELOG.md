@@ -22,7 +22,9 @@ implementation notes belong in commits and code review history.
   capabilities, falls back to core `wl_surface.preferred_buffer_scale` for
   integer scaling, derives Wayland/xdg/input constants from translated C
   headers, and repaints a simplified Adwaita-like headerbar close button only
-  when window state, scale, dark mode, or hover state changes.
+  when window state, scale, dark mode, or hover state changes. The custom
+  headerbar now also owns and paints the xdg toplevel title while clipping it
+  away from the window controls.
 - **Slang reflection layout generator rewritten:** `tools/layout_gen.zig` now
   requires the build graph to pass explicit GPU ABI struct names, validates
   reflected identifiers and byte ranges before emission, preserves reflected

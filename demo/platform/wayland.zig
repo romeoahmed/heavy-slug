@@ -33,6 +33,15 @@ const csd = struct {
         const margin: f64 = 6;
     };
 
+    const title = struct {
+        const margin: f64 = 16;
+        const gap_to_controls: f64 = 12;
+        const glyph_width: i32 = 5;
+        const glyph_height: i32 = 7;
+        const glyph_spacing: i32 = 1;
+        const pixel_size: f64 = 2;
+    };
+
     const color = struct {
         const transparent: u32 = 0x00000000;
 
@@ -354,9 +363,9 @@ const ScaleState = struct {
         return @intCast(@min(scaled, std.math.maxInt(u32)));
     }
 
-    fn setFractional(self: *ScaleState, numerator: u32) bool {
-        if (numerator == 0 or self.fractional_numerator == numerator) return false;
-        self.fractional_numerator = numerator;
+    fn setFractional(self: *ScaleState, scale_numerator: u32) bool {
+        if (scale_numerator == 0 or self.fractional_numerator == scale_numerator) return false;
+        self.fractional_numerator = scale_numerator;
         return true;
     }
 
@@ -742,8 +751,13 @@ const DecorationPart = struct {
         const button_left = roundPositiveToI32(button.x * scale);
         const button_top = roundPositiveToI32(button.y * scale);
         const button_extent = @max(roundPositiveToI32(button.size * scale), 1);
+        if (window.title) |title| {
+            if (titleTextLayout(self.buffer_width, self.buffer_height, button_left, scale, title)) |layout| {
+                paintTitleText(pixels, width, title, layout, colors.foreground);
+            }
+        }
         if (window.close_button_hover and window.toplevel_state.activated) {
-            self.paintRoundButton(pixels, width, button_left, button_top, button_extent, colors.close_hover);
+            self.paintRoundButton(pixels, width, button_left, button_top, button_extent, colors.button_hover);
         }
 
         const icon_extent = @max(roundPositiveToI32(csd.close.icon_size * scale), 1);
@@ -765,7 +779,7 @@ const DecorationPart = struct {
                 const dy = y - icon_top;
                 const max = icon_extent - 1;
                 const on_x = @abs(dx - dy) <= diagonal_thickness or @abs(dx + dy - max) <= diagonal_thickness;
-                if (on_x) pixels[uy * width + ux] = colors.close_glyph;
+                if (on_x) pixels[uy * width + ux] = colors.foreground;
             }
         }
     }
@@ -865,8 +879,8 @@ const DecorationPart = struct {
 const DecorationColors = struct {
     titlebar: u32,
     border: u32,
-    close_glyph: u32,
-    close_hover: u32,
+    foreground: u32,
+    button_hover: u32,
 };
 
 fn decorationColors(dark: bool, active: bool) DecorationColors {
@@ -874,15 +888,15 @@ fn decorationColors(dark: bool, active: bool) DecorationColors {
         .{
             .titlebar = if (active) csd.color.dark.headerbar_bg else csd.color.dark.headerbar_backdrop,
             .border = csd.color.dark.headerbar_shade,
-            .close_glyph = if (active) csd.color.dark.headerbar_fg else csd.color.dark.headerbar_backdrop_fg,
-            .close_hover = csd.color.dark.button_hover,
+            .foreground = if (active) csd.color.dark.headerbar_fg else csd.color.dark.headerbar_backdrop_fg,
+            .button_hover = csd.color.dark.button_hover,
         }
     else
         .{
             .titlebar = if (active) csd.color.light.headerbar_bg else csd.color.light.headerbar_backdrop,
             .border = csd.color.light.headerbar_shade,
-            .close_glyph = if (active) csd.color.light.headerbar_fg else csd.color.light.headerbar_backdrop_fg,
-            .close_hover = csd.color.light.button_hover,
+            .foreground = if (active) csd.color.light.headerbar_fg else csd.color.light.headerbar_backdrop_fg,
+            .button_hover = csd.color.light.button_hover,
         };
 }
 
@@ -892,6 +906,13 @@ const CloseButtonRect = struct {
     size: f64,
 };
 
+const TitleTextLayout = struct {
+    left: i32,
+    top: i32,
+    right: i32,
+    glyph_px: i32,
+};
+
 fn closeButtonRect(width: i32, height: i32) CloseButtonRect {
     const content_height = @as(f64, @floatFromInt(@max(height, 1)));
     const size = @min(csd.close.button_size, @max(content_height - 8, csd.close.icon_size));
@@ -899,6 +920,181 @@ fn closeButtonRect(width: i32, height: i32) CloseButtonRect {
         .x = @as(f64, @floatFromInt(width)) - csd.close.margin - size,
         .y = (content_height - size) * 0.5,
         .size = size,
+    };
+}
+
+fn titleTextLayout(width: i32, height: i32, close_button_left: i32, scale: f64, title: []const u8) ?TitleTextLayout {
+    if (width <= 0 or height <= 0 or title.len == 0) return null;
+
+    const glyph_px = @max(roundPositiveToI32(csd.title.pixel_size * scale), 1);
+    const text_width = titleTextPixelWidth(title, glyph_px);
+    if (text_width <= 0) return null;
+
+    const left_bound = @min(roundPositiveToI32(csd.title.margin * scale), width);
+    const right_bound = @max(@min(close_button_left - roundPositiveToI32(csd.title.gap_to_controls * scale), width), 0);
+    const available_width = right_bound - left_bound;
+    if (available_width <= 0) return null;
+
+    const fitted_width = @min(text_width, available_width);
+    const centered_left = @divTrunc(width - text_width, 2);
+    const left = clampI32(centered_left, left_bound, right_bound - fitted_width);
+    const text_height = csd.title.glyph_height * glyph_px;
+    return .{
+        .left = left,
+        .top = @max(@divTrunc(height - text_height, 2), 0),
+        .right = right_bound,
+        .glyph_px = glyph_px,
+    };
+}
+
+fn titleTextPixelWidth(title: []const u8, glyph_px: i32) i32 {
+    var width: i32 = 0;
+    for (title) |byte| {
+        _ = titleGlyphRows(byte) orelse continue;
+        if (width > 0) width += csd.title.glyph_spacing * glyph_px;
+        width += csd.title.glyph_width * glyph_px;
+    }
+    return width;
+}
+
+fn paintTitleText(pixels: []u32, stride: usize, title: []const u8, layout: TitleTextLayout, color: u32) void {
+    if (layout.glyph_px <= 0 or layout.left >= layout.right) return;
+
+    var pen_x = layout.left;
+    var first = true;
+    for (title) |byte| {
+        const rows = titleGlyphRows(byte) orelse continue;
+        if (!first) pen_x += csd.title.glyph_spacing * layout.glyph_px;
+        first = false;
+        if (pen_x >= layout.right) break;
+
+        for (rows, 0..) |row_bits, row_index| {
+            for (0..@as(usize, @intCast(csd.title.glyph_width))) |column_index| {
+                const column: i32 = @intCast(column_index);
+                const shift: u3 = @intCast(csd.title.glyph_width - 1 - column);
+                if ((row_bits & (@as(u8, 1) << shift)) == 0) continue;
+                paintSolidRect(
+                    pixels,
+                    stride,
+                    pen_x + column * layout.glyph_px,
+                    layout.top + @as(i32, @intCast(row_index)) * layout.glyph_px,
+                    layout.glyph_px,
+                    layout.glyph_px,
+                    layout.right,
+                    color,
+                );
+            }
+        }
+
+        pen_x += csd.title.glyph_width * layout.glyph_px;
+    }
+}
+
+fn paintSolidRect(
+    pixels: []u32,
+    stride: usize,
+    left: i32,
+    top: i32,
+    width: i32,
+    height: i32,
+    clip_right: i32,
+    color: u32,
+) void {
+    if (width <= 0 or height <= 0 or stride == 0) return;
+
+    const buffer_width: i32 = @intCast(stride);
+    const buffer_height: i32 = @intCast(pixels.len / stride);
+    const right = @min(@min(left + width, clip_right), buffer_width);
+    const bottom = @min(top + height, buffer_height);
+    const left_u: usize = @intCast(@max(left, 0));
+    const top_u: usize = @intCast(@max(top, 0));
+    const right_u: usize = @intCast(@max(right, 0));
+    const bottom_u: usize = @intCast(@max(bottom, 0));
+    if (left_u >= right_u or top_u >= bottom_u) return;
+
+    for (top_u..bottom_u) |y| {
+        @memset(pixels[y * stride + left_u .. y * stride + right_u], color);
+    }
+}
+
+fn clampI32(value: i32, lower: i32, upper: i32) i32 {
+    if (upper <= lower) return lower;
+    return @min(@max(value, lower), upper);
+}
+
+// Tiny CSD title font keeps the direct Wayland demo independent of GTK/Pango/Cairo.
+fn titleGlyphRows(byte: u8) ?[7]u8 {
+    if (byte < ' ') return null;
+
+    return switch (byte) {
+        ' ' => .{ 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000 },
+        '-' => .{ 0b00000, 0b00000, 0b00000, 0b11110, 0b00000, 0b00000, 0b00000 },
+        '.' => .{ 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100 },
+        ':' => .{ 0b00000, 0b01100, 0b01100, 0b00000, 0b01100, 0b01100, 0b00000 },
+        '/' => .{ 0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000 },
+        '0' => .{ 0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110 },
+        '1' => .{ 0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110 },
+        '2' => .{ 0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111 },
+        '3' => .{ 0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110 },
+        '4' => .{ 0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010 },
+        '5' => .{ 0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110 },
+        '6' => .{ 0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110 },
+        '7' => .{ 0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000 },
+        '8' => .{ 0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110 },
+        '9' => .{ 0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100 },
+        'a' => .{ 0b00000, 0b00000, 0b01110, 0b00001, 0b01111, 0b10001, 0b01111 },
+        'b' => .{ 0b10000, 0b10000, 0b10110, 0b11001, 0b10001, 0b10001, 0b11110 },
+        'c' => .{ 0b00000, 0b00000, 0b01110, 0b10000, 0b10000, 0b10000, 0b01110 },
+        'd' => .{ 0b00001, 0b00001, 0b01101, 0b10011, 0b10001, 0b10001, 0b01111 },
+        'e' => .{ 0b00000, 0b00000, 0b01110, 0b10001, 0b11111, 0b10000, 0b01110 },
+        'f' => .{ 0b00110, 0b01001, 0b01000, 0b11100, 0b01000, 0b01000, 0b01000 },
+        'g' => .{ 0b00000, 0b01111, 0b10001, 0b10001, 0b01111, 0b00001, 0b01110 },
+        'h' => .{ 0b10000, 0b10000, 0b10110, 0b11001, 0b10001, 0b10001, 0b10001 },
+        'i' => .{ 0b00100, 0b00000, 0b01100, 0b00100, 0b00100, 0b00100, 0b01110 },
+        'j' => .{ 0b00010, 0b00000, 0b00110, 0b00010, 0b00010, 0b10010, 0b01100 },
+        'k' => .{ 0b10000, 0b10000, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010 },
+        'l' => .{ 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110 },
+        'm' => .{ 0b00000, 0b00000, 0b11010, 0b10101, 0b10101, 0b10101, 0b10101 },
+        'n' => .{ 0b00000, 0b00000, 0b10110, 0b11001, 0b10001, 0b10001, 0b10001 },
+        'o' => .{ 0b00000, 0b00000, 0b01110, 0b10001, 0b10001, 0b10001, 0b01110 },
+        'p' => .{ 0b00000, 0b00000, 0b11110, 0b10001, 0b11110, 0b10000, 0b10000 },
+        'q' => .{ 0b00000, 0b00000, 0b01111, 0b10001, 0b01111, 0b00001, 0b00001 },
+        'r' => .{ 0b00000, 0b00000, 0b10110, 0b11001, 0b10000, 0b10000, 0b10000 },
+        's' => .{ 0b00000, 0b00000, 0b01111, 0b10000, 0b01110, 0b00001, 0b11110 },
+        't' => .{ 0b01000, 0b01000, 0b11100, 0b01000, 0b01000, 0b01001, 0b00110 },
+        'u' => .{ 0b00000, 0b00000, 0b10001, 0b10001, 0b10001, 0b10011, 0b01101 },
+        'v' => .{ 0b00000, 0b00000, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100 },
+        'w' => .{ 0b00000, 0b00000, 0b10001, 0b10101, 0b10101, 0b10101, 0b01010 },
+        'x' => .{ 0b00000, 0b00000, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001 },
+        'y' => .{ 0b00000, 0b00000, 0b10001, 0b10001, 0b01111, 0b00001, 0b01110 },
+        'z' => .{ 0b00000, 0b00000, 0b11111, 0b00010, 0b00100, 0b01000, 0b11111 },
+        'A' => .{ 0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001 },
+        'B' => .{ 0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110 },
+        'C' => .{ 0b01111, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b01111 },
+        'D' => .{ 0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110 },
+        'E' => .{ 0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111 },
+        'F' => .{ 0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000 },
+        'G' => .{ 0b01111, 0b10000, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111 },
+        'H' => .{ 0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001 },
+        'I' => .{ 0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111 },
+        'J' => .{ 0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100 },
+        'K' => .{ 0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001 },
+        'L' => .{ 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111 },
+        'M' => .{ 0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001 },
+        'N' => .{ 0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001 },
+        'O' => .{ 0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110 },
+        'P' => .{ 0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000 },
+        'Q' => .{ 0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101 },
+        'R' => .{ 0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001 },
+        'S' => .{ 0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110 },
+        'T' => .{ 0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100 },
+        'U' => .{ 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110 },
+        'V' => .{ 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100 },
+        'W' => .{ 0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001 },
+        'X' => .{ 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b01010, 0b10001 },
+        'Y' => .{ 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100 },
+        'Z' => .{ 0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111 },
+        else => .{ 0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b00000, 0b00100 },
     };
 }
 
@@ -951,6 +1147,8 @@ fn resizeMemfd(fd: std.posix.fd_t, size: usize) !void {
 }
 
 pub const Window = struct {
+    allocator: ?std.mem.Allocator = null,
+    title: ?[:0]u8 = null,
     display: *c.struct_wl_display = undefined,
     registry: ?*c.struct_wl_registry = null,
     compositor: ?*c.struct_wl_compositor = null,
@@ -1006,16 +1204,24 @@ pub const Window = struct {
     pub fn init(self: *Window, allocator: std.mem.Allocator, width: c_int, height: c_int, title: []const u8) !void {
         try loadVulkanLoader();
 
-        const title_z = try allocator.dupeZ(u8, title);
-        defer allocator.free(title_z);
-
         const display = c.wl_display_connect(null) orelse return error.WaylandConnectFailed;
+        var display_transferred = false;
+        errdefer if (!display_transferred) c.wl_display_disconnect(display);
+
+        const title_z = try allocator.dupeZ(u8, title);
+        var title_transferred = false;
+        errdefer if (!title_transferred) allocator.free(title_z);
+
         self.* = .{
+            .allocator = allocator,
+            .title = title_z,
             .display = display,
             .content_width = @max(width, 1),
             .content_height = @max(height, 1),
             .start_time = monotonicSeconds(),
         };
+        display_transferred = true;
+        title_transferred = true;
         self.recomputeFramebufferSize();
         errdefer self.deinit();
 
@@ -1049,7 +1255,7 @@ pub const Window = struct {
         if (c.xdg_toplevel_add_listener(self.toplevel, &xdg_toplevel_listener, self) != 0) {
             return error.WaylandListenerFailed;
         }
-        c.xdg_toplevel_set_title(self.toplevel, title_z.ptr);
+        c.xdg_toplevel_set_title(self.toplevel, self.title.?.ptr);
         c.xdg_toplevel_set_app_id(self.toplevel, app_id);
         self.updateMinimumSize();
         self.updateWindowGeometry();
@@ -1082,6 +1288,11 @@ pub const Window = struct {
         if (self.compositor) |compositor| c.wl_proxy_destroy(@ptrCast(compositor));
         if (self.registry) |registry| c.wl_registry_destroy(registry);
         c.wl_display_disconnect(self.display);
+        if (self.title) |title| {
+            self.allocator.?.free(title);
+        }
+        self.title = null;
+        self.allocator = null;
     }
 
     pub fn pollEvents(self: *Window) void {
@@ -2262,15 +2473,15 @@ test "Wayland: decoration metrics collapse fullscreen and constrained edges" {
 test "Wayland: client decorations follow Adwaita headerbar states" {
     const light_active = decorationColors(false, true);
     try std.testing.expectEqual(@as(u32, csd.color.light.headerbar_bg), light_active.titlebar);
-    try std.testing.expectEqual(@as(u32, csd.color.light.headerbar_fg), light_active.close_glyph);
+    try std.testing.expectEqual(@as(u32, csd.color.light.headerbar_fg), light_active.foreground);
 
     const light_backdrop = decorationColors(false, false);
     try std.testing.expectEqual(@as(u32, csd.color.light.headerbar_backdrop), light_backdrop.titlebar);
-    try std.testing.expectEqual(@as(u32, csd.color.light.headerbar_backdrop_fg), light_backdrop.close_glyph);
+    try std.testing.expectEqual(@as(u32, csd.color.light.headerbar_backdrop_fg), light_backdrop.foreground);
 
     const dark_active = decorationColors(true, true);
     try std.testing.expectEqual(@as(u32, csd.color.dark.headerbar_bg), dark_active.titlebar);
-    try std.testing.expectEqual(@as(u32, csd.color.dark.headerbar_fg), dark_active.close_glyph);
+    try std.testing.expectEqual(@as(u32, csd.color.dark.headerbar_fg), dark_active.foreground);
 
     const close = closeButtonRect(640, csd.titlebar_height);
     try std.testing.expect(close.x > 0);
@@ -2282,6 +2493,60 @@ test "Wayland: client decorations follow Adwaita headerbar states" {
     try std.testing.expect(!window.roundedTitlebarCorners());
     window.toplevel_state = .{ .tiled_top = true };
     try std.testing.expect(!window.roundedTitlebarCorners());
+}
+
+test "Wayland: headerbar title layout stays centered and avoids controls" {
+    const scale = scaleFloat(wp.fractional_scale.denominator);
+    const close = closeButtonRect(640, csd.titlebar_height);
+    const close_left = roundPositiveToI32(close.x * scale);
+    const layout = titleTextLayout(640, csd.titlebar_height, close_left, scale, "heavy-slug Vulkan demo").?;
+
+    const expected_gap = roundPositiveToI32(csd.title.gap_to_controls * scale);
+    try std.testing.expect(layout.left > roundPositiveToI32(csd.title.margin * scale));
+    try std.testing.expect(layout.right <= close_left - expected_gap);
+    try std.testing.expect(layout.top > 0);
+    try std.testing.expectEqual(@as(i32, 2), layout.glyph_px);
+
+    const narrow_close = closeButtonRect(128, csd.titlebar_height);
+    const narrow = titleTextLayout(
+        128,
+        csd.titlebar_height,
+        roundPositiveToI32(narrow_close.x * scale),
+        scale,
+        "heavy-slug Vulkan demo",
+    ).?;
+    try std.testing.expect(narrow.left >= roundPositiveToI32(csd.title.margin * scale));
+    try std.testing.expect(narrow.left < narrow.right);
+    try std.testing.expect(narrow.right <= roundPositiveToI32(narrow_close.x * scale) - expected_gap);
+}
+
+test "Wayland: headerbar title renderer clips without touching control pixels" {
+    var pixels = [_]u32{0} ** (96 * 24);
+    const layout = TitleTextLayout{
+        .left = 4,
+        .top = 4,
+        .right = 64,
+        .glyph_px = 2,
+    };
+
+    paintTitleText(pixels[0..], 96, "heavy-slug Vulkan demo", layout, 0xffffffff);
+
+    var painted: usize = 0;
+    var painted_after_clip: usize = 0;
+    for (pixels, 0..) |pixel, index| {
+        if (pixel == 0) continue;
+        painted += 1;
+        if (index % 96 >= @as(usize, @intCast(layout.right))) painted_after_clip += 1;
+    }
+    try std.testing.expect(painted > 0);
+    try std.testing.expectEqual(@as(usize, 0), painted_after_clip);
+}
+
+test "Wayland: headerbar title bitmap supports demo title glyphs" {
+    try std.testing.expect(titleTextPixelWidth("heavy-slug Vulkan demo", 2) > 0);
+    try std.testing.expect(titleGlyphRows('h') != null);
+    try std.testing.expect(titleGlyphRows('H') != null);
+    try std.testing.expect(titleGlyphRows(0x1f) == null);
 }
 
 test "Wayland: cursor shapes and keyboard state follow latest input protocol" {
