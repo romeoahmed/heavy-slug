@@ -299,10 +299,15 @@ than per-glyph descriptor slots and binds mesh and fragment stages as linked
 vertex, tessellation, geometry, and task shader-object stages before binding
 the no-task mesh/fragment pair, then records all required dynamic graphics
 state before `vkCmdDrawMeshTasksEXT`. The Vulkan demo host keeps swapchain
-ownership outside the library, uses renderer-aligned frame slots, per-image
-present semaphores, FIFO presentation, dynamic rendering, and synchronization2
-image barriers for acquire-to-color-attachment and color-attachment-to-present
-transitions. The Metal backend follows the
+ownership outside the library, validates platform instance extensions before
+instance creation, scores physical devices with a graphics/present queue
+preference, requires `VK_KHR_get_surface_capabilities2`,
+`VK_KHR_surface_maintenance1`, and `VK_KHR_swapchain_maintenance1`, queries WSI
+through `VkPhysicalDeviceSurfaceInfo2KHR`, acquires images with
+`vkAcquireNextImage2KHR`, uses renderer-aligned frame slots, per-image present
+semaphores and present fences, FIFO presentation, dynamic rendering, and
+synchronization2 image barriers for acquire-to-color-attachment and
+color-attachment-to-present transitions. The Metal backend follows the
 Metal 4 command and argument-table path exposed through the Swift bridge; Zig
 submits one validated draw-request block per frame slot, while Swift decodes it
 before binding `MTL4ArgumentTable` GPU addresses and encoding chunked mesh

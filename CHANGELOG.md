@@ -12,6 +12,15 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Vulkan demo WSI host refactored:** the Windows/Linux Vulkan demo now
+  splits dispatch tables, physical-device selection, WSI planning, and frame
+  execution into dedicated modules, validates instance extensions before
+  `vkCreateInstance`, scores suitable devices instead of accepting the first
+  match, keeps swapchain image state in one per-image record, requires the
+  modern `VK_KHR_get_surface_capabilities2`,
+  `VK_KHR_surface_maintenance1`, and `VK_KHR_swapchain_maintenance1` WSI path,
+  and uses `vkAcquireNextImage2KHR` plus present fences without legacy acquire
+  or `vkDeviceWaitIdle` swapchain-recreation fallbacks.
 - **Vulkan demo zero-copy surface contract added:** Windows and Wayland demo
   hosts now expose explicit direct-swapchain surface capabilities, the Vulkan
   demo refuses non-direct platform present paths, and swapchain creation is
