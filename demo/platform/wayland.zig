@@ -28,8 +28,9 @@ const csd = struct {
     const buffer_count = 3;
 
     const close = struct {
-        const size: f64 = 16;
-        const margin: f64 = 14;
+        const button_size: f64 = 34;
+        const icon_size: f64 = 14;
+        const margin: f64 = 6;
     };
 
     const color = struct {
@@ -41,6 +42,7 @@ const csd = struct {
             const headerbar_fg: u32 = 0xff333337;
             const headerbar_backdrop_fg: u32 = 0xff66666b;
             const headerbar_shade: u32 = 0xffdcdce0;
+            const button_hover: u32 = 0xffededf0;
         };
 
         const dark = struct {
@@ -49,6 +51,7 @@ const csd = struct {
             const headerbar_fg: u32 = 0xffffffff;
             const headerbar_backdrop_fg: u32 = 0xffc7c7cc;
             const headerbar_shade: u32 = 0xff1d1d20;
+            const button_hover: u32 = 0xff3a3a40;
         };
     };
 };
@@ -78,11 +81,11 @@ const wl = struct {
 
     const pointer = struct {
         const button_state = struct {
-            const pressed: u32 = 1;
+            const pressed: u32 = c.WL_POINTER_BUTTON_STATE_PRESSED;
         };
 
         const axis = struct {
-            const vertical_scroll: u32 = 0;
+            const vertical_scroll: u32 = c.WL_POINTER_AXIS_VERTICAL_SCROLL;
             const value120_units_per_step: f64 = 120.0;
         };
     };
@@ -91,9 +94,8 @@ const wl = struct {
         const keycode_offset: u32 = 8;
 
         const state = struct {
-            const released: u32 = 0;
-            const pressed: u32 = 1;
-            const repeated: u32 = 2;
+            const pressed: u32 = c.WL_KEYBOARD_KEY_STATE_PRESSED;
+            const repeated: u32 = c.WL_KEYBOARD_KEY_STATE_REPEATED;
         };
     };
 };
@@ -105,34 +107,34 @@ const xdg = struct {
 
     const toplevel = struct {
         const state = struct {
-            const maximized: u32 = 1;
-            const fullscreen: u32 = 2;
-            const resizing: u32 = 3;
-            const activated: u32 = 4;
-            const tiled_left: u32 = 5;
-            const tiled_right: u32 = 6;
-            const tiled_top: u32 = 7;
-            const tiled_bottom: u32 = 8;
-            const suspended: u32 = 9;
-            const constrained_left: u32 = 10;
-            const constrained_right: u32 = 11;
-            const constrained_top: u32 = 12;
-            const constrained_bottom: u32 = 13;
+            const maximized: u32 = c.XDG_TOPLEVEL_STATE_MAXIMIZED;
+            const fullscreen: u32 = c.XDG_TOPLEVEL_STATE_FULLSCREEN;
+            const resizing: u32 = c.XDG_TOPLEVEL_STATE_RESIZING;
+            const activated: u32 = c.XDG_TOPLEVEL_STATE_ACTIVATED;
+            const tiled_left: u32 = c.XDG_TOPLEVEL_STATE_TILED_LEFT;
+            const tiled_right: u32 = c.XDG_TOPLEVEL_STATE_TILED_RIGHT;
+            const tiled_top: u32 = c.XDG_TOPLEVEL_STATE_TILED_TOP;
+            const tiled_bottom: u32 = c.XDG_TOPLEVEL_STATE_TILED_BOTTOM;
+            const suspended: u32 = c.XDG_TOPLEVEL_STATE_SUSPENDED;
+            const constrained_left: u32 = c.XDG_TOPLEVEL_STATE_CONSTRAINED_LEFT;
+            const constrained_right: u32 = c.XDG_TOPLEVEL_STATE_CONSTRAINED_RIGHT;
+            const constrained_top: u32 = c.XDG_TOPLEVEL_STATE_CONSTRAINED_TOP;
+            const constrained_bottom: u32 = c.XDG_TOPLEVEL_STATE_CONSTRAINED_BOTTOM;
         };
 
         const wm_capability = struct {
-            const window_menu: u32 = 1;
+            const window_menu: u32 = c.XDG_TOPLEVEL_WM_CAPABILITIES_WINDOW_MENU;
         };
 
         const resize_edge = struct {
-            const top: u32 = 1;
-            const bottom: u32 = 2;
-            const left: u32 = 4;
-            const top_left: u32 = 5;
-            const bottom_left: u32 = 6;
-            const right: u32 = 8;
-            const top_right: u32 = 9;
-            const bottom_right: u32 = 10;
+            const top: u32 = c.XDG_TOPLEVEL_RESIZE_EDGE_TOP;
+            const bottom: u32 = c.XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM;
+            const left: u32 = c.XDG_TOPLEVEL_RESIZE_EDGE_LEFT;
+            const top_left: u32 = c.XDG_TOPLEVEL_RESIZE_EDGE_TOP_LEFT;
+            const bottom_left: u32 = c.XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_LEFT;
+            const right: u32 = c.XDG_TOPLEVEL_RESIZE_EDGE_RIGHT;
+            const top_right: u32 = c.XDG_TOPLEVEL_RESIZE_EDGE_TOP_RIGHT;
+            const bottom_right: u32 = c.XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT;
         };
     };
 };
@@ -148,64 +150,64 @@ const wp = struct {
     };
 
     const cursor_shape = struct {
-        const manager_version: u32 = 2;
+        const manager_version: u32 = 1;
 
-        const default: u32 = 1;
-        const context_menu: u32 = 2;
-        const help: u32 = 3;
-        const pointer: u32 = 4;
-        const progress: u32 = 5;
-        const wait: u32 = 6;
-        const cell: u32 = 7;
-        const crosshair: u32 = 8;
-        const text: u32 = 9;
-        const vertical_text: u32 = 10;
-        const alias: u32 = 11;
-        const copy: u32 = 12;
-        const move: u32 = 13;
-        const no_drop: u32 = 14;
-        const not_allowed: u32 = 15;
-        const grab: u32 = 16;
-        const grabbing: u32 = 17;
-        const e_resize: u32 = 18;
-        const n_resize: u32 = 19;
-        const ne_resize: u32 = 20;
-        const nw_resize: u32 = 21;
-        const s_resize: u32 = 22;
-        const se_resize: u32 = 23;
-        const sw_resize: u32 = 24;
-        const w_resize: u32 = 25;
-        const ew_resize: u32 = 26;
-        const ns_resize: u32 = 27;
-        const nesw_resize: u32 = 28;
-        const nwse_resize: u32 = 29;
-        const col_resize: u32 = 30;
-        const row_resize: u32 = 31;
-        const all_scroll: u32 = 32;
-        const zoom_in: u32 = 33;
-        const zoom_out: u32 = 34;
-        const dnd_ask: u32 = 35;
-        const all_resize: u32 = 36;
+        const default: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT;
+        const context_menu: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_CONTEXT_MENU;
+        const help: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_HELP;
+        const pointer: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_POINTER;
+        const progress: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_PROGRESS;
+        const wait: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_WAIT;
+        const cell: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_CELL;
+        const crosshair: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_CROSSHAIR;
+        const text: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_TEXT;
+        const vertical_text: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_VERTICAL_TEXT;
+        const alias: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ALIAS;
+        const copy: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_COPY;
+        const move: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_MOVE;
+        const no_drop: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NO_DROP;
+        const not_allowed: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NOT_ALLOWED;
+        const grab: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_GRAB;
+        const grabbing: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_GRABBING;
+        const e_resize: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_E_RESIZE;
+        const n_resize: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_N_RESIZE;
+        const ne_resize: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NE_RESIZE;
+        const nw_resize: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NW_RESIZE;
+        const s_resize: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_S_RESIZE;
+        const se_resize: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_SE_RESIZE;
+        const sw_resize: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_SW_RESIZE;
+        const w_resize: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_W_RESIZE;
+        const ew_resize: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_EW_RESIZE;
+        const ns_resize: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NS_RESIZE;
+        const nesw_resize: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NESW_RESIZE;
+        const nwse_resize: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NWSE_RESIZE;
+        const col_resize: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_COL_RESIZE;
+        const row_resize: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ROW_RESIZE;
+        const all_scroll: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ALL_SCROLL;
+        const zoom_in: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ZOOM_IN;
+        const zoom_out: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ZOOM_OUT;
+        const dnd_ask: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DND_ASK;
+        const all_resize: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ALL_RESIZE;
     };
 };
 
 const linux_input = struct {
     const key = struct {
-        const esc = 1;
-        const minus = 12;
-        const equal = 13;
-        const r = 19;
-        const b = 48;
-        const space = 57;
-        const up = 103;
-        const left = 105;
-        const right = 106;
-        const down = 108;
+        const esc = c.KEY_ESC;
+        const minus = c.KEY_MINUS;
+        const equal = c.KEY_EQUAL;
+        const r = c.KEY_R;
+        const b = c.KEY_B;
+        const space = c.KEY_SPACE;
+        const up = c.KEY_UP;
+        const left = c.KEY_LEFT;
+        const right = c.KEY_RIGHT;
+        const down = c.KEY_DOWN;
     };
 
     const button = struct {
-        const left: u32 = 0x110;
-        const right: u32 = 0x111;
+        const left: u32 = c.BTN_LEFT;
+        const right: u32 = c.BTN_RIGHT;
     };
 };
 
@@ -340,6 +342,30 @@ const WmCapabilities = struct {
 const ConfigureBounds = struct {
     width: i32 = 0,
     height: i32 = 0,
+};
+
+const ScaleState = struct {
+    fractional_numerator: ?u32 = null,
+    preferred_integer: u32 = 1,
+
+    fn numerator(self: ScaleState) u32 {
+        if (self.fractional_numerator) |fractional| return fractional;
+        const scaled = @as(u64, self.preferred_integer) * wp.fractional_scale.denominator;
+        return @intCast(@min(scaled, std.math.maxInt(u32)));
+    }
+
+    fn setFractional(self: *ScaleState, numerator: u32) bool {
+        if (numerator == 0 or self.fractional_numerator == numerator) return false;
+        self.fractional_numerator = numerator;
+        return true;
+    }
+
+    fn setPreferredInteger(self: *ScaleState, scale: i32) bool {
+        const clamped: u32 = @intCast(@max(scale, 1));
+        if (self.preferred_integer == clamped) return false;
+        self.preferred_integer = clamped;
+        return self.fractional_numerator == null;
+    }
 };
 
 const DecorationMetrics = struct {
@@ -546,6 +572,7 @@ const DecorationPart = struct {
     buffer_height: i32 = 0,
     painted_dark_mode: ?bool = null,
     painted_active: ?bool = null,
+    painted_close_hover: ?bool = null,
     painted_scale_numerator: u32 = 0,
 
     fn paint(self: *DecorationPart, window: *Window, x: i32, y: i32, width: i32, height: i32) !void {
@@ -558,6 +585,8 @@ const DecorationPart = struct {
         const scale_numerator = window.effectiveScaleNumerator();
         const pixel_width = @as(i32, @intCast(scaleDimension(width, scale_numerator)));
         const pixel_height = @as(i32, @intCast(scaleDimension(height, scale_numerator)));
+        const close_hover_changed = self.role == .titlebar and
+            (self.painted_close_hover == null or self.painted_close_hover.? != window.close_button_hover);
         const needs_repaint = self.active_buffer == null or
             self.logical_width != width or
             self.logical_height != height or
@@ -567,6 +596,7 @@ const DecorationPart = struct {
             self.painted_dark_mode.? != window.dark_mode or
             self.painted_active == null or
             self.painted_active.? != window.toplevel_state.activated or
+            close_hover_changed or
             self.painted_scale_numerator != scale_numerator;
         if (needs_repaint) {
             const decoration_buffer = (try self.acquireWritableBuffer(window, pixel_width, pixel_height)) orelse {
@@ -582,6 +612,7 @@ const DecorationPart = struct {
             self.active_buffer = decoration_buffer;
             self.painted_dark_mode = window.dark_mode;
             self.painted_active = window.toplevel_state.activated;
+            self.painted_close_hover = window.close_button_hover;
         }
 
         const active_buffer = self.active_buffer orelse return;
@@ -707,26 +738,65 @@ const DecorationPart = struct {
         }
 
         const scale = scaleFloat(self.painted_scale_numerator);
-        const close_left = roundPositiveToI32((@as(f64, @floatFromInt(self.logical_width)) - csd.close.margin - csd.close.size) * scale);
-        const close_top = roundPositiveToI32((@as(f64, @floatFromInt(self.logical_height)) - csd.close.size) * 0.5 * scale);
-        const close_extent = @max(roundPositiveToI32(csd.close.size * scale), 1);
-        const close_right = close_left + close_extent;
-        const close_bottom = close_top + close_extent;
-        const diagonal_thickness = @max(roundPositiveToI32(scale), 1);
-        const close_left_u: usize = @intCast(@max(close_left, 0));
-        const close_top_u: usize = @intCast(@max(close_top, 0));
-        const close_right_u: usize = @intCast(@min(close_right, self.buffer_width));
-        const close_bottom_u: usize = @intCast(@min(close_bottom, self.buffer_height));
+        const button = closeButtonRect(self.logical_width, self.logical_height);
+        const button_left = roundPositiveToI32(button.x * scale);
+        const button_top = roundPositiveToI32(button.y * scale);
+        const button_extent = @max(roundPositiveToI32(button.size * scale), 1);
+        if (window.close_button_hover and window.toplevel_state.activated) {
+            self.paintRoundButton(pixels, width, button_left, button_top, button_extent, colors.close_hover);
+        }
 
-        for (close_top_u..close_bottom_u) |uy| {
-            for (close_left_u..close_right_u) |ux| {
+        const icon_extent = @max(roundPositiveToI32(csd.close.icon_size * scale), 1);
+        const icon_left = button_left + @divTrunc(button_extent - icon_extent, 2);
+        const icon_top = button_top + @divTrunc(button_extent - icon_extent, 2);
+        const icon_right = icon_left + icon_extent;
+        const icon_bottom = icon_top + icon_extent;
+        const diagonal_thickness = @max(roundPositiveToI32(scale), 1);
+        const icon_left_u: usize = @intCast(@max(icon_left, 0));
+        const icon_top_u: usize = @intCast(@max(icon_top, 0));
+        const icon_right_u: usize = @intCast(@min(icon_right, self.buffer_width));
+        const icon_bottom_u: usize = @intCast(@min(icon_bottom, self.buffer_height));
+
+        for (icon_top_u..icon_bottom_u) |uy| {
+            for (icon_left_u..icon_right_u) |ux| {
                 const x: i32 = @intCast(ux);
                 const y: i32 = @intCast(uy);
-                const dx = x - close_left;
-                const dy = y - close_top;
-                const max = close_extent - 1;
+                const dx = x - icon_left;
+                const dy = y - icon_top;
+                const max = icon_extent - 1;
                 const on_x = @abs(dx - dy) <= diagonal_thickness or @abs(dx + dy - max) <= diagonal_thickness;
                 if (on_x) pixels[uy * width + ux] = colors.close_glyph;
+            }
+        }
+    }
+
+    fn paintRoundButton(
+        self: *const DecorationPart,
+        pixels: []u32,
+        width: usize,
+        left: i32,
+        top: i32,
+        extent: i32,
+        color: u32,
+    ) void {
+        _ = self;
+        if (extent <= 0) return;
+        const height: i32 = @intCast(pixels.len / width);
+        const left_u: usize = @intCast(@max(left, 0));
+        const top_u: usize = @intCast(@max(top, 0));
+        const right_u: usize = @intCast(@max(@min(left + extent, @as(i32, @intCast(width))), 0));
+        const bottom_u: usize = @intCast(@max(@min(top + extent, height), 0));
+        if (left_u >= right_u or top_u >= bottom_u) return;
+        const radius = @divTrunc(extent, 2);
+        const radius_sq = @as(i64, radius) * @as(i64, radius);
+
+        for (top_u..bottom_u) |uy| {
+            for (left_u..right_u) |ux| {
+                const dx = @as(i32, @intCast(ux)) - left - radius;
+                const dy = @as(i32, @intCast(uy)) - top - radius;
+                if (@as(i64, dx) * @as(i64, dx) + @as(i64, dy) * @as(i64, dy) <= radius_sq) {
+                    pixels[uy * width + ux] = color;
+                }
             }
         }
     }
@@ -777,6 +847,7 @@ const DecorationPart = struct {
         self.buffer_height = 0;
         self.painted_dark_mode = null;
         self.painted_active = null;
+        self.painted_close_hover = null;
         self.painted_scale_numerator = 0;
     }
 
@@ -795,6 +866,7 @@ const DecorationColors = struct {
     titlebar: u32,
     border: u32,
     close_glyph: u32,
+    close_hover: u32,
 };
 
 fn decorationColors(dark: bool, active: bool) DecorationColors {
@@ -803,13 +875,31 @@ fn decorationColors(dark: bool, active: bool) DecorationColors {
             .titlebar = if (active) csd.color.dark.headerbar_bg else csd.color.dark.headerbar_backdrop,
             .border = csd.color.dark.headerbar_shade,
             .close_glyph = if (active) csd.color.dark.headerbar_fg else csd.color.dark.headerbar_backdrop_fg,
+            .close_hover = csd.color.dark.button_hover,
         }
     else
         .{
             .titlebar = if (active) csd.color.light.headerbar_bg else csd.color.light.headerbar_backdrop,
             .border = csd.color.light.headerbar_shade,
             .close_glyph = if (active) csd.color.light.headerbar_fg else csd.color.light.headerbar_backdrop_fg,
+            .close_hover = csd.color.light.button_hover,
         };
+}
+
+const CloseButtonRect = struct {
+    x: f64,
+    y: f64,
+    size: f64,
+};
+
+fn closeButtonRect(width: i32, height: i32) CloseButtonRect {
+    const content_height = @as(f64, @floatFromInt(@max(height, 1)));
+    const size = @min(csd.close.button_size, @max(content_height - 8, csd.close.icon_size));
+    return .{
+        .x = @as(f64, @floatFromInt(width)) - csd.close.margin - size,
+        .y = (content_height - size) * 0.5,
+        .size = size,
+    };
 }
 
 fn scaleDimension(logical: i32, scale_numerator: u32) u32 {
@@ -907,8 +997,9 @@ pub const Window = struct {
     configure_bounds: ConfigureBounds = .{},
     pending_configure_bounds: ConfigureBounds = .{},
     pending_configure_bounds_dirty: bool = false,
-    preferred_fractional_scale: u32 = wp.fractional_scale.denominator,
+    scale_state: ScaleState = .{},
     csd_repaint_deferred: bool = false,
+    close_button_hover: bool = false,
     dark_mode: bool = false,
     start_time: f64 = 0,
 
@@ -938,14 +1029,15 @@ pub const Window = struct {
             self.subcompositor == null or
             self.shm == null or
             self.wm_base == null or
-            self.viewporter == null or
-            self.fractional_scale_manager == null or
-            self.cursor_shape_manager == null)
+            self.viewporter == null)
         {
             return error.WaylandGlobalsMissing;
         }
 
         self.surface = c.wl_compositor_create_surface(self.compositor) orelse return error.WaylandSurfaceFailed;
+        if (c.wl_surface_add_listener(self.surface.?, &surface_listener, self) != 0) {
+            return error.WaylandListenerFailed;
+        }
         try self.createScaleObjects();
 
         self.xdg_surface = c.xdg_wm_base_get_xdg_surface(self.wm_base, self.surface) orelse return error.WaylandSurfaceFailed;
@@ -1004,9 +1096,9 @@ pub const Window = struct {
             }
         }
 
-        var poll_events = std.os.linux.POLL.IN;
+        var poll_events = std.posix.POLL.IN;
         if (c.wl_display_flush(self.display) < 0) {
-            poll_events |= std.os.linux.POLL.OUT;
+            poll_events |= std.posix.POLL.OUT;
         }
         var fds = [_]std.posix.pollfd{.{
             .fd = c.wl_display_get_fd(self.display),
@@ -1015,12 +1107,12 @@ pub const Window = struct {
         }};
 
         const ready = std.posix.poll(&fds, timeout_ms) catch 0;
-        const fatal_events = std.os.linux.POLL.ERR | std.os.linux.POLL.HUP | std.os.linux.POLL.NVAL;
+        const fatal_events = std.posix.POLL.ERR | std.posix.POLL.HUP | std.posix.POLL.NVAL;
         if ((fds[0].revents & fatal_events) != 0) {
             c.wl_display_cancel_read(self.display);
             self.should_close = true;
         } else if (ready > 0) {
-            const readable = (fds[0].revents & std.os.linux.POLL.IN) != 0;
+            const readable = (fds[0].revents & std.posix.POLL.IN) != 0;
             if (readable) {
                 if (c.wl_display_read_events(self.display) < 0) {
                     self.should_close = true;
@@ -1028,7 +1120,7 @@ pub const Window = struct {
             } else {
                 c.wl_display_cancel_read(self.display);
             }
-            if ((fds[0].revents & std.os.linux.POLL.OUT) != 0 and c.wl_display_flush(self.display) < 0) {
+            if ((fds[0].revents & std.posix.POLL.OUT) != 0 and c.wl_display_flush(self.display) < 0) {
                 self.should_close = true;
             }
         } else {
@@ -1080,12 +1172,14 @@ pub const Window = struct {
     fn createScaleObjects(self: *Window) !void {
         const surface = self.surface.?;
         self.main_viewport = c.wp_viewporter_get_viewport(self.viewporter.?, surface) orelse return error.WaylandViewportFailed;
-        self.fractional_scale = c.wp_fractional_scale_manager_v1_get_fractional_scale(
-            self.fractional_scale_manager.?,
-            surface,
-        ) orelse return error.WaylandFractionalScaleFailed;
-        if (c.wp_fractional_scale_v1_add_listener(self.fractional_scale.?, &fractional_scale_listener, self) != 0) {
-            return error.WaylandListenerFailed;
+        if (self.fractional_scale_manager) |manager| {
+            self.fractional_scale = c.wp_fractional_scale_manager_v1_get_fractional_scale(
+                manager,
+                surface,
+            ) orelse return error.WaylandFractionalScaleFailed;
+            if (c.wp_fractional_scale_v1_add_listener(self.fractional_scale.?, &fractional_scale_listener, self) != 0) {
+                return error.WaylandListenerFailed;
+            }
         }
         self.applySurfaceScale();
     }
@@ -1164,7 +1258,7 @@ pub const Window = struct {
     }
 
     fn effectiveScaleNumerator(self: *const Window) u32 {
-        return @max(self.preferred_fractional_scale, 1);
+        return @max(self.scale_state.numerator(), 1);
     }
 
     fn recomputeFramebufferSize(self: *Window) void {
@@ -1229,6 +1323,7 @@ pub const Window = struct {
         self.pointer_x = x;
         self.pointer_y = y;
         if (self.pointer_surface == .content) self.setContentCursor(x, y);
+        self.updateCloseButtonHover();
         self.updateCursorShape();
     }
 
@@ -1275,6 +1370,16 @@ pub const Window = struct {
         };
     }
 
+    fn updateCloseButtonHover(self: *Window) void {
+        const hover = self.pointerHitsCloseButton();
+        if (self.close_button_hover == hover) return;
+        self.close_button_hover = hover;
+        if (!self.configured) return;
+        self.refreshClientDecorations() catch {
+            self.should_close = true;
+        };
+    }
+
     fn handlePointerButton(self: *Window, serial: u32, button: u32, pressed: bool) void {
         if (self.pointer_surface == .content) {
             switch (button) {
@@ -1314,11 +1419,9 @@ pub const Window = struct {
     fn pointerHitsCloseButton(self: *const Window) bool {
         const metrics = self.decorationMetrics();
         if (metrics.titlebar_height <= 0 or self.pointer_surface != .titlebar) return false;
-        const width = @as(f64, @floatFromInt(metrics.outerWidth(self.content_width)));
-        const left = width - csd.close.margin - csd.close.size;
-        const top = (@as(f64, @floatFromInt(metrics.titlebar_height)) - csd.close.size) * 0.5;
-        return self.pointer_x >= left and self.pointer_x <= left + csd.close.size and
-            self.pointer_y >= top and self.pointer_y <= top + csd.close.size;
+        const button = closeButtonRect(metrics.outerWidth(self.content_width), metrics.titlebar_height);
+        return self.pointer_x >= button.x and self.pointer_x <= button.x + button.size and
+            self.pointer_y >= button.y and self.pointer_y <= button.y + button.size;
     }
 
     fn titlebarResizeEdge(self: *const Window) ?u32 {
@@ -1591,6 +1694,53 @@ fn wlArrayU32Slice(array: ?*c.struct_wl_array) []const u32 {
     return data[0..len];
 }
 
+const surface_listener = std.mem.zeroInit(c.wl_surface_listener, .{
+    .enter = surfaceEnter,
+    .leave = surfaceLeave,
+    .preferred_buffer_scale = surfacePreferredBufferScale,
+    .preferred_buffer_transform = surfacePreferredBufferTransform,
+});
+
+fn surfaceEnter(
+    data: ?*anyopaque,
+    surface: ?*c.struct_wl_surface,
+    output: ?*c.struct_wl_output,
+) callconv(.c) void {
+    _ = data;
+    _ = surface;
+    _ = output;
+}
+
+fn surfaceLeave(
+    data: ?*anyopaque,
+    surface: ?*c.struct_wl_surface,
+    output: ?*c.struct_wl_output,
+) callconv(.c) void {
+    _ = data;
+    _ = surface;
+    _ = output;
+}
+
+fn surfacePreferredBufferScale(
+    data: ?*anyopaque,
+    surface: ?*c.struct_wl_surface,
+    factor: i32,
+) callconv(.c) void {
+    _ = surface;
+    const window: *Window = @ptrCast(@alignCast(data.?));
+    if (window.scale_state.setPreferredInteger(factor)) window.applyScaleChange();
+}
+
+fn surfacePreferredBufferTransform(
+    data: ?*anyopaque,
+    surface: ?*c.struct_wl_surface,
+    transform: u32,
+) callconv(.c) void {
+    _ = data;
+    _ = surface;
+    _ = transform;
+}
+
 const fractional_scale_listener = std.mem.zeroInit(c.wp_fractional_scale_v1_listener, .{
     .preferred_scale = fractionalScalePreferredScale,
 });
@@ -1604,9 +1754,7 @@ fn fractionalScalePreferredScale(
     if (scale == 0) return;
 
     const window: *Window = @ptrCast(@alignCast(data.?));
-    if (window.preferred_fractional_scale == scale) return;
-    window.preferred_fractional_scale = scale;
-    window.applyScaleChange();
+    if (window.scale_state.setFractional(scale)) window.applyScaleChange();
 }
 
 const xdg_surface_listener = std.mem.zeroInit(c.xdg_surface_listener, .{
@@ -1753,6 +1901,7 @@ fn pointerLeave(
     window.pointer_surface = .content;
     window.pointer_enter_serial = 0;
     window.last_cursor_shape = null;
+    window.updateCloseButtonHover();
     window.pointer_axis_frame = .{};
     window.input_state.clearMouseButtons();
 }
@@ -1772,6 +1921,7 @@ fn pointerMotion(
     window.pointer_x = x;
     window.pointer_y = y;
     if (window.pointer_surface == .content) window.setContentCursor(x, y);
+    window.updateCloseButtonHover();
     window.updateCursorShape();
 }
 
@@ -2003,7 +2153,7 @@ test "Wayland: fractional scale dimensions round to compositor buffer pixels" {
     try std.testing.expectEqual(@as(u32, 1), scaleDimension(0, wp.fractional_scale.denominator));
 }
 
-test "Wayland: protocol constants match official XML and GNOME 50 exports" {
+test "Wayland: protocol constants match generated XML headers" {
     try std.testing.expectEqual(@as(u32, 7), wl.compositor.latest_xml_version);
     try std.testing.expectEqual(@as(u32, 6), wl.compositor.version);
     try std.testing.expectEqual(@as(u32, 2), wl.shm.version);
@@ -2012,7 +2162,7 @@ test "Wayland: protocol constants match official XML and GNOME 50 exports" {
     try std.testing.expectEqual(@as(u32, 7), xdg.wm_base.version);
     try std.testing.expectEqual(@as(u32, 1), wp.viewporter.version);
     try std.testing.expectEqual(@as(u32, 1), wp.fractional_scale.manager_version);
-    try std.testing.expectEqual(@as(u32, 2), wp.cursor_shape.manager_version);
+    try std.testing.expectEqual(@as(u32, 1), wp.cursor_shape.manager_version);
 
     const cursor_shapes = [_]struct {
         shape: CursorShape,
@@ -2122,6 +2272,10 @@ test "Wayland: client decorations follow Adwaita headerbar states" {
     try std.testing.expectEqual(@as(u32, csd.color.dark.headerbar_bg), dark_active.titlebar);
     try std.testing.expectEqual(@as(u32, csd.color.dark.headerbar_fg), dark_active.close_glyph);
 
+    const close = closeButtonRect(640, csd.titlebar_height);
+    try std.testing.expect(close.x > 0);
+    try std.testing.expect(close.size >= csd.close.icon_size);
+
     var window: Window = .{};
     try std.testing.expect(window.roundedTitlebarCorners());
     window.toplevel_state = .{ .maximized = true };
@@ -2130,7 +2284,7 @@ test "Wayland: client decorations follow Adwaita headerbar states" {
     try std.testing.expect(!window.roundedTitlebarCorners());
 }
 
-test "Wayland: cursor shapes and keyboard repeat follow latest input protocol" {
+test "Wayland: cursor shapes and keyboard state follow latest input protocol" {
     try std.testing.expectEqual(CursorShape.n_resize, cursorShapeForResizeEdge(xdg.toplevel.resize_edge.top));
     try std.testing.expectEqual(CursorShape.se_resize, cursorShapeForResizeEdge(xdg.toplevel.resize_edge.bottom_right));
     try std.testing.expectEqual(CursorShape.default, cursorShapeForResizeEdge(0));
@@ -2138,4 +2292,15 @@ test "Wayland: cursor shapes and keyboard repeat follow latest input protocol" {
     try std.testing.expect(!keyboardStateDown(0));
     try std.testing.expect(keyboardStateDown(wl.keyboard.state.pressed));
     try std.testing.expect(keyboardStateDown(wl.keyboard.state.repeated));
+}
+
+test "Wayland: fractional scale overrides core integer scale until unavailable" {
+    var scale: ScaleState = .{};
+    try std.testing.expectEqual(@as(u32, wp.fractional_scale.denominator), scale.numerator());
+    try std.testing.expect(scale.setPreferredInteger(2));
+    try std.testing.expectEqual(@as(u32, 240), scale.numerator());
+    try std.testing.expect(scale.setFractional(150));
+    try std.testing.expectEqual(@as(u32, 150), scale.numerator());
+    try std.testing.expect(!scale.setPreferredInteger(3));
+    try std.testing.expectEqual(@as(u32, 150), scale.numerator());
 }

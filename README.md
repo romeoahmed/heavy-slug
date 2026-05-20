@@ -177,6 +177,12 @@ Important dependency facts:
   for the explicit demo appearance state while AppKit still owns the native
   window, event pump, and `CAMetalLayer` surface. GLFW/SDL-style toolkit
   dependencies are not part of the current build model.
+- The Linux Wayland demo uses xdg-shell client-side decorations, viewporter
+  buffer scaling, fractional-scale when available, core
+  `wl_surface.preferred_buffer_scale` as the integer-scale fallback, and
+  cursor-shape-v1 when the compositor exposes it. The host keeps the Vulkan
+  content surface and Adwaita-like headerbar/resize subsurfaces owned by the
+  demo instead of depending on a window toolkit.
 - Linux demo builds can override the protocol scanner with
   `-Dwayland-scanner=`. Protocol XML is generated from the lazy
   `wayland_protocols_src` Zig dependency, not from the system

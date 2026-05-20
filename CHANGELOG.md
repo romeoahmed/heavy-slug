@@ -12,6 +12,12 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Wayland demo host rewritten:** the Linux Vulkan demo now treats
+  `wp_fractional_scale_v1` and `wp_cursor_shape_manager_v1` as modern optional
+  capabilities, falls back to core `wl_surface.preferred_buffer_scale` for
+  integer scaling, derives Wayland/xdg/input constants from translated C
+  headers, and repaints a simplified Adwaita-like headerbar close button only
+  when window state, scale, dark mode, or hover state changes.
 - **Slang reflection layout generator rewritten:** `tools/layout_gen.zig` now
   requires the build graph to pass explicit GPU ABI struct names, validates
   reflected identifiers and byte ranges before emission, preserves reflected
@@ -202,7 +208,8 @@ implementation notes belong in commits and code review history.
   compositor-owned pointer cursors, applies Adwaita-like client decoration
   geometry atomically with xdg configures, handles constrained/tiled/maximized/
   fullscreen edges, consumes high-resolution `wl_pointer.axis_value120` scroll
-  events, and treats `wl_keyboard.key_state.repeated` as pressed.
+  events, treats server-side `wl_keyboard.key_state.repeated` as pressed, and
+  maps keyboard state through xkbcommon with raw Linux keycode fallback.
 - **Metal 4 backend tightened:** the Swift bridge now validates host
   device/queue/layer consistency up front, labels Metal 4 command resources,
   uses per-command residency for GPU-address argument table bindings, and keeps
