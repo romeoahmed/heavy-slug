@@ -136,7 +136,7 @@ CPU meshlets -> Mesh -> Fragment shaders
 | Core | Zig `0.16.0`, C/C++ toolchain, pinned package fetch on first build. | None beyond the embedding application. |
 | Shaders and backends | `slangc` with Slang 2026 support. | Backend-specific GPU runtime. |
 | Vulkan backend | Lazy `vulkan-zig` and Vulkan Headers packages. | Vulkan 1.4, `VK_EXT_mesh_shader`, `VK_EXT_shader_object`, dynamic rendering, push descriptors. |
-| Windows Vulkan demo | Native Win32 host; links `user32`; embeds a Per-Monitor-V2/long-path/Segment-Heap manifest; loads the Vulkan loader at runtime. | Vulkan-capable Windows 11 system. |
+| Windows Vulkan demo | Native Windows 11 host; links `user32`/`ntdll`, dynamically resolves Vulkan/DWM and selected `win32u.dll` NtUser entry points, and embeds a Per-Monitor-V2/long-path/Segment-Heap manifest. | Vulkan-capable Windows 11 system. |
 | Linux Vulkan demo | `wayland-scanner`, `wayland-client`, `xkbcommon`, current Wayland client headers, and pinned `wayland-protocols` 1.48 XML fetched by Zig. | GNOME 50/Mutter 50.x-compatible Wayland session and Vulkan loader/driver. |
 | Metal backend/demo | macOS 26.0 or newer deployment target, Apple Swift `6.3` or newer selected by `xcrun --sdk macosx`, Apple SDK with Metal 4 APIs, `Metal`, `QuartzCore`, `Foundation`, `AppKit`, `Observation`, and `SwiftUI` for the demo. | Metal 4 capable device and native SwiftUI/AppKit host. |
 
@@ -173,8 +173,12 @@ Important dependency facts:
   through `xcrun --sdk macosx`.
 - Internal bridge failures are represented without exceptions and mapped back
   to Zig error sets.
-- The demo hosts are deliberately native: Win32 on Windows, Wayland on Linux,
-  and a SwiftUI/AppKit host on macOS. The macOS host uses SwiftUI Observation
+- The demo hosts are deliberately native: Windows 11 USER32/win32u on Windows,
+  Wayland on Linux, and a SwiftUI/AppKit host on macOS. The Windows Vulkan host
+  keeps class registration, creation, messages, DPI, DWM, and Vulkan WSI on the
+  documented Win32 ABI, while window show/position/capture/destruction use
+  Windows 11 `win32u.dll` NtUser entry points resolved through ntdll. The macOS
+  host uses SwiftUI Observation
   for the explicit demo appearance state while AppKit still owns the native
   window, event pump, and `CAMetalLayer` surface; the initial appearance is
   passed in the protocol-versioned create request and the demo toggles it with

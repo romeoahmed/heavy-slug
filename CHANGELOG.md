@@ -12,6 +12,13 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Windows demo native-user path tightened:** the Vulkan Windows demo now
+  treats Windows 11 as the baseline, resolves `win32u.dll` through
+  `ntdll.LdrLoadDll`, requires direct `NtUserDestroyWindow`,
+  `NtUserReleaseCapture`, `NtUserSetCapture`, `NtUserSetWindowPos`, and
+  `NtUserShowWindow` entry points for one-to-one window operations, and keeps
+  USER32 only for the documented class, message-loop, DPI, DWM, and Vulkan WSI
+  contracts.
 - **Wayland demo modern path tightened:** the Linux Vulkan demo now requires
   the fractional-scale and cursor-shape protocol globals used by the GNOME
   50-oriented host path, binds cursor-shape v2 and linux-dmabuf v5 only, keeps
