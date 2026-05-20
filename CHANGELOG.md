@@ -12,6 +12,11 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Windows demo platform host rewritten:** the Vulkan Win32 demo now keeps a
+  standard titled overlapped window, resolves Vulkan/DWM entry points through
+  Zig's `std.os.windows` ntdll loader path, uses ntdll performance counters,
+  and makes window handle lifetime, DPI resizing, DWM titlebar theming, and
+  transient input cleanup explicit.
 - **Wayland demo host rewritten:** the Linux Vulkan demo now treats
   `wp_fractional_scale_v1` and `wp_cursor_shape_manager_v1` as modern optional
   capabilities, falls back to core `wl_surface.preferred_buffer_scale` for

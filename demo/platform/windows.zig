@@ -1,13 +1,18 @@
-//! Win32 demo window, input, and Vulkan surface glue.
+//! Native Win32 demo window, input, clock, and Vulkan surface glue.
+//!
+//! USER32 owns the windowing contract. The lower-level paths intentionally use
+//! Zig's Windows/ntdll surface where it maps cleanly: module resolution and the
+//! high-resolution performance counter do not need Kernel32 wrappers.
 
 const std = @import("std");
 const windows = std.os.windows;
+const ntdll = windows.ntdll;
 const vk = @import("vulkan");
 const demo_input = @import("demo_input");
 
-const WPARAM = usize;
-const LRESULT = isize;
 const HRESULT = windows.LONG;
+const LRESULT = isize;
+const WPARAM = usize;
 
 const WndProc = *const fn (
     hwnd: windows.HWND,
@@ -22,6 +27,27 @@ const DwmSetWindowAttributeFn = *const fn (
     pvAttribute: windows.LPCVOID,
     cbAttribute: windows.DWORD,
 ) callconv(.winapi) HRESULT;
+
+const POINT = extern struct {
+    x: windows.LONG,
+    y: windows.LONG,
+};
+
+const MSG = extern struct {
+    hwnd: ?windows.HWND,
+    message: windows.UINT,
+    wParam: WPARAM,
+    lParam: windows.LPARAM,
+    time: windows.DWORD,
+    pt: POINT,
+};
+
+const RECT = extern struct {
+    left: windows.LONG,
+    top: windows.LONG,
+    right: windows.LONG,
+    bottom: windows.LONG,
+};
 
 const WNDCLASSEXW = extern struct {
     cbSize: windows.UINT = @sizeOf(WNDCLASSEXW),
@@ -53,34 +79,13 @@ const CREATESTRUCTW = extern struct {
     dwExStyle: windows.DWORD,
 };
 
-const POINT = extern struct {
-    x: windows.LONG,
-    y: windows.LONG,
-};
-
-const MSG = extern struct {
-    hwnd: ?windows.HWND,
-    message: windows.UINT,
-    wParam: WPARAM,
-    lParam: windows.LPARAM,
-    time: windows.DWORD,
-    pt: POINT,
-};
-
-const RECT = extern struct {
-    left: windows.LONG,
-    top: windows.LONG,
-    right: windows.LONG,
-    bottom: windows.LONG,
-};
-
-extern "kernel32" fn GetModuleHandleW(lpModuleName: ?windows.LPCWSTR) callconv(.winapi) ?windows.HMODULE;
-extern "kernel32" fn GetProcAddress(hModule: windows.HMODULE, lpProcName: windows.LPCSTR) callconv(.winapi) ?windows.FARPROC;
-extern "kernel32" fn LoadLibraryW(lpLibFileName: windows.LPCWSTR) callconv(.winapi) ?windows.HMODULE;
-extern "kernel32" fn QueryPerformanceCounter(lpPerformanceCount: *windows.LARGE_INTEGER) callconv(.winapi) windows.BOOL;
-extern "kernel32" fn QueryPerformanceFrequency(lpFrequency: *windows.LARGE_INTEGER) callconv(.winapi) windows.BOOL;
-
-extern "user32" fn AdjustWindowRectExForDpi(lpRect: *RECT, dwStyle: windows.DWORD, bMenu: windows.BOOL, dwExStyle: windows.DWORD, dpi: windows.UINT) callconv(.winapi) windows.BOOL;
+extern "user32" fn AdjustWindowRectExForDpi(
+    lpRect: *RECT,
+    dwStyle: windows.DWORD,
+    bMenu: windows.BOOL,
+    dwExStyle: windows.DWORD,
+    dpi: windows.UINT,
+) callconv(.winapi) windows.BOOL;
 extern "user32" fn CreateWindowExW(
     dwExStyle: windows.DWORD,
     lpClassName: windows.LPCWSTR,
@@ -95,56 +100,59 @@ extern "user32" fn CreateWindowExW(
     hInstance: windows.HINSTANCE,
     lpParam: ?windows.LPVOID,
 ) callconv(.winapi) ?windows.HWND;
-extern "user32" fn DefWindowProcW(hwnd: windows.HWND, msg: windows.UINT, wparam: WPARAM, lparam: windows.LPARAM) callconv(.winapi) LRESULT;
+extern "user32" fn DefWindowProcW(
+    hwnd: windows.HWND,
+    msg: windows.UINT,
+    wparam: WPARAM,
+    lparam: windows.LPARAM,
+) callconv(.winapi) LRESULT;
 extern "user32" fn DestroyWindow(hWnd: windows.HWND) callconv(.winapi) windows.BOOL;
 extern "user32" fn DispatchMessageW(lpMsg: *const MSG) callconv(.winapi) LRESULT;
 extern "user32" fn GetClientRect(hWnd: windows.HWND, lpRect: *RECT) callconv(.winapi) windows.BOOL;
 extern "user32" fn GetDpiForWindow(hwnd: windows.HWND) callconv(.winapi) windows.UINT;
 extern "user32" fn GetWindowLongPtrW(hWnd: windows.HWND, nIndex: c_int) callconv(.winapi) windows.LONG_PTR;
 extern "user32" fn LoadCursorW(hInstance: ?windows.HINSTANCE, lpCursorName: windows.LPCWSTR) callconv(.winapi) ?windows.HCURSOR;
-extern "user32" fn PeekMessageW(lpMsg: *MSG, hWnd: ?windows.HWND, wMsgFilterMin: windows.UINT, wMsgFilterMax: windows.UINT, wRemoveMsg: windows.UINT) callconv(.winapi) windows.BOOL;
+extern "user32" fn PeekMessageW(
+    lpMsg: *MSG,
+    hWnd: ?windows.HWND,
+    wMsgFilterMin: windows.UINT,
+    wMsgFilterMax: windows.UINT,
+    wRemoveMsg: windows.UINT,
+) callconv(.winapi) windows.BOOL;
 extern "user32" fn RegisterClassExW(lpWndClass: *const WNDCLASSEXW) callconv(.winapi) windows.ATOM;
 extern "user32" fn ReleaseCapture() callconv(.winapi) windows.BOOL;
 extern "user32" fn ScreenToClient(hWnd: windows.HWND, lpPoint: *POINT) callconv(.winapi) windows.BOOL;
 extern "user32" fn SetCapture(hWnd: windows.HWND) callconv(.winapi) ?windows.HWND;
-extern "user32" fn SetWindowLongPtrW(hWnd: windows.HWND, nIndex: c_int, dwNewLong: windows.LONG_PTR) callconv(.winapi) windows.LONG_PTR;
-extern "user32" fn SetWindowPos(hWnd: windows.HWND, hWndInsertAfter: ?windows.HWND, X: c_int, Y: c_int, cx: c_int, cy: c_int, uFlags: windows.UINT) callconv(.winapi) windows.BOOL;
+extern "user32" fn SetWindowLongPtrW(
+    hWnd: windows.HWND,
+    nIndex: c_int,
+    dwNewLong: windows.LONG_PTR,
+) callconv(.winapi) windows.LONG_PTR;
+extern "user32" fn SetWindowPos(
+    hWnd: windows.HWND,
+    hWndInsertAfter: ?windows.HWND,
+    X: c_int,
+    Y: c_int,
+    cx: c_int,
+    cy: c_int,
+    uFlags: windows.UINT,
+) callconv(.winapi) windows.BOOL;
 extern "user32" fn ShowWindow(hWnd: windows.HWND, nCmdShow: c_int) callconv(.winapi) windows.BOOL;
 extern "user32" fn TranslateMessage(lpMsg: *const MSG) callconv(.winapi) windows.BOOL;
 
-const ColorRef = windows.DWORD;
-
-const ChromeTheme = enum {
-    light,
-    dark,
-};
-
-const ChromePalette = struct {
-    caption: ColorRef,
-    text: ColorRef,
-    border: ColorRef,
-};
-
-const DwmWindowCornerPreference = enum(windows.DWORD) {
-    default = 0,
-    do_not_round = 1,
-    round = 2,
-    round_small = 3,
-};
-
-const win32 = struct {
+const Win32 = struct {
     const class_name = std.unicode.utf8ToUtf16LeStringLiteral("HeavySlugDemoWindow");
 
-    const module = struct {
+    const ModuleName = struct {
         const dwmapi = std.unicode.utf8ToUtf16LeStringLiteral("dwmapi.dll");
         const vulkan_loader = std.unicode.utf8ToUtf16LeStringLiteral("vulkan-1.dll");
     };
 
-    const dpi = struct {
-        const default_screen: windows.UINT = 96;
+    const Dpi = struct {
+        const base: windows.UINT = 96;
     };
 
-    const dwm = struct {
+    const Dwm = struct {
         const use_immersive_dark_mode: windows.DWORD = 20;
         const window_corner_preference: windows.DWORD = 33;
         const border_color: windows.DWORD = 34;
@@ -152,15 +160,11 @@ const win32 = struct {
         const text_color: windows.DWORD = 36;
     };
 
-    const error_code = struct {
+    const ErrorCode = struct {
         const class_already_exists = windows.Win32Error.CLASS_ALREADY_EXISTS;
     };
 
-    const pointer = struct {
-        const arrow: windows.LPCWSTR = @ptrFromInt(32512);
-    };
-
-    const message = struct {
+    const Message = struct {
         const destroy = 0x0002;
         const size = 0x0005;
         const kill_focus = 0x0008;
@@ -185,29 +189,34 @@ const win32 = struct {
         const dpi_changed = 0x02E0;
     };
 
-    const peek = struct {
+    const Peek = struct {
         const remove = 0x0001;
     };
 
-    const show = struct {
-        const show = 5;
+    const Pointer = struct {
+        const arrow: windows.LPCWSTR = @ptrFromInt(32512);
     };
 
-    const style = struct {
-        const overlapped_window: windows.DWORD = 0x00CF0000;
+    const Show = struct {
+        const normal = 5;
     };
 
-    const set_window_pos = struct {
+    const Style = struct {
+        const caption: windows.DWORD = 0x00C00000;
+        const sysmenu: windows.DWORD = 0x00080000;
+        const thickframe: windows.DWORD = 0x00040000;
+        const minimizebox: windows.DWORD = 0x00020000;
+        const maximizebox: windows.DWORD = 0x00010000;
+        const standard_titled_window: windows.DWORD = caption | sysmenu | thickframe | minimizebox | maximizebox;
+    };
+
+    const SetWindowPos = struct {
         const no_move = 0x0002;
         const no_z_order = 0x0004;
         const no_activate = 0x0010;
     };
 
-    const window_long = struct {
-        const user_data = -21;
-    };
-
-    const virtual_key = struct {
+    const VirtualKey = struct {
         const escape = 0x1B;
         const space = 0x20;
         const left = 0x25;
@@ -222,8 +231,70 @@ const win32 = struct {
         const add = 0x6B;
     };
 
+    const WindowLong = struct {
+        const user_data = -21;
+    };
+
     const wheel_delta = 120.0;
     const use_default_position = std.math.minInt(c_int);
+};
+
+const ChromeTheme = enum {
+    light,
+    dark,
+};
+
+const ChromePalette = struct {
+    caption: windows.COLORREF,
+    text: windows.COLORREF,
+    border: windows.COLORREF,
+};
+
+const DwmWindowCornerPreference = enum(windows.DWORD) {
+    default = 0,
+    do_not_round = 1,
+    round = 2,
+    round_small = 3,
+};
+
+const NativeDll = struct {
+    handle: windows.PVOID,
+
+    fn load(name: [:0]const u16) !NativeDll {
+        var dll_name = windows.UNICODE_STRING.initZ(name);
+        var handle: windows.PVOID = undefined;
+        const status = ntdll.LdrLoadDll(null, null, &dll_name, &handle);
+        if (status != .SUCCESS) return error.NativeDllLoadFailed;
+        return .{ .handle = handle };
+    }
+
+    fn procedure(self: NativeDll, comptime T: type, name: [:0]const u8) ?T {
+        var proc_name = windows.ANSI_STRING.initZ(name);
+        var address: windows.PVOID = undefined;
+        const status = ntdll.LdrGetProcedureAddress(self.handle, &proc_name, 0, &address);
+        if (status != .SUCCESS) return null;
+        return @ptrCast(address);
+    }
+};
+
+const Clock = struct {
+    frequency: i64 = 0,
+    origin: i64 = 0,
+
+    fn start() !Clock {
+        const frequency = try queryPerformanceFrequency();
+        return .{
+            .frequency = frequency,
+            .origin = try queryPerformanceCounter(),
+        };
+    }
+
+    fn elapsedSeconds(self: Clock) !f64 {
+        if (self.frequency <= 0) return error.PerformanceCounterUnavailable;
+        const now = try queryPerformanceCounter();
+        return @as(f64, @floatFromInt(now - self.origin)) /
+            @as(f64, @floatFromInt(self.frequency));
+    }
 };
 
 const required_instance_extensions = [_][*:0]const u8{
@@ -231,53 +302,51 @@ const required_instance_extensions = [_][*:0]const u8{
     "VK_KHR_win32_surface",
 };
 
-var vulkan_loader: ?windows.HMODULE = null;
+var vulkan_loader: ?NativeDll = null;
 var vk_get_instance_proc_addr: ?vk.PfnGetInstanceProcAddr = null;
-var dwmapi: ?windows.HMODULE = null;
+var dwmapi: ?NativeDll = null;
 var dwm_set_window_attribute: ?DwmSetWindowAttributeFn = null;
 var dwm_dark_mode_available = true;
 var dwm_color_available = true;
 var dwm_corner_preference_available = true;
 
 pub const Window = struct {
-    hwnd: windows.HWND = undefined,
-    hinstance: windows.HINSTANCE = undefined,
+    hwnd: ?windows.HWND = null,
+    hinstance: ?windows.HINSTANCE = null,
     input_state: demo_input.State = .{},
     framebuffer_width: u32 = 0,
     framebuffer_height: u32 = 0,
     should_close: bool = false,
-    dpi: windows.UINT = win32.dpi.default_screen,
+    dpi: windows.UINT = Win32.Dpi.base,
     chrome_theme: ?ChromeTheme = null,
-    qpc_frequency: i64 = 0,
-    qpc_start: i64 = 0,
+    clock: Clock = .{},
 
     pub fn init(self: *Window, allocator: std.mem.Allocator, width: c_int, height: c_int, title: []const u8) !void {
+        if (self.hwnd != null) return error.WindowAlreadyInitialized;
+        if (title.len == 0) return error.EmptyWindowTitle;
+
         try loadVulkanLoader();
 
-        const hmodule = GetModuleHandleW(null) orelse return error.ModuleHandleUnavailable;
-        const hinstance: windows.HINSTANCE = @ptrCast(hmodule);
+        const hinstance: windows.HINSTANCE = @ptrCast(windows.peb().ImageBaseAddress);
         try registerClass(hinstance);
-
-        const qpc_frequency = try queryPerformanceFrequency();
-        const qpc_start = try queryPerformanceCounter();
-        self.* = .{
-            .hinstance = hinstance,
-            .qpc_frequency = qpc_frequency,
-            .qpc_start = qpc_start,
-        };
 
         const title_w = try std.unicode.utf8ToUtf16LeAllocZ(allocator, title);
         defer allocator.free(title_w);
 
+        self.* = .{
+            .hinstance = hinstance,
+            .clock = try Clock.start(),
+        };
+
         const hwnd = CreateWindowExW(
             0,
-            win32.class_name,
+            Win32.class_name,
             title_w.ptr,
-            win32.style.overlapped_window,
-            win32.use_default_position,
-            win32.use_default_position,
-            win32.use_default_position,
-            win32.use_default_position,
+            Win32.Style.standard_titled_window,
+            Win32.use_default_position,
+            Win32.use_default_position,
+            Win32.use_default_position,
+            Win32.use_default_position,
             null,
             null,
             hinstance,
@@ -287,23 +356,24 @@ pub const Window = struct {
 
         self.hwnd = hwnd;
         self.updateDpiFromWindow();
-
         try self.resizeLogicalClientArea(width, height);
         self.refreshFramebufferSize();
         setDwmWindowCornerPreference(hwnd);
         self.setDarkMode(false);
-        _ = ShowWindow(hwnd, win32.show.show);
+        _ = ShowWindow(hwnd, Win32.Show.normal);
     }
 
     pub fn deinit(self: *Window) void {
-        _ = SetWindowLongPtrW(self.hwnd, win32.window_long.user_data, 0);
-        _ = DestroyWindow(self.hwnd);
+        const hwnd = self.hwnd orelse return;
+        _ = SetWindowLongPtrW(hwnd, Win32.WindowLong.user_data, 0);
+        _ = DestroyWindow(hwnd);
+        self.hwnd = null;
     }
 
     pub fn pollEvents(self: *Window) void {
         var msg: MSG = undefined;
-        while (PeekMessageW(&msg, null, 0, 0, win32.peek.remove).toBool()) {
-            if (msg.message == win32.message.quit) {
+        while (PeekMessageW(&msg, null, 0, 0, Win32.Peek.remove).toBool()) {
+            if (msg.message == Win32.Message.quit) {
                 self.should_close = true;
                 break;
             }
@@ -322,54 +392,70 @@ pub const Window = struct {
     }
 
     pub fn time(self: *const Window) f64 {
-        const now = queryPerformanceCounter() catch self.qpc_start;
-        return @as(f64, @floatFromInt(now - self.qpc_start)) /
-            @as(f64, @floatFromInt(self.qpc_frequency));
+        return self.clock.elapsedSeconds() catch 0.0;
     }
 
     pub fn setDarkMode(self: *Window, enabled: bool) void {
         const theme = chromeThemeFromDarkMode(enabled);
         if (self.chrome_theme != null and self.chrome_theme.? == theme) return;
-        applyDwmChromeTheme(self.hwnd, theme);
+        if (self.hwnd) |hwnd| applyDwmChromeTheme(hwnd, theme);
         self.chrome_theme = theme;
     }
 
     pub fn createSurface(self: *const Window, instance: vk.Instance, idisp: anytype) !vk.SurfaceKHR {
+        const hwnd = self.hwnd orelse return error.WindowUnavailable;
+        const hinstance = self.hinstance orelse return error.WindowUnavailable;
         const create_info = vk.Win32SurfaceCreateInfoKHR{
-            .hinstance = self.hinstance,
-            .hwnd = self.hwnd,
+            .hinstance = hinstance,
+            .hwnd = hwnd,
         };
         return idisp.createWin32SurfaceKHR(instance, &create_info, null) catch error.SurfaceCreationFailed;
     }
 
     fn refreshFramebufferSize(self: *Window) void {
-        self.framebuffer_width, self.framebuffer_height = clientSize(self.hwnd) orelse return;
+        const hwnd = self.hwnd orelse {
+            self.framebuffer_width = 0;
+            self.framebuffer_height = 0;
+            return;
+        };
+        const size = clientSize(hwnd) orelse return;
+        self.framebuffer_width = size[0];
+        self.framebuffer_height = size[1];
     }
 
     fn updateDpiFromWindow(self: *Window) void {
-        const dpi = GetDpiForWindow(self.hwnd);
+        const hwnd = self.hwnd orelse return;
+        const dpi = GetDpiForWindow(hwnd);
         if (dpi != 0) self.dpi = dpi;
     }
 
     fn resizeLogicalClientArea(self: *Window, width: c_int, height: c_int) !void {
+        const hwnd = self.hwnd orelse return error.WindowUnavailable;
         self.updateDpiFromWindow();
+
         var rect = RECT{
             .left = 0,
             .top = 0,
             .right = try scaleForDpi(width, self.dpi),
             .bottom = try scaleForDpi(height, self.dpi),
         };
-        if (!AdjustWindowRectExForDpi(&rect, win32.style.overlapped_window, .FALSE, 0, self.dpi).toBool()) {
+        if (!AdjustWindowRectExForDpi(
+            &rect,
+            Win32.Style.standard_titled_window,
+            .FALSE,
+            0,
+            self.dpi,
+        ).toBool()) {
             return error.WindowRectFailed;
         }
         if (!SetWindowPos(
-            self.hwnd,
+            hwnd,
             null,
             0,
             0,
             rect.right - rect.left,
             rect.bottom - rect.top,
-            win32.set_window_pos.no_move | win32.set_window_pos.no_z_order | win32.set_window_pos.no_activate,
+            Win32.SetWindowPos.no_move | Win32.SetWindowPos.no_z_order | Win32.SetWindowPos.no_activate,
         ).toBool()) {
             return error.WindowResizeFailed;
         }
@@ -388,20 +474,22 @@ pub fn getInstanceProcAddress(instance: vk.Instance, name: [*:0]const u8) vk.Pfn
 fn loadVulkanLoader() !void {
     if (vk_get_instance_proc_addr != null) return;
 
-    const loader = LoadLibraryW(win32.module.vulkan_loader) orelse return error.VulkanLoaderUnavailable;
-    const proc = GetProcAddress(loader, "vkGetInstanceProcAddr") orelse return error.VulkanLoaderUnavailable;
+    const loader = NativeDll.load(Win32.ModuleName.vulkan_loader) catch return error.VulkanLoaderUnavailable;
+    const proc = loader.procedure(vk.PfnGetInstanceProcAddr, "vkGetInstanceProcAddr") orelse {
+        return error.VulkanLoaderUnavailable;
+    };
     vulkan_loader = loader;
-    vk_get_instance_proc_addr = @ptrCast(proc);
+    vk_get_instance_proc_addr = proc;
 }
 
 fn loadDwmSetWindowAttribute() ?DwmSetWindowAttributeFn {
     if (dwm_set_window_attribute) |proc| return proc;
 
-    const module = LoadLibraryW(win32.module.dwmapi) orelse return null;
-    const proc = GetProcAddress(module, "DwmSetWindowAttribute") orelse return null;
+    const module = NativeDll.load(Win32.ModuleName.dwmapi) catch return null;
+    const proc = module.procedure(DwmSetWindowAttributeFn, "DwmSetWindowAttribute") orelse return null;
     dwmapi = module;
-    dwm_set_window_attribute = @ptrCast(proc);
-    return dwm_set_window_attribute;
+    dwm_set_window_attribute = proc;
+    return proc;
 }
 
 fn setDwmAttribute(hwnd: windows.HWND, attribute: windows.DWORD, comptime T: type, value: *const T) bool {
@@ -413,7 +501,7 @@ fn setDwmWindowCornerPreference(hwnd: windows.HWND) void {
     if (!dwm_corner_preference_available) return;
 
     const preference: DwmWindowCornerPreference = .round;
-    if (!setDwmAttribute(hwnd, win32.dwm.window_corner_preference, DwmWindowCornerPreference, &preference)) {
+    if (!setDwmAttribute(hwnd, Win32.Dwm.window_corner_preference, DwmWindowCornerPreference, &preference)) {
         dwm_corner_preference_available = false;
     }
 }
@@ -421,16 +509,16 @@ fn setDwmWindowCornerPreference(hwnd: windows.HWND) void {
 fn applyDwmChromeTheme(hwnd: windows.HWND, theme: ChromeTheme) void {
     if (dwm_dark_mode_available) {
         const use_dark_titlebar = windows.BOOL.fromBool(theme == .dark);
-        if (!setDwmAttribute(hwnd, win32.dwm.use_immersive_dark_mode, windows.BOOL, &use_dark_titlebar)) {
+        if (!setDwmAttribute(hwnd, Win32.Dwm.use_immersive_dark_mode, windows.BOOL, &use_dark_titlebar)) {
             dwm_dark_mode_available = false;
         }
     }
 
     if (dwm_color_available) {
         const palette = chromePalette(theme);
-        if (!setDwmAttribute(hwnd, win32.dwm.caption_color, ColorRef, &palette.caption) or
-            !setDwmAttribute(hwnd, win32.dwm.text_color, ColorRef, &palette.text) or
-            !setDwmAttribute(hwnd, win32.dwm.border_color, ColorRef, &palette.border))
+        if (!setDwmAttribute(hwnd, Win32.Dwm.caption_color, windows.COLORREF, &palette.caption) or
+            !setDwmAttribute(hwnd, Win32.Dwm.text_color, windows.COLORREF, &palette.text) or
+            !setDwmAttribute(hwnd, Win32.Dwm.border_color, windows.COLORREF, &palette.border))
         {
             dwm_color_available = false;
         }
@@ -456,8 +544,10 @@ fn chromePalette(theme: ChromeTheme) ChromePalette {
     };
 }
 
-fn rgb(red: u8, green: u8, blue: u8) ColorRef {
-    return @as(ColorRef, red) | (@as(ColorRef, green) << 8) | (@as(ColorRef, blue) << 16);
+fn rgb(red: u8, green: u8, blue: u8) windows.COLORREF {
+    return @as(windows.COLORREF, red) |
+        (@as(windows.COLORREF, green) << 8) |
+        (@as(windows.COLORREF, blue) << 16);
 }
 
 fn registerClass(hinstance: windows.HINSTANCE) !void {
@@ -465,45 +555,48 @@ fn registerClass(hinstance: windows.HINSTANCE) !void {
         .style = 0,
         .lpfnWndProc = windowProc,
         .hInstance = hinstance,
-        .hCursor = LoadCursorW(null, win32.pointer.arrow),
-        .lpszClassName = win32.class_name,
+        .hCursor = LoadCursorW(null, Win32.Pointer.arrow),
+        .lpszClassName = Win32.class_name,
     };
-    if (RegisterClassExW(&cls) == 0 and windows.GetLastError() != win32.error_code.class_already_exists) {
+    if (RegisterClassExW(&cls) == 0 and windows.GetLastError() != Win32.ErrorCode.class_already_exists) {
         return error.WindowClassRegistrationFailed;
     }
 }
 
 fn windowProc(hwnd: windows.HWND, msg: windows.UINT, wparam: WPARAM, lparam: windows.LPARAM) callconv(.winapi) LRESULT {
-    if (msg == win32.message.nccreate) {
+    if (msg == Win32.Message.nccreate) {
         const create: *const CREATESTRUCTW = ptrFromLparam(CREATESTRUCTW, lparam);
-        if (create.lpCreateParams) |param| {
-            const window: *Window = @ptrCast(@alignCast(param));
-            window.hwnd = hwnd;
-            window.updateDpiFromWindow();
-            _ = SetWindowLongPtrW(hwnd, win32.window_long.user_data, windowPtrToLong(window));
-            window.refreshFramebufferSize();
-            return 1;
-        }
-        return 0;
+        const param = create.lpCreateParams orelse return 0;
+        const window: *Window = @ptrCast(@alignCast(param));
+        window.hwnd = hwnd;
+        window.updateDpiFromWindow();
+        _ = SetWindowLongPtrW(hwnd, Win32.WindowLong.user_data, windowPtrToLong(window));
+        window.refreshFramebufferSize();
+        return 1;
     }
 
     const maybe_window = windowFromHwnd(hwnd);
     switch (msg) {
-        win32.message.close => {
+        Win32.Message.close => {
             if (maybe_window) |window| window.should_close = true;
             return 0;
         },
-        win32.message.destroy => {
+        Win32.Message.destroy => {
             if (maybe_window) |window| window.should_close = true;
             return 0;
         },
-        win32.message.ncdestroy => {
+        Win32.Message.ncdestroy => {
             _ = ReleaseCapture();
-            _ = SetWindowLongPtrW(hwnd, win32.window_long.user_data, 0);
+            if (maybe_window) |window| {
+                window.hwnd = null;
+                window.input_state.clearKeys();
+                window.input_state.clearMouseButtons();
+            }
+            _ = SetWindowLongPtrW(hwnd, Win32.WindowLong.user_data, 0);
             return DefWindowProcW(hwnd, msg, wparam, lparam);
         },
-        win32.message.erase_background => return 1,
-        win32.message.dpi_changed => {
+        Win32.Message.erase_background => return 1,
+        Win32.Message.dpi_changed => {
             const suggested: *const RECT = ptrFromLparam(RECT, lparam);
             _ = SetWindowPos(
                 hwnd,
@@ -512,7 +605,7 @@ fn windowProc(hwnd: windows.HWND, msg: windows.UINT, wparam: WPARAM, lparam: win
                 suggested.top,
                 suggested.right - suggested.left,
                 suggested.bottom - suggested.top,
-                win32.set_window_pos.no_z_order | win32.set_window_pos.no_activate,
+                Win32.SetWindowPos.no_z_order | Win32.SetWindowPos.no_activate,
             );
             if (maybe_window) |window| {
                 window.dpi = dpiFromWparam(wparam);
@@ -520,31 +613,23 @@ fn windowProc(hwnd: windows.HWND, msg: windows.UINT, wparam: WPARAM, lparam: win
             }
             return 0;
         },
-        win32.message.size => {
-            if (maybe_window) |window| {
-                window.refreshFramebufferSize();
-            }
+        Win32.Message.size => {
+            if (maybe_window) |window| window.refreshFramebufferSize();
             return 0;
         },
-        win32.message.kill_focus, win32.message.cancel_mode => {
-            if (maybe_window) |window| {
-                window.input_state.clearKeys();
-                window.input_state.clearMouseButtons();
-            }
+        Win32.Message.kill_focus, Win32.Message.cancel_mode => {
+            clearTransientInput(maybe_window);
             _ = ReleaseCapture();
             return 0;
         },
-        win32.message.activate_app => {
+        Win32.Message.activate_app => {
             if (wparam == 0) {
-                if (maybe_window) |window| {
-                    window.input_state.clearKeys();
-                    window.input_state.clearMouseButtons();
-                }
+                clearTransientInput(maybe_window);
                 _ = ReleaseCapture();
             }
             return 0;
         },
-        win32.message.key_down, win32.message.sys_key_down => {
+        Win32.Message.key_down, Win32.Message.sys_key_down => {
             if (maybe_window) |window| {
                 if (mapKey(wparam)) |key| {
                     window.input_state.setKey(key, true);
@@ -553,7 +638,7 @@ fn windowProc(hwnd: windows.HWND, msg: windows.UINT, wparam: WPARAM, lparam: win
             }
             return DefWindowProcW(hwnd, msg, wparam, lparam);
         },
-        win32.message.key_up, win32.message.sys_key_up => {
+        Win32.Message.key_up, Win32.Message.sys_key_up => {
             if (maybe_window) |window| {
                 if (mapKey(wparam)) |key| {
                     window.input_state.setKey(key, false);
@@ -562,44 +647,42 @@ fn windowProc(hwnd: windows.HWND, msg: windows.UINT, wparam: WPARAM, lparam: win
             }
             return DefWindowProcW(hwnd, msg, wparam, lparam);
         },
-        win32.message.left_button_down => {
+        Win32.Message.left_button_down => {
             if (maybe_window) |window| window.input_state.setMouseButton(.left, true);
             _ = SetCapture(hwnd);
             return 0;
         },
-        win32.message.left_button_up => {
+        Win32.Message.left_button_up => {
             if (maybe_window) |window| {
                 window.input_state.setMouseButton(.left, false);
                 updateCapture(hwnd, window);
             }
             return 0;
         },
-        win32.message.right_button_down => {
+        Win32.Message.right_button_down => {
             if (maybe_window) |window| window.input_state.setMouseButton(.right, true);
             _ = SetCapture(hwnd);
             return 0;
         },
-        win32.message.right_button_up => {
+        Win32.Message.right_button_up => {
             if (maybe_window) |window| {
                 window.input_state.setMouseButton(.right, false);
                 updateCapture(hwnd, window);
             }
             return 0;
         },
-        win32.message.capture_changed => {
-            if (maybe_window) |window| {
-                window.input_state.clearMouseButtons();
-            }
+        Win32.Message.capture_changed => {
+            if (maybe_window) |window| window.input_state.clearMouseButtons();
             return 0;
         },
-        win32.message.mouse_move => {
+        Win32.Message.mouse_move => {
             if (maybe_window) |window| {
                 const cursor = clientPointFromLparam(lparam);
                 window.input_state.setCursor(cursor[0], cursor[1]);
             }
             return 0;
         },
-        win32.message.mouse_wheel => {
+        Win32.Message.mouse_wheel => {
             if (maybe_window) |window| {
                 if (screenPointToClient(hwnd, lparam)) |cursor| {
                     window.input_state.setCursor(cursor[0], cursor[1]);
@@ -612,6 +695,12 @@ fn windowProc(hwnd: windows.HWND, msg: windows.UINT, wparam: WPARAM, lparam: win
     }
 }
 
+fn clearTransientInput(maybe_window: ?*Window) void {
+    const window = maybe_window orelse return;
+    window.input_state.clearKeys();
+    window.input_state.clearMouseButtons();
+}
+
 fn updateCapture(hwnd: windows.HWND, window: *Window) void {
     if (window.input_state.getMouseButton(.left) or window.input_state.getMouseButton(.right)) {
         _ = SetCapture(hwnd);
@@ -621,7 +710,7 @@ fn updateCapture(hwnd: windows.HWND, window: *Window) void {
 }
 
 fn windowFromHwnd(hwnd: windows.HWND) ?*Window {
-    const ptr_value = GetWindowLongPtrW(hwnd, win32.window_long.user_data);
+    const ptr_value = GetWindowLongPtrW(hwnd, Win32.WindowLong.user_data);
     if (ptr_value == 0) return null;
     return @ptrFromInt(@as(usize, @bitCast(ptr_value)));
 }
@@ -632,16 +721,16 @@ fn windowPtrToLong(window: *Window) windows.LONG_PTR {
 
 fn mapKey(wparam: WPARAM) ?demo_input.Key {
     return switch (wparam) {
-        win32.virtual_key.escape => .escape,
-        win32.virtual_key.space => .space,
-        win32.virtual_key.oem_plus, win32.virtual_key.add => .equal,
-        win32.virtual_key.oem_minus, win32.virtual_key.subtract => .minus,
-        win32.virtual_key.b => .b,
-        win32.virtual_key.r => .r,
-        win32.virtual_key.up => .up,
-        win32.virtual_key.down => .down,
-        win32.virtual_key.left => .left,
-        win32.virtual_key.right => .right,
+        Win32.VirtualKey.escape => .escape,
+        Win32.VirtualKey.space => .space,
+        Win32.VirtualKey.oem_plus, Win32.VirtualKey.add => .equal,
+        Win32.VirtualKey.oem_minus, Win32.VirtualKey.subtract => .minus,
+        Win32.VirtualKey.b => .b,
+        Win32.VirtualKey.r => .r,
+        Win32.VirtualKey.up => .up,
+        Win32.VirtualKey.down => .down,
+        Win32.VirtualKey.left => .left,
+        Win32.VirtualKey.right => .right,
         else => null,
     };
 }
@@ -662,8 +751,8 @@ fn rectSize(rect: RECT) [2]u32 {
 fn scaleForDpi(value: c_int, dpi: windows.UINT) !c_int {
     if (value <= 0 or dpi == 0) return error.InvalidWindowSize;
     const scaled = @divTrunc(
-        @as(i64, value) * @as(i64, dpi) + @divTrunc(win32.dpi.default_screen, 2),
-        @as(i64, win32.dpi.default_screen),
+        @as(i64, value) * @as(i64, dpi) + @divTrunc(Win32.Dpi.base, 2),
+        @as(i64, Win32.Dpi.base),
     );
     return std.math.cast(c_int, @max(scaled, 1)) orelse error.InvalidWindowSize;
 }
@@ -718,25 +807,31 @@ fn signedHighWordU(value: WPARAM) i16 {
 fn dpiFromWparam(value: WPARAM) windows.UINT {
     const dpi_x: windows.UINT = @intCast(@as(u16, @truncate(value)));
     const dpi_y: windows.UINT = @intCast(highWordU(value));
-    return if (dpi_x != 0) dpi_x else if (dpi_y != 0) dpi_y else win32.dpi.default_screen;
+    return if (dpi_x != 0) dpi_x else if (dpi_y != 0) dpi_y else Win32.Dpi.base;
 }
 
 fn wheelDeltaFromWparam(value: WPARAM) f64 {
-    return @as(f64, @floatFromInt(signedHighWordU(value))) / win32.wheel_delta;
+    return @as(f64, @floatFromInt(signedHighWordU(value))) / Win32.wheel_delta;
 }
 
 fn queryPerformanceCounter() !i64 {
     var counter: windows.LARGE_INTEGER = 0;
-    if (!QueryPerformanceCounter(&counter).toBool()) return error.PerformanceCounterUnavailable;
+    if (!ntdll.RtlQueryPerformanceCounter(&counter).toBool()) return error.PerformanceCounterUnavailable;
     return counter;
 }
 
 fn queryPerformanceFrequency() !i64 {
     var frequency: windows.LARGE_INTEGER = 0;
-    if (!QueryPerformanceFrequency(&frequency).toBool() or frequency <= 0) {
+    if (!ntdll.RtlQueryPerformanceFrequency(&frequency).toBool() or frequency <= 0) {
         return error.PerformanceCounterUnavailable;
     }
     return frequency;
+}
+
+test "Win32 style keeps the native title bar and system commands" {
+    try std.testing.expect(Win32.Style.standard_titled_window & Win32.Style.caption != 0);
+    try std.testing.expect(Win32.Style.standard_titled_window & Win32.Style.sysmenu != 0);
+    try std.testing.expect(Win32.Style.standard_titled_window & Win32.Style.thickframe != 0);
 }
 
 test "Win32 DPI scaling follows positive MulDiv-style rounding" {
@@ -761,7 +856,7 @@ test "Win32 word helpers preserve signed mouse coordinates and wheel deltas" {
 test "Win32 DPI and rect helpers normalize platform packed values" {
     try std.testing.expectEqual(@as(windows.UINT, 144), dpiFromWparam(makeWparamWords(144, 144)));
     try std.testing.expectEqual(@as(windows.UINT, 168), dpiFromWparam(makeWparamWords(0, 168)));
-    try std.testing.expectEqual(@as(windows.UINT, win32.dpi.default_screen), dpiFromWparam(0));
+    try std.testing.expectEqual(@as(windows.UINT, Win32.Dpi.base), dpiFromWparam(0));
 
     try std.testing.expectEqual(@as([2]u32, .{ 640, 480 }), rectSize(.{
         .left = 20,
@@ -778,7 +873,7 @@ test "Win32 DPI and rect helpers normalize platform packed values" {
 }
 
 test "Win32 DWM chrome helpers encode COLORREF palettes" {
-    try std.testing.expectEqual(@as(ColorRef, 0x00332211), rgb(0x11, 0x22, 0x33));
+    try std.testing.expectEqual(@as(windows.COLORREF, 0x00332211), rgb(0x11, 0x22, 0x33));
     try std.testing.expectEqual(ChromeTheme.light, chromeThemeFromDarkMode(false));
     try std.testing.expectEqual(ChromeTheme.dark, chromeThemeFromDarkMode(true));
 

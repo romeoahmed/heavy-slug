@@ -173,6 +173,7 @@ fn buildVulkanPlatformModule(
 ) ?*std.Build.Module {
     return switch (target.result.os.tag) {
         .windows => blk: {
+            exe.root_module.linkSystemLibrary("ntdll", .{});
             exe.root_module.linkSystemLibrary("user32", .{});
             exe.win32_manifest = b.path("demo/platform/windows.manifest");
             break :blk b.createModule(.{
