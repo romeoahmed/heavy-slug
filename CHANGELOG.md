@@ -12,6 +12,12 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Wayland demo modern path tightened:** the Linux Vulkan demo now requires
+  the fractional-scale and cursor-shape protocol globals used by the GNOME
+  50-oriented host path, binds cursor-shape v2 and linux-dmabuf v5 only, keeps
+  buffer sizing on fractional-scale plus viewporter instead of an integer
+  scale fallback, updates the Adwaita-like headerbar colors/metrics, and
+  handles Wayland flush/read polling errors explicitly.
 - **Cocoa/Metal demo host ABI tightened:** the macOS Metal demo now uses a
   v2 Cocoa host protocol for window creation, input snapshots, and Metal host
   pointer responses; the initial explicit light/dark appearance is part of the
@@ -39,14 +45,12 @@ implementation notes belong in commits and code review history.
   Zig's `std.os.windows` ntdll loader path, uses ntdll performance counters,
   and makes window handle lifetime, DPI resizing, DWM titlebar theming, and
   transient input cleanup explicit.
-- **Wayland demo host rewritten:** the Linux Vulkan demo now treats
-  `wp_fractional_scale_v1` and `wp_cursor_shape_manager_v1` as modern optional
-  capabilities, falls back to core `wl_surface.preferred_buffer_scale` for
-  integer scaling, derives Wayland/xdg/input constants from translated C
-  headers, and repaints a simplified Adwaita-like headerbar close button only
-  when window state, scale, dark mode, or hover state changes. The custom
-  headerbar now also owns and paints the xdg toplevel title while clipping it
-  away from the window controls.
+- **Wayland demo host rewritten:** the Linux Vulkan demo derives
+  Wayland/xdg/input constants from translated C headers, sizes buffers through
+  fractional-scale plus viewporter, and repaints a simplified Adwaita-like
+  headerbar close button only when window state, scale, dark mode, or hover
+  state changes. The custom headerbar now also owns and paints the xdg
+  toplevel title while clipping it away from the window controls.
 - **Slang reflection layout generator rewritten:** `tools/layout_gen.zig` now
   requires the build graph to pass explicit GPU ABI struct names, validates
   reflected identifiers and byte ranges before emission, preserves reflected

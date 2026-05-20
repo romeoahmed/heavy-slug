@@ -180,15 +180,15 @@ Important dependency facts:
   passed in the protocol-versioned create request and the demo toggles it with
   `B`. GLFW/SDL-style toolkit dependencies are not part of the current build
   model.
-- The Linux Wayland demo uses xdg-shell client-side decorations, viewporter
-  buffer scaling, fractional-scale when available, core
-  `wl_surface.preferred_buffer_scale` as the integer-scale fallback, and
-  cursor-shape-v1 when the compositor exposes it. The host also binds
-  linux-dmabuf-v1 surface feedback when available so the platform layer records
-  compositor GPU-buffer import support, while the rendered content still uses
-  Vulkan WSI direct swapchain presentation. The host keeps the Vulkan content
-  surface and Adwaita-like headerbar/resize subsurfaces owned by the demo
-  instead of depending on a window toolkit.
+- The Linux Wayland demo uses a single GNOME 50-oriented modern path:
+  xdg-shell v7 client-side decorations, viewporter destination sizing,
+  fractional-scale-v1 buffer sizing, cursor-shape-v1 v2 cursors, and
+  linux-dmabuf-v1 v5 surface feedback when advertised. The host keeps
+  `wl_surface.set_buffer_scale(1)` and lets fractional-scale plus viewporter
+  define buffer pixels; the rendered content still uses Vulkan WSI direct
+  swapchain presentation. The Vulkan content surface and Adwaita-like
+  headerbar/resize subsurfaces are owned by the demo instead of a window
+  toolkit.
 - Linux demo builds can override the protocol scanner with
   `-Dwayland-scanner=`. Protocol XML is generated from the lazy
   `wayland_protocols_src` Zig dependency, not from the system

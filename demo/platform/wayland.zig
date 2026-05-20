@@ -22,7 +22,7 @@ const window_limits = struct {
 
 const csd = struct {
     const resize_border: i32 = 6;
-    const titlebar_height: i32 = 46;
+    const titlebar_height: i32 = 48;
     const resize_corner_extent: f64 = 24;
     const corner_radius: f64 = 12;
     const buffer_count = 3;
@@ -47,20 +47,20 @@ const csd = struct {
 
         const light = struct {
             const headerbar_bg: u32 = 0xffffffff;
-            const headerbar_backdrop: u32 = 0xfffafafb;
-            const headerbar_fg: u32 = 0xff333337;
-            const headerbar_backdrop_fg: u32 = 0xff66666b;
-            const headerbar_shade: u32 = 0xffdcdce0;
-            const button_hover: u32 = 0xffededf0;
+            const headerbar_backdrop: u32 = 0xfffafafa;
+            const headerbar_fg: u32 = 0xff333333;
+            const headerbar_backdrop_fg: u32 = 0xff77767b;
+            const headerbar_shade: u32 = 0xffd9d9d9;
+            const button_hover: u32 = 0xfff2f2f2;
         };
 
         const dark = struct {
-            const headerbar_bg: u32 = 0xff2e2e32;
-            const headerbar_backdrop: u32 = 0xff222226;
+            const headerbar_bg: u32 = 0xff303030;
+            const headerbar_backdrop: u32 = 0xff242424;
             const headerbar_fg: u32 = 0xffffffff;
-            const headerbar_backdrop_fg: u32 = 0xffc7c7cc;
-            const headerbar_shade: u32 = 0xff1d1d20;
-            const button_hover: u32 = 0xff3a3a40;
+            const headerbar_backdrop_fg: u32 = 0xffc0bfbc;
+            const headerbar_shade: u32 = 0xff4d4d4d;
+            const button_hover: u32 = 0xff454545;
         };
     };
 };
@@ -159,7 +159,7 @@ const wp = struct {
     };
 
     const cursor_shape = struct {
-        const manager_version: u32 = 1;
+        const manager_version: u32 = 2;
 
         const default: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT;
         const context_menu: u32 = c.WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_CONTEXT_MENU;
@@ -202,8 +202,7 @@ const wp = struct {
 
 const zwp = struct {
     const linux_dmabuf = struct {
-        const required_feedback_version: u32 = 4;
-        const preferred_version: u32 = 5;
+        const version: u32 = 5;
     };
 };
 
@@ -386,26 +385,12 @@ const ConfigureBounds = struct {
 };
 
 const ScaleState = struct {
-    fractional_numerator: ?u32 = null,
-    preferred_integer: u32 = 1,
+    numerator: u32 = wp.fractional_scale.denominator,
 
-    fn numerator(self: ScaleState) u32 {
-        if (self.fractional_numerator) |fractional| return fractional;
-        const scaled = @as(u64, self.preferred_integer) * wp.fractional_scale.denominator;
-        return @intCast(@min(scaled, std.math.maxInt(u32)));
-    }
-
-    fn setFractional(self: *ScaleState, scale_numerator: u32) bool {
-        if (scale_numerator == 0 or self.fractional_numerator == scale_numerator) return false;
-        self.fractional_numerator = scale_numerator;
+    fn update(self: *ScaleState, scale_numerator: u32) bool {
+        if (scale_numerator == 0 or self.numerator == scale_numerator) return false;
+        self.numerator = scale_numerator;
         return true;
-    }
-
-    fn setPreferredInteger(self: *ScaleState, scale: i32) bool {
-        const clamped: u32 = @intCast(@max(scale, 1));
-        if (self.preferred_integer == clamped) return false;
-        self.preferred_integer = clamped;
-        return self.fractional_numerator == null;
     }
 };
 
@@ -1166,13 +1151,27 @@ fn bindVersion(advertised: u32, required: u32) u32 {
     return required;
 }
 
-fn bindOptionalVersion(advertised: u32, required: u32, preferred: u32) ?u32 {
+fn bindExactVersion(advertised: u32, required: u32) ?u32 {
     if (advertised < required) return null;
-    return @min(advertised, preferred);
+    return required;
 }
 
 fn supportsVersion(advertised: u32, required: u32) bool {
     return advertised >= required;
+}
+
+const FlushResult = enum {
+    flushed,
+    blocked,
+};
+
+fn flushDisplay(display: *c.struct_wl_display) !FlushResult {
+    const rc = c.wl_display_flush(display);
+    return switch (std.c.errno(rc)) {
+        .SUCCESS => .flushed,
+        .AGAIN => .blocked,
+        else => error.WaylandDispatchFailed,
+    };
 }
 
 fn resizeMemfd(fd: std.posix.fd_t, size: usize) !void {
@@ -1277,7 +1276,9 @@ pub const Window = struct {
             self.subcompositor == null or
             self.shm == null or
             self.wm_base == null or
-            self.viewporter == null)
+            self.viewporter == null or
+            self.fractional_scale_manager == null or
+            self.cursor_shape_manager == null)
         {
             return error.WaylandGlobalsMissing;
         }
@@ -1345,15 +1346,27 @@ pub const Window = struct {
     }
 
     pub fn pollEventsTimeout(self: *Window, timeout_ms: i32) void {
-        while (c.wl_display_prepare_read(self.display) != 0) {
-            if (c.wl_display_dispatch_pending(self.display) < 0) {
+        self.dispatchEvents(timeout_ms) catch {
+            self.should_close = true;
+            return;
+        };
+        if (self.configured and self.csd_repaint_deferred) {
+            self.refreshClientDecorations() catch {
                 self.should_close = true;
-                return;
-            }
+            };
+        }
+    }
+
+    fn dispatchEvents(self: *Window, timeout_ms: i32) !void {
+        while (c.wl_display_prepare_read(self.display) != 0) {
+            if (c.wl_display_dispatch_pending(self.display) < 0) return error.WaylandDispatchFailed;
         }
 
+        var prepared_read = true;
+        defer if (prepared_read) c.wl_display_cancel_read(self.display);
+
         var poll_events = std.posix.POLL.IN;
-        if (c.wl_display_flush(self.display) < 0) {
+        if (try flushDisplay(self.display) == .blocked) {
             poll_events |= std.posix.POLL.OUT;
         }
         var fds = [_]std.posix.pollfd{.{
@@ -1362,35 +1375,30 @@ pub const Window = struct {
             .revents = 0,
         }};
 
-        const ready = std.posix.poll(&fds, timeout_ms) catch 0;
+        const ready = try std.posix.poll(&fds, timeout_ms);
         const fatal_events = std.posix.POLL.ERR | std.posix.POLL.HUP | std.posix.POLL.NVAL;
         if ((fds[0].revents & fatal_events) != 0) {
             c.wl_display_cancel_read(self.display);
-            self.should_close = true;
-        } else if (ready > 0) {
-            const readable = (fds[0].revents & std.posix.POLL.IN) != 0;
-            if (readable) {
-                if (c.wl_display_read_events(self.display) < 0) {
-                    self.should_close = true;
-                }
-            } else {
-                c.wl_display_cancel_read(self.display);
-            }
-            if ((fds[0].revents & std.posix.POLL.OUT) != 0 and c.wl_display_flush(self.display) < 0) {
-                self.should_close = true;
-            }
+            prepared_read = false;
+            return error.WaylandDispatchFailed;
+        }
+
+        if (ready == 0) return;
+
+        if ((fds[0].revents & std.posix.POLL.IN) != 0) {
+            const rc = c.wl_display_read_events(self.display);
+            prepared_read = false;
+            if (rc < 0) return error.WaylandDispatchFailed;
         } else {
             c.wl_display_cancel_read(self.display);
+            prepared_read = false;
         }
-        if (c.wl_display_dispatch_pending(self.display) < 0) {
-            self.should_close = true;
-            return;
+
+        if ((fds[0].revents & std.posix.POLL.OUT) != 0) {
+            _ = try flushDisplay(self.display);
         }
-        if (self.configured and self.csd_repaint_deferred) {
-            self.refreshClientDecorations() catch {
-                self.should_close = true;
-            };
-        }
+
+        if (c.wl_display_dispatch_pending(self.display) < 0) return error.WaylandDispatchFailed;
     }
 
     pub fn input(self: *Window) *demo_input.State {
@@ -1435,21 +1443,19 @@ pub const Window = struct {
     fn createScaleObjects(self: *Window) !void {
         const surface = self.surface.?;
         self.main_viewport = c.wp_viewporter_get_viewport(self.viewporter.?, surface) orelse return error.WaylandViewportFailed;
-        if (self.fractional_scale_manager) |manager| {
-            self.fractional_scale = c.wp_fractional_scale_manager_v1_get_fractional_scale(
-                manager,
-                surface,
-            ) orelse return error.WaylandFractionalScaleFailed;
-            if (c.wp_fractional_scale_v1_add_listener(self.fractional_scale.?, &fractional_scale_listener, self) != 0) {
-                return error.WaylandListenerFailed;
-            }
+        self.fractional_scale = c.wp_fractional_scale_manager_v1_get_fractional_scale(
+            self.fractional_scale_manager.?,
+            surface,
+        ) orelse return error.WaylandFractionalScaleFailed;
+        if (c.wp_fractional_scale_v1_add_listener(self.fractional_scale.?, &fractional_scale_listener, self) != 0) {
+            return error.WaylandListenerFailed;
         }
         self.applySurfaceScale();
     }
 
     fn createDmaBufFeedback(self: *Window) !void {
         const dmabuf = self.linux_dmabuf orelse return;
-        if (self.linux_dmabuf_version < zwp.linux_dmabuf.required_feedback_version) return;
+        if (self.linux_dmabuf_version < zwp.linux_dmabuf.version) return;
         const surface = self.surface orelse return;
         const feedback = c.zwp_linux_dmabuf_v1_get_surface_feedback(dmabuf, surface) orelse {
             return error.WaylandDmaBufFeedbackFailed;
@@ -1541,7 +1547,7 @@ pub const Window = struct {
     }
 
     fn effectiveScaleNumerator(self: *const Window) u32 {
-        return @max(self.scale_state.numerator(), 1);
+        return @max(self.scale_state.numerator, 1);
     }
 
     fn recomputeFramebufferSize(self: *Window) void {
@@ -1942,11 +1948,7 @@ fn registryGlobal(
             bindVersion(version, wp.fractional_scale.manager_version),
         ));
     } else if (std.mem.eql(u8, iface, "zwp_linux_dmabuf_v1")) {
-        const bind_version = bindOptionalVersion(
-            version,
-            zwp.linux_dmabuf.required_feedback_version,
-            zwp.linux_dmabuf.preferred_version,
-        ) orelse return;
+        const bind_version = bindExactVersion(version, zwp.linux_dmabuf.version) orelse return;
         if (window.linux_dmabuf != null) return;
         window.linux_dmabuf = @ptrCast(c.wl_registry_bind(
             registry_ptr,
@@ -2023,9 +2025,9 @@ fn surfacePreferredBufferScale(
     surface: ?*c.struct_wl_surface,
     factor: i32,
 ) callconv(.c) void {
+    _ = data;
     _ = surface;
-    const window: *Window = @ptrCast(@alignCast(data.?));
-    if (window.scale_state.setPreferredInteger(factor)) window.applyScaleChange();
+    _ = factor;
 }
 
 fn surfacePreferredBufferTransform(
@@ -2051,7 +2053,7 @@ fn fractionalScalePreferredScale(
     if (scale == 0) return;
 
     const window: *Window = @ptrCast(@alignCast(data.?));
-    if (window.scale_state.setFractional(scale)) window.applyScaleChange();
+    if (window.scale_state.update(scale)) window.applyScaleChange();
 }
 
 const dmabuf_feedback_listener = std.mem.zeroInit(c.zwp_linux_dmabuf_feedback_v1_listener, .{
@@ -2538,7 +2540,8 @@ test "Wayland: protocol constants match generated XML headers" {
     try std.testing.expectEqual(@as(u32, 7), xdg.wm_base.version);
     try std.testing.expectEqual(@as(u32, 1), wp.viewporter.version);
     try std.testing.expectEqual(@as(u32, 1), wp.fractional_scale.manager_version);
-    try std.testing.expectEqual(@as(u32, 1), wp.cursor_shape.manager_version);
+    try std.testing.expectEqual(@as(u32, 2), wp.cursor_shape.manager_version);
+    try std.testing.expectEqual(@as(u32, 5), zwp.linux_dmabuf.version);
 
     const cursor_shapes = [_]struct {
         shape: CursorShape,
@@ -2591,23 +2594,9 @@ test "Wayland: registry binding requires the configured protocol version" {
     try std.testing.expect(supportsVersion(wl.compositor.version, wl.compositor.version));
     try std.testing.expect(supportsVersion(99, wl.compositor.version));
     try std.testing.expectEqual(wl.compositor.version, bindVersion(99, wl.compositor.version));
-    try std.testing.expect(bindOptionalVersion(
-        zwp.linux_dmabuf.required_feedback_version - 1,
-        zwp.linux_dmabuf.required_feedback_version,
-        zwp.linux_dmabuf.preferred_version,
-    ) == null);
-    try std.testing.expectEqual(
-        @as(u32, zwp.linux_dmabuf.required_feedback_version),
-        bindOptionalVersion(
-            zwp.linux_dmabuf.required_feedback_version,
-            zwp.linux_dmabuf.required_feedback_version,
-            zwp.linux_dmabuf.preferred_version,
-        ).?,
-    );
-    try std.testing.expectEqual(
-        @as(u32, zwp.linux_dmabuf.preferred_version),
-        bindOptionalVersion(99, zwp.linux_dmabuf.required_feedback_version, zwp.linux_dmabuf.preferred_version).?,
-    );
+    try std.testing.expect(bindExactVersion(zwp.linux_dmabuf.version - 1, zwp.linux_dmabuf.version) == null);
+    try std.testing.expectEqual(zwp.linux_dmabuf.version, bindExactVersion(zwp.linux_dmabuf.version, zwp.linux_dmabuf.version).?);
+    try std.testing.expectEqual(zwp.linux_dmabuf.version, bindExactVersion(99, zwp.linux_dmabuf.version).?);
 }
 
 test "Wayland: surface capabilities expose direct WSI and dmabuf feedback state" {
@@ -2617,7 +2606,7 @@ test "Wayland: surface capabilities expose direct WSI and dmabuf feedback state"
     try std.testing.expectEqual(SurfaceCapabilities.DecorationMemory.shared_memfd_wl_shm, window.surfaceCapabilities().decorations);
 
     window.linux_dmabuf = @ptrFromInt(4096);
-    window.linux_dmabuf_version = zwp.linux_dmabuf.required_feedback_version;
+    window.linux_dmabuf_version = zwp.linux_dmabuf.version;
     try std.testing.expectEqual(SurfaceCapabilities.LinuxDmaBuf.advertised, window.surfaceCapabilities().linux_dmabuf);
 
     window.dmabuf_surface_feedback = @ptrFromInt(8192);
@@ -2758,13 +2747,12 @@ test "Wayland: cursor shapes and keyboard state follow latest input protocol" {
     try std.testing.expect(keyboardStateDown(wl.keyboard.state.repeated));
 }
 
-test "Wayland: fractional scale overrides core integer scale until unavailable" {
+test "Wayland: fractional scale owns buffer sizing" {
     var scale: ScaleState = .{};
-    try std.testing.expectEqual(@as(u32, wp.fractional_scale.denominator), scale.numerator());
-    try std.testing.expect(scale.setPreferredInteger(2));
-    try std.testing.expectEqual(@as(u32, 240), scale.numerator());
-    try std.testing.expect(scale.setFractional(150));
-    try std.testing.expectEqual(@as(u32, 150), scale.numerator());
-    try std.testing.expect(!scale.setPreferredInteger(3));
-    try std.testing.expectEqual(@as(u32, 150), scale.numerator());
+    try std.testing.expectEqual(@as(u32, wp.fractional_scale.denominator), scale.numerator);
+    try std.testing.expect(scale.update(150));
+    try std.testing.expectEqual(@as(u32, 150), scale.numerator);
+    try std.testing.expect(!scale.update(150));
+    try std.testing.expect(!scale.update(0));
+    try std.testing.expectEqual(@as(u32, 150), scale.numerator);
 }
