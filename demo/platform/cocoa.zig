@@ -38,35 +38,47 @@ const cocoa_mouse_button_count: usize = 2;
 const key_count = @typeInfo(demo_input.Key).@"enum".fields.len;
 const mouse_button_count = @typeInfo(demo_input.MouseButton).@"enum".fields.len;
 
-const window_protocol_version = ProtocolVersion.init(1, 0);
+const window_protocol_version = ProtocolVersion.init(2, 0);
 const window_protocol_version_word: u32 = window_protocol_version.word();
 
 const HostPointers = extern struct {
+    protocol_version: u32 = 0,
+    reserved0: u32 = 0,
     device: ?*anyopaque,
     command_queue: ?*anyopaque,
     layer: ?*anyopaque,
 };
 
-const ColorScheme = enum(u32) {
+pub const ColorScheme = enum(u32) {
     light = 0,
     dark = 1,
+};
+
+pub const Options = struct {
+    width: c_int,
+    height: c_int,
+    title: []const u8,
+    initial_color_scheme: ColorScheme = .light,
 };
 
 const CreateRequest = extern struct {
     protocol_version: u32,
     width: u32,
     height: u32,
-    reserved0: u32 = 0,
+    color_scheme: u32,
     title_data: ?[*]const U8,
     title_size: usize,
+    reserved0: u32 = 0,
+    reserved1: u32 = 0,
 
-    fn init(width: c_int, height: c_int, title: []const u8) CreateRequest {
+    fn init(options: Options) CreateRequest {
         return .{
             .protocol_version = window_protocol_version_word,
-            .width = @intCast(width),
-            .height = @intCast(height),
-            .title_data = dataPtr(title),
-            .title_size = title.len,
+            .width = @intCast(options.width),
+            .height = @intCast(options.height),
+            .color_scheme = @intFromEnum(options.initial_color_scheme),
+            .title_data = dataPtr(options.title),
+            .title_size = options.title.len,
         };
     }
 };
@@ -128,10 +140,6 @@ fn bufferPtr(bytes: []u8) ?[*]U8 {
     return if (bytes.len == 0) null else bytes.ptr;
 }
 
-fn colorSchemeFromDarkMode(enabled: bool) ColorScheme {
-    return if (enabled) .dark else .light;
-}
-
 pub const Window = struct {
     handle: *WindowHandle = undefined,
     input_state: demo_input.State = .{},
@@ -139,11 +147,11 @@ pub const Window = struct {
     framebuffer_height: u32 = 0,
     should_close: bool = false,
 
-    pub fn init(self: *Window, width: c_int, height: c_int, title: []const u8) Error!void {
-        if (!validInitialExtent(width, height)) return Error.InvalidWindowSize;
+    pub fn init(self: *Window, options: Options) Error!void {
+        if (!validInitialExtent(options.width, options.height)) return Error.InvalidWindowSize;
 
         var error_buf = emptyDiagnostic();
-        const request = CreateRequest.init(width, height, title);
+        const request = CreateRequest.init(options);
         var handle: ?*WindowHandle = null;
         if (hs_demo_cocoa_window_create(
             &handle,
@@ -156,7 +164,6 @@ pub const Window = struct {
             return Error.WindowCreateFailed;
         }
         self.* = .{ .handle = handle orelse return Error.WindowCreateFailed };
-        self.setDarkMode(false);
         try self.refreshSnapshot();
     }
 
@@ -170,10 +177,10 @@ pub const Window = struct {
         try self.refreshSnapshot();
     }
 
-    pub fn setDarkMode(self: *Window, enabled: bool) void {
+    pub fn setColorScheme(self: *Window, scheme: ColorScheme) void {
         hs_demo_cocoa_window_set_color_scheme(
             self.handle,
-            @intFromEnum(colorSchemeFromDarkMode(enabled)),
+            @intFromEnum(scheme),
         );
     }
 
@@ -200,6 +207,9 @@ pub const Window = struct {
             &host,
             @sizeOf(HostPointers),
         ) != .ok) return Error.MetalHostUnavailable;
+        if (host.protocol_version != window_protocol_version_word or host.reserved0 != 0) {
+            return Error.MetalHostUnavailable;
+        }
 
         return .{
             .device = host.device orelse return Error.MetalHostUnavailable,
@@ -215,6 +225,13 @@ pub const Window = struct {
             &snapshot,
             @sizeOf(Snapshot),
         ) != .ok) return Error.WindowSnapshotFailed;
+        if (snapshot.protocol_version != window_protocol_version_word or
+            snapshot.reserved0 != 0 or
+            snapshot.reserved1 != 0 or
+            snapshot.reserved2 != 0)
+        {
+            return Error.WindowSnapshotFailed;
+        }
         for (snapshot.keys, 0..) |pressed, index| {
             self.input_state.keys[index] = pressed != 0;
         }
@@ -272,20 +289,37 @@ test "Cocoa window requires positive initial extents" {
 }
 
 test "Cocoa window protocol uses shared major minor encoding" {
-    try std.testing.expectEqual(ProtocolVersion.init(1, 0).word(), window_protocol_version_word);
-    try std.testing.expectEqual(ColorScheme.light, colorSchemeFromDarkMode(false));
-    try std.testing.expectEqual(ColorScheme.dark, colorSchemeFromDarkMode(true));
+    try std.testing.expectEqual(ProtocolVersion.init(2, 0).word(), window_protocol_version_word);
 }
 
 test "Cocoa create request ABI layout is explicit" {
     try std.testing.expectEqual(@as(usize, 8), @alignOf(CreateRequest));
-    try std.testing.expectEqual(@as(usize, 32), @sizeOf(CreateRequest));
+    try std.testing.expectEqual(@as(usize, 40), @sizeOf(CreateRequest));
     try std.testing.expectEqual(@as(usize, 0), @offsetOf(CreateRequest, "protocol_version"));
     try std.testing.expectEqual(@as(usize, 4), @offsetOf(CreateRequest, "width"));
     try std.testing.expectEqual(@as(usize, 8), @offsetOf(CreateRequest, "height"));
-    try std.testing.expectEqual(@as(usize, 12), @offsetOf(CreateRequest, "reserved0"));
+    try std.testing.expectEqual(@as(usize, 12), @offsetOf(CreateRequest, "color_scheme"));
     try std.testing.expectEqual(@as(usize, 16), @offsetOf(CreateRequest, "title_data"));
     try std.testing.expectEqual(@as(usize, 24), @offsetOf(CreateRequest, "title_size"));
+    try std.testing.expectEqual(@as(usize, 32), @offsetOf(CreateRequest, "reserved0"));
+    try std.testing.expectEqual(@as(usize, 36), @offsetOf(CreateRequest, "reserved1"));
+}
+
+test "Cocoa create request carries explicit initial color scheme" {
+    const request = CreateRequest.init(.{
+        .width = 640,
+        .height = 480,
+        .title = "demo",
+        .initial_color_scheme = .dark,
+    });
+    try std.testing.expectEqual(window_protocol_version_word, request.protocol_version);
+    try std.testing.expectEqual(@as(u32, 640), request.width);
+    try std.testing.expectEqual(@as(u32, 480), request.height);
+    try std.testing.expectEqual(@intFromEnum(ColorScheme.dark), request.color_scheme);
+    try std.testing.expectEqual(@as(usize, 4), request.title_size);
+    try std.testing.expect(request.title_data != null);
+    try std.testing.expectEqual(@as(u32, 0), request.reserved0);
+    try std.testing.expectEqual(@as(u32, 0), request.reserved1);
 }
 
 test "Cocoa snapshot ABI layout is explicit" {
@@ -304,8 +338,10 @@ test "Cocoa snapshot ABI layout is explicit" {
 
 test "Cocoa Metal host ABI layout is explicit" {
     try std.testing.expectEqual(@as(usize, 8), @alignOf(HostPointers));
-    try std.testing.expectEqual(@as(usize, 24), @sizeOf(HostPointers));
-    try std.testing.expectEqual(@as(usize, 0), @offsetOf(HostPointers, "device"));
-    try std.testing.expectEqual(@as(usize, 8), @offsetOf(HostPointers, "command_queue"));
-    try std.testing.expectEqual(@as(usize, 16), @offsetOf(HostPointers, "layer"));
+    try std.testing.expectEqual(@as(usize, 32), @sizeOf(HostPointers));
+    try std.testing.expectEqual(@as(usize, 0), @offsetOf(HostPointers, "protocol_version"));
+    try std.testing.expectEqual(@as(usize, 4), @offsetOf(HostPointers, "reserved0"));
+    try std.testing.expectEqual(@as(usize, 8), @offsetOf(HostPointers, "device"));
+    try std.testing.expectEqual(@as(usize, 16), @offsetOf(HostPointers, "command_queue"));
+    try std.testing.expectEqual(@as(usize, 24), @offsetOf(HostPointers, "layer"));
 }

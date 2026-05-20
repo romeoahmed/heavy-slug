@@ -12,6 +12,11 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Cocoa/Metal demo host ABI tightened:** the macOS Metal demo now uses a
+  v2 Cocoa host protocol for window creation, input snapshots, and Metal host
+  pointer responses; the initial explicit light/dark appearance is part of the
+  create request, and Zig validates returned protocol/reserved fields before
+  borrowing `id<MTLDevice>`, `id<MTL4CommandQueue>`, and `CAMetalLayer *`.
 - **Vulkan demo WSI host refactored:** the Windows/Linux Vulkan demo now
   splits dispatch tables, physical-device selection, WSI planning, and frame
   execution into dedicated modules, validates instance extensions before

@@ -11,7 +11,12 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     var window: demo_platform.Window = .{};
-    try window.init(demo_scene.window_width, demo_scene.window_height, "heavy-slug Metal 4 demo");
+    try window.init(.{
+        .width = demo_scene.window_width,
+        .height = demo_scene.window_height,
+        .title = "heavy-slug Metal 4 demo",
+        .initial_color_scheme = .light,
+    });
     defer window.deinit();
 
     const host = try window.metalHost();
@@ -45,7 +50,7 @@ pub fn main() !void {
         const w: f32 = @floatFromInt(size[0]);
         const h: f32 = @floatFromInt(size[1]);
         scene.update(window.input(), dt, now, w, h);
-        window.setDarkMode(scene.darkModeEnabled());
+        window.setColorScheme(if (scene.darkModeEnabled()) .dark else .light);
 
         var text_frame = try text_renderer.beginFrame(scene.frameView(w, h));
         try scene.draw(&text_frame, font);

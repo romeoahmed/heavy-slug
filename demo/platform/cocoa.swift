@@ -12,7 +12,7 @@ private let statusError: Int32 = 1
 private let appName = "heavy-slug"
 private let fallbackTitle = "heavy-slug Metal 4 demo"
 private let preciseScrollScale = 0.1
-private let hostProtocolVersion = protocolVersion(major: 1, minor: 0)
+private let hostProtocolVersion = protocolVersion(major: 2, minor: 0)
 
 private func protocolVersion(major: UInt32, minor: UInt32) -> UInt32 {
   (major << 16) | minor
@@ -73,13 +73,15 @@ private final class DemoAppearance {
 }
 
 private enum CreateRequestLayout {
-  static let byteSize = 32
+  static let byteSize = 40
   static let protocolVersion = 0
   static let width = 4
   static let height = 8
-  static let reserved0 = 12
+  static let colorScheme = 12
   static let titleData = 16
   static let titleSize = 24
+  static let reserved0 = 32
+  static let reserved1 = 36
 }
 
 private enum SnapshotLayout {
@@ -99,10 +101,12 @@ private enum SnapshotLayout {
 }
 
 private enum MetalHostLayout {
-  static let byteSize = 24
-  static let device = 0
-  static let commandQueue = 8
-  static let layer = 16
+  static let byteSize = 32
+  static let protocolVersion = 0
+  static let reserved0 = 4
+  static let device = 8
+  static let commandQueue = 16
+  static let layer = 24
 }
 
 private struct HostFailure: Error, CustomStringConvertible {
@@ -189,6 +193,10 @@ private func requireProtocolVersion(_ actual: UInt32, label: String) throws {
   }
 }
 
+private func loadABI<T>(_ data: UnsafeRawPointer, offset: Int, as type: T.Type = T.self) -> T {
+  data.loadUnaligned(fromByteOffset: offset, as: type)
+}
+
 private func titleString(_ data: UnsafePointer<UInt8>?, _ size: UInt) throws -> String {
   if data == nil, size != 0 {
     throw fail("Cocoa window title pointer is null")
@@ -239,6 +247,7 @@ private func contentsScale(logicalBounds: CGRect, backingBounds: CGRect, window:
 private struct CreateRequest {
   let width: UInt32
   let height: UInt32
+  let colorScheme: DemoColorScheme
   let title: String
 
   init(data: UnsafeRawPointer?, size: UInt) throws {
@@ -251,23 +260,29 @@ private struct CreateRequest {
     try requireLayoutSize(
       size, expected: CreateRequestLayout.byteSize, label: "Cocoa create request")
 
-    let version = data.load(fromByteOffset: CreateRequestLayout.protocolVersion, as: UInt32.self)
+    let version = loadABI(data, offset: CreateRequestLayout.protocolVersion, as: UInt32.self)
     try requireProtocolVersion(version, label: "Cocoa create request")
 
-    let reserved0 = data.load(fromByteOffset: CreateRequestLayout.reserved0, as: UInt32.self)
-    guard reserved0 == 0 else {
-      throw fail("Cocoa create request reserved field must be zero")
+    let reserved0 = loadABI(data, offset: CreateRequestLayout.reserved0, as: UInt32.self)
+    let reserved1 = loadABI(data, offset: CreateRequestLayout.reserved1, as: UInt32.self)
+    guard reserved0 == 0, reserved1 == 0 else {
+      throw fail("Cocoa create request reserved fields must be zero")
     }
 
-    width = data.load(fromByteOffset: CreateRequestLayout.width, as: UInt32.self)
-    height = data.load(fromByteOffset: CreateRequestLayout.height, as: UInt32.self)
+    width = loadABI(data, offset: CreateRequestLayout.width, as: UInt32.self)
+    height = loadABI(data, offset: CreateRequestLayout.height, as: UInt32.self)
     guard width > 0, height > 0 else {
       throw fail("Cocoa demo host requires a positive initial window size")
     }
+    let schemeValue = loadABI(data, offset: CreateRequestLayout.colorScheme, as: UInt32.self)
+    guard let colorScheme = DemoColorScheme(rawValue: schemeValue) else {
+      throw fail("Cocoa create request color scheme is invalid")
+    }
+    self.colorScheme = colorScheme
 
-    let titleData = data.load(
-      fromByteOffset: CreateRequestLayout.titleData, as: UnsafePointer<UInt8>?.self)
-    let titleSize = data.load(fromByteOffset: CreateRequestLayout.titleSize, as: UInt.self)
+    let titleData = loadABI(
+      data, offset: CreateRequestLayout.titleData, as: UnsafePointer<UInt8>?.self)
+    let titleSize = loadABI(data, offset: CreateRequestLayout.titleSize, as: UInt.self)
     title = try titleString(titleData, titleSize)
   }
 }
@@ -351,6 +366,10 @@ private func writeEmptyMetalHost(_ pointer: UnsafeMutableRawPointer?, size: UInt
     return
   }
   zeroBytes(pointer, capacity: size, limit: MetalHostLayout.byteSize)
+  if size >= UInt(MemoryLayout<UInt32>.size) {
+    pointer.storeBytes(
+      of: hostProtocolVersion, toByteOffset: MetalHostLayout.protocolVersion, as: UInt32.self)
+  }
 }
 
 @MainActor
@@ -369,6 +388,8 @@ private func writeMetalHost(
     throw fail("Cocoa Metal host received a null window handle")
   }
 
+  pointer.storeBytes(
+    of: hostProtocolVersion, toByteOffset: MetalHostLayout.protocolVersion, as: UInt32.self)
   let device = Unmanaged.passUnretained(host.device as AnyObject).toOpaque()
   let commandQueue = Unmanaged.passUnretained(host.commandQueue as AnyObject).toOpaque()
   let layer = Unmanaged.passUnretained(host.layer).toOpaque()
@@ -892,6 +913,7 @@ private func makeWindow(_ request: CreateRequest) throws -> DemoWindowHost {
   let commandQueue = try makeCommandQueue(device: device)
   let layer = makeMetalLayer(device: device)
   let host = DemoWindowHost(device: device, commandQueue: commandQueue, layer: layer)
+  host.setColorScheme(request.colorScheme)
 
   let rect = NSRect(x: 0, y: 0, width: Int(request.width), height: Int(request.height))
   let style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]

@@ -153,16 +153,17 @@ Important dependency facts:
   use `-Dvulkan=true` or `-Dmetal=true`.
 - Metal/Cocoa bridge code is Swift. Swift `@c` exports use only pointers,
   integer sizes, scalar values, explicit out parameters, and
-  protocol-versioned raw request blocks for larger calls, so Zig mirrors the
-  ABI directly with `extern` declarations and does not translate bridge
-  headers.
+  protocol-versioned raw request/response blocks for larger calls, so Zig
+  mirrors the ABI directly with `extern` declarations and does not translate
+  bridge headers.
 - Fallible Metal/Cocoa bridge creation calls return named status values and
   write owned handles through explicit out parameters. UTF-8 data crosses as
   pointer/length pairs, and diagnostics are written into caller-provided byte
   buffers.
 - Cocoa exposes borrowed Metal host objects through a protocol-versioned host
   pointer block for `id<MTLDevice>`, `id<MTL4CommandQueue>`, and
-  `CAMetalLayer *`; the Metal bridge retains those objects internally.
+  `CAMetalLayer *`; Zig validates that block before the Metal bridge retains
+  those objects internally.
 - Swift bridge sources compile with the `xcrun --sdk macosx` selected Apple
   Swift `6.3` or newer compiler, `-swift-version 6`, an explicit macOS SDK,
   and an explicit Apple Swift target triple derived from the Zig target. The
@@ -175,8 +176,10 @@ Important dependency facts:
 - The demo hosts are deliberately native: Win32 on Windows, Wayland on Linux,
   and a SwiftUI/AppKit host on macOS. The macOS host uses SwiftUI Observation
   for the explicit demo appearance state while AppKit still owns the native
-  window, event pump, and `CAMetalLayer` surface. GLFW/SDL-style toolkit
-  dependencies are not part of the current build model.
+  window, event pump, and `CAMetalLayer` surface; the initial appearance is
+  passed in the protocol-versioned create request and the demo toggles it with
+  `B`. GLFW/SDL-style toolkit dependencies are not part of the current build
+  model.
 - The Linux Wayland demo uses xdg-shell client-side decorations, viewporter
   buffer scaling, fractional-scale when available, core
   `wl_surface.preferred_buffer_scale` as the integer-scale fallback, and
