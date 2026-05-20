@@ -314,12 +314,14 @@ pipeline state model for this renderer.
 Shader sources use explicit Slang 2026 modules. `build/shaders.zig` compiles
 source-declared entry points to SPIR-V 1.6 for Vulkan and Metal Shading
 Language for Metal. GPU ABI structs are generated from Slang reflection by
-`tools/layout_gen.zig`; the hot ABI keeps glyph-wide chart transforms in
-`GlyphInstance` and per-strip bounds/anchors in `GlyphMeshlet` to avoid
-duplicating matrices across meshlets. Fragment candidate lookup merges at most
-eight adjacent h-band lists before falling back to a full curve scan, keeping
-local arrays and register pressure bounded while preserving the same analytic
-coverage result.
+`tools/layout_gen.zig`; `build/shaders.zig` names the required reflected
+structs explicitly, and the generator emits byte-level `@sizeOf`/`@offsetOf`
+tests plus padding fields for every reflected gap. The hot ABI keeps
+glyph-wide chart transforms in `GlyphInstance` and per-strip bounds/anchors in
+`GlyphMeshlet` to avoid duplicating matrices across meshlets. Fragment
+candidate lookup merges at most eight adjacent h-band lists before falling
+back to a full curve scan, keeping local arrays and register pressure bounded
+while preserving the same analytic coverage result.
 
 <details>
 <summary>Shader output paths</summary>
@@ -380,7 +382,7 @@ Backend debug counters are exposed through `Renderer.stats()` in Debug builds.
 | Blob ABI | `CoverageBlob` v4 is an explicit 32-bit word stream, not a serialized Zig struct; the header stores separate `HSBL` protocol magic and `4.0` protocol version words, and CPU decode validates the header, curve table, and CSR h-band candidate index before upload. |
 | Blob precision | Glyph blobs are 32-bit fixed-point and keyed by precision tier. Unsupported precision tiers are rejected before outline regularization. |
 | Blob references | `GlyphBlobRef` values are byte offsets. |
-| GPU ABI | Layouts are generated from Slang reflection; `src/gpu` owns the mesh output budget, resource binding table, and counter ABI names. |
+| GPU ABI | Required layouts are generated from Slang reflection by explicit name; `src/gpu` owns the mesh output budget, resource binding table, and counter ABI names. |
 | C bindings | C declarations are translated by the build graph, not by source-level `@cImport`. |
 
 `RendererCore` is the shared spine behind both backends: it loads fonts, shapes

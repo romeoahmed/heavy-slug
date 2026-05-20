@@ -116,20 +116,23 @@ public bool clipNdcQuad(
     a[2] = p2;
     a[3] = p3;
 
-    uint count = 4;
-    clipAgainstPlane(a, count, kClipPlaneLeft, b, count);
-    clipAgainstPlane(b, count, kClipPlaneRight, a, count);
-    clipAgainstPlane(a, count, kClipPlaneBottom, b, count);
-    clipAgainstPlane(b, count, kClipPlaneTop, a, count);
-    if (count < 3)
+    uint leftCount = 0;
+    uint rightCount = 0;
+    uint bottomCount = 0;
+    uint topCount = 0;
+    clipAgainstPlane(a, 4, kClipPlaneLeft, b, leftCount);
+    clipAgainstPlane(b, leftCount, kClipPlaneRight, a, rightCount);
+    clipAgainstPlane(a, rightCount, kClipPlaneBottom, b, bottomCount);
+    clipAgainstPlane(b, bottomCount, kClipPlaneTop, a, topCount);
+    if (topCount < 3)
         return false;
 
-    float area2 = polygonArea2(a, count);
+    float area2 = polygonArea2(a, topCount);
     if (!isfinite(area2) || abs(area2) <= kMinClipArea2)
         return false;
 
-    for (uint i = 0; i < count; i++)
+    for (uint i = 0; i < topCount; i++)
         clipped[i] = a[i];
-    clippedCount = count;
+    clippedCount = topCount;
     return true;
 }

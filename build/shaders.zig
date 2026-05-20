@@ -30,6 +30,11 @@ const Stage = enum {
 const SlangTarget = enum { spirv, msl };
 const spirv_profile = "spirv_1_6";
 const metal_capability = "metallib_4_0";
+const reflected_gpu_structs = [_][]const u8{
+    "GlyphInstance",
+    "GlyphMeshlet",
+    "FrameParams",
+};
 
 pub const SpirvBundle = struct {
     mesh: std.Build.LazyPath,
@@ -127,6 +132,7 @@ fn generateGpuStructs(
     });
     const run = b.addRunArtifact(tool);
     run.addFileArg(reflection_json);
+    for (reflected_gpu_structs) |name| run.addArg(name);
     return run.captureStdOut(.{ .basename = "gpu_structs.zig" });
 }
 

@@ -12,6 +12,14 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Slang reflection layout generator rewritten:** `tools/layout_gen.zig` now
+  requires the build graph to pass explicit GPU ABI struct names, validates
+  reflected identifiers and byte ranges before emission, preserves reflected
+  storage padding with generated fields, and emits `@sizeOf`/`@offsetOf`
+  self-tests for every requested struct.
+- **Slang 2026.9 mesh clipping warning fixed:** mesh-clip count propagation now
+  uses distinct input/output variables so `slangc -warnings-as-errors all`
+  succeeds from a clean build cache.
 - **Vulkan demo host rewritten:** the Windows/Linux demo host now uses a
   renderer-aligned frame ring, unified graphics/present queue selection when
   available, explicit surface-format and FIFO present-mode selection, per-image
