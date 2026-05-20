@@ -12,6 +12,14 @@ implementation notes belong in commits and code review history.
 
 ### Changed
 
+- **Vulkan demo zero-copy surface contract added:** Windows and Wayland demo
+  hosts now expose explicit direct-swapchain surface capabilities, the Vulkan
+  demo refuses non-direct platform present paths, and swapchain creation is
+  planned as a direct WSI color-attachment path without transfer/staging image
+  usage. The Wayland host now generates and binds linux-dmabuf-v1 surface
+  feedback when compositors advertise it, while Win32 documents that DXGI
+  shared handles and NT sections are not part of the Vulkan HWND swapchain
+  present path.
 - **Windows demo platform host rewritten:** the Vulkan Win32 demo now keeps a
   standard titled overlapped window, resolves Vulkan/DWM entry points through
   Zig's `std.os.windows` ntdll loader path, uses ntdll performance counters,

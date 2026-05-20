@@ -200,6 +200,13 @@ const wp = struct {
     };
 };
 
+const zwp = struct {
+    const linux_dmabuf = struct {
+        const required_feedback_version: u32 = 4;
+        const preferred_version: u32 = 5;
+    };
+};
+
 const linux_input = struct {
     const key = struct {
         const esc = c.KEY_ESC;
@@ -218,6 +225,31 @@ const linux_input = struct {
         const left: u32 = c.BTN_LEFT;
         const right: u32 = c.BTN_RIGHT;
     };
+};
+
+pub const SurfaceCapabilities = struct {
+    direct_swapchain: bool = true,
+    /// The rendered content uses VK_KHR_wayland_surface. linux-dmabuf feedback
+    /// is tracked for compositor GPU-import capability, while Vulkan WSI owns
+    /// swapchain image allocation and present.
+    linux_dmabuf: LinuxDmaBuf = .unavailable,
+    decorations: DecorationMemory = .shared_memfd_wl_shm,
+
+    pub const LinuxDmaBuf = enum {
+        unavailable,
+        advertised,
+        surface_feedback_pending,
+        surface_feedback_received,
+    };
+
+    pub const DecorationMemory = enum {
+        none,
+        shared_memfd_wl_shm,
+    };
+
+    pub fn supportsDirectSwapchain(self: SurfaceCapabilities) bool {
+        return self.direct_swapchain;
+    }
 };
 
 const PointerSurface = enum {
@@ -1134,6 +1166,11 @@ fn bindVersion(advertised: u32, required: u32) u32 {
     return required;
 }
 
+fn bindOptionalVersion(advertised: u32, required: u32, preferred: u32) ?u32 {
+    if (advertised < required) return null;
+    return @min(advertised, preferred);
+}
+
 fn supportsVersion(advertised: u32, required: u32) bool {
     return advertised >= required;
 }
@@ -1159,6 +1196,11 @@ pub const Window = struct {
     main_viewport: ?*c.struct_wp_viewport = null,
     fractional_scale_manager: ?*c.struct_wp_fractional_scale_manager_v1 = null,
     fractional_scale: ?*c.struct_wp_fractional_scale_v1 = null,
+    linux_dmabuf: ?*c.struct_zwp_linux_dmabuf_v1 = null,
+    linux_dmabuf_version: u32 = 0,
+    dmabuf_surface_feedback: ?*c.struct_zwp_linux_dmabuf_feedback_v1 = null,
+    dmabuf_feedback_received: bool = false,
+    dmabuf_format_table_size: u32 = 0,
     cursor_shape_manager: ?*c.struct_wp_cursor_shape_manager_v1 = null,
     cursor_shape_device: ?*c.struct_wp_cursor_shape_device_v1 = null,
     seat: ?*c.struct_wl_seat = null,
@@ -1245,6 +1287,7 @@ pub const Window = struct {
             return error.WaylandListenerFailed;
         }
         try self.createScaleObjects();
+        try self.createDmaBufFeedback();
 
         self.xdg_surface = c.xdg_wm_base_get_xdg_surface(self.wm_base, self.surface) orelse return error.WaylandSurfaceFailed;
         if (c.xdg_surface_add_listener(self.xdg_surface, &xdg_surface_listener, self) != 0) {
@@ -1278,8 +1321,10 @@ pub const Window = struct {
         if (self.xdg_surface) |xdg_surface| c.xdg_surface_destroy(xdg_surface);
         if (self.fractional_scale) |scale| c.wp_fractional_scale_v1_destroy(scale);
         if (self.main_viewport) |viewport| c.wp_viewport_destroy(viewport);
+        if (self.dmabuf_surface_feedback) |feedback| c.zwp_linux_dmabuf_feedback_v1_destroy(feedback);
         if (self.surface) |surface| c.wl_surface_destroy(surface);
         if (self.cursor_shape_manager) |manager| c.wp_cursor_shape_manager_v1_destroy(manager);
+        if (self.linux_dmabuf) |dmabuf| c.zwp_linux_dmabuf_v1_destroy(dmabuf);
         if (self.fractional_scale_manager) |manager| c.wp_fractional_scale_manager_v1_destroy(manager);
         if (self.viewporter) |viewporter| c.wp_viewporter_destroy(viewporter);
         if (self.wm_base) |wm_base| c.xdg_wm_base_destroy(wm_base);
@@ -1376,6 +1421,13 @@ pub const Window = struct {
         return idisp.createWaylandSurfaceKHR(instance, &create_info, null) catch error.SurfaceCreationFailed;
     }
 
+    pub fn surfaceCapabilities(self: *const Window) SurfaceCapabilities {
+        return .{
+            .linux_dmabuf = self.linuxDmaBufState(),
+            .decorations = .shared_memfd_wl_shm,
+        };
+    }
+
     fn roundtrip(self: *Window) !void {
         if (c.wl_display_roundtrip(self.display) < 0) return error.WaylandDispatchFailed;
     }
@@ -1393,6 +1445,26 @@ pub const Window = struct {
             }
         }
         self.applySurfaceScale();
+    }
+
+    fn createDmaBufFeedback(self: *Window) !void {
+        const dmabuf = self.linux_dmabuf orelse return;
+        if (self.linux_dmabuf_version < zwp.linux_dmabuf.required_feedback_version) return;
+        const surface = self.surface orelse return;
+        const feedback = c.zwp_linux_dmabuf_v1_get_surface_feedback(dmabuf, surface) orelse {
+            return error.WaylandDmaBufFeedbackFailed;
+        };
+        errdefer c.zwp_linux_dmabuf_feedback_v1_destroy(feedback);
+        if (c.zwp_linux_dmabuf_feedback_v1_add_listener(feedback, &dmabuf_feedback_listener, self) != 0) {
+            return error.WaylandListenerFailed;
+        }
+        self.dmabuf_surface_feedback = feedback;
+    }
+
+    fn linuxDmaBufState(self: *const Window) SurfaceCapabilities.LinuxDmaBuf {
+        if (self.linux_dmabuf == null) return .unavailable;
+        if (self.dmabuf_surface_feedback == null) return .advertised;
+        return if (self.dmabuf_feedback_received) .surface_feedback_received else .surface_feedback_pending;
     }
 
     fn decorationMetrics(self: *const Window) DecorationMetrics {
@@ -1869,6 +1941,20 @@ fn registryGlobal(
             &c.wp_fractional_scale_manager_v1_interface,
             bindVersion(version, wp.fractional_scale.manager_version),
         ));
+    } else if (std.mem.eql(u8, iface, "zwp_linux_dmabuf_v1")) {
+        const bind_version = bindOptionalVersion(
+            version,
+            zwp.linux_dmabuf.required_feedback_version,
+            zwp.linux_dmabuf.preferred_version,
+        ) orelse return;
+        if (window.linux_dmabuf != null) return;
+        window.linux_dmabuf = @ptrCast(c.wl_registry_bind(
+            registry_ptr,
+            name,
+            &c.zwp_linux_dmabuf_v1_interface,
+            bind_version,
+        ));
+        window.linux_dmabuf_version = bind_version;
     } else if (std.mem.eql(u8, iface, "wp_cursor_shape_manager_v1")) {
         if (!supportsVersion(version, wp.cursor_shape.manager_version)) return;
         if (window.cursor_shape_manager != null) return;
@@ -1966,6 +2052,85 @@ fn fractionalScalePreferredScale(
 
     const window: *Window = @ptrCast(@alignCast(data.?));
     if (window.scale_state.setFractional(scale)) window.applyScaleChange();
+}
+
+const dmabuf_feedback_listener = std.mem.zeroInit(c.zwp_linux_dmabuf_feedback_v1_listener, .{
+    .done = dmaBufFeedbackDone,
+    .format_table = dmaBufFeedbackFormatTable,
+    .main_device = dmaBufFeedbackMainDevice,
+    .tranche_done = dmaBufFeedbackTrancheDone,
+    .tranche_target_device = dmaBufFeedbackTrancheTargetDevice,
+    .tranche_formats = dmaBufFeedbackTrancheFormats,
+    .tranche_flags = dmaBufFeedbackTrancheFlags,
+});
+
+fn dmaBufFeedbackDone(
+    data: ?*anyopaque,
+    feedback: ?*c.struct_zwp_linux_dmabuf_feedback_v1,
+) callconv(.c) void {
+    _ = feedback;
+    const window: *Window = @ptrCast(@alignCast(data.?));
+    window.dmabuf_feedback_received = true;
+}
+
+fn dmaBufFeedbackFormatTable(
+    data: ?*anyopaque,
+    feedback: ?*c.struct_zwp_linux_dmabuf_feedback_v1,
+    fd: i32,
+    size: u32,
+) callconv(.c) void {
+    _ = feedback;
+    defer if (fd >= 0) std.posix.close(fd);
+    const window: *Window = @ptrCast(@alignCast(data.?));
+    window.dmabuf_format_table_size = size;
+}
+
+fn dmaBufFeedbackMainDevice(
+    data: ?*anyopaque,
+    feedback: ?*c.struct_zwp_linux_dmabuf_feedback_v1,
+    device: ?*c.struct_wl_array,
+) callconv(.c) void {
+    _ = data;
+    _ = feedback;
+    _ = device;
+}
+
+fn dmaBufFeedbackTrancheDone(
+    data: ?*anyopaque,
+    feedback: ?*c.struct_zwp_linux_dmabuf_feedback_v1,
+) callconv(.c) void {
+    _ = data;
+    _ = feedback;
+}
+
+fn dmaBufFeedbackTrancheTargetDevice(
+    data: ?*anyopaque,
+    feedback: ?*c.struct_zwp_linux_dmabuf_feedback_v1,
+    device: ?*c.struct_wl_array,
+) callconv(.c) void {
+    _ = data;
+    _ = feedback;
+    _ = device;
+}
+
+fn dmaBufFeedbackTrancheFormats(
+    data: ?*anyopaque,
+    feedback: ?*c.struct_zwp_linux_dmabuf_feedback_v1,
+    indices: ?*c.struct_wl_array,
+) callconv(.c) void {
+    _ = data;
+    _ = feedback;
+    _ = indices;
+}
+
+fn dmaBufFeedbackTrancheFlags(
+    data: ?*anyopaque,
+    feedback: ?*c.struct_zwp_linux_dmabuf_feedback_v1,
+    flags: u32,
+) callconv(.c) void {
+    _ = data;
+    _ = feedback;
+    _ = flags;
 }
 
 const xdg_surface_listener = std.mem.zeroInit(c.xdg_surface_listener, .{
@@ -2426,6 +2591,40 @@ test "Wayland: registry binding requires the configured protocol version" {
     try std.testing.expect(supportsVersion(wl.compositor.version, wl.compositor.version));
     try std.testing.expect(supportsVersion(99, wl.compositor.version));
     try std.testing.expectEqual(wl.compositor.version, bindVersion(99, wl.compositor.version));
+    try std.testing.expect(bindOptionalVersion(
+        zwp.linux_dmabuf.required_feedback_version - 1,
+        zwp.linux_dmabuf.required_feedback_version,
+        zwp.linux_dmabuf.preferred_version,
+    ) == null);
+    try std.testing.expectEqual(
+        @as(u32, zwp.linux_dmabuf.required_feedback_version),
+        bindOptionalVersion(
+            zwp.linux_dmabuf.required_feedback_version,
+            zwp.linux_dmabuf.required_feedback_version,
+            zwp.linux_dmabuf.preferred_version,
+        ).?,
+    );
+    try std.testing.expectEqual(
+        @as(u32, zwp.linux_dmabuf.preferred_version),
+        bindOptionalVersion(99, zwp.linux_dmabuf.required_feedback_version, zwp.linux_dmabuf.preferred_version).?,
+    );
+}
+
+test "Wayland: surface capabilities expose direct WSI and dmabuf feedback state" {
+    var window: Window = .{};
+    try std.testing.expect(window.surfaceCapabilities().supportsDirectSwapchain());
+    try std.testing.expectEqual(SurfaceCapabilities.LinuxDmaBuf.unavailable, window.surfaceCapabilities().linux_dmabuf);
+    try std.testing.expectEqual(SurfaceCapabilities.DecorationMemory.shared_memfd_wl_shm, window.surfaceCapabilities().decorations);
+
+    window.linux_dmabuf = @ptrFromInt(4096);
+    window.linux_dmabuf_version = zwp.linux_dmabuf.required_feedback_version;
+    try std.testing.expectEqual(SurfaceCapabilities.LinuxDmaBuf.advertised, window.surfaceCapabilities().linux_dmabuf);
+
+    window.dmabuf_surface_feedback = @ptrFromInt(8192);
+    try std.testing.expectEqual(SurfaceCapabilities.LinuxDmaBuf.surface_feedback_pending, window.surfaceCapabilities().linux_dmabuf);
+
+    window.dmabuf_feedback_received = true;
+    try std.testing.expectEqual(SurfaceCapabilities.LinuxDmaBuf.surface_feedback_received, window.surfaceCapabilities().linux_dmabuf);
 }
 
 test "Wayland: xdg parser tracks v7 edge constraints and v5 capabilities" {

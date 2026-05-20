@@ -37,6 +37,11 @@ const wayland_protocol_specs = [_]WaylandProtocol{
         .header = "cursor-shape-v1-client-protocol.h",
         .code = "cursor-shape-v1-protocol.c",
     },
+    .{
+        .xml = "stable/linux-dmabuf/linux-dmabuf-v1.xml",
+        .header = "linux-dmabuf-v1-client-protocol.h",
+        .code = "linux-dmabuf-v1-protocol.c",
+    },
 };
 
 comptime {

@@ -250,6 +250,26 @@ const ChromePalette = struct {
     border: windows.COLORREF,
 };
 
+pub const SurfaceCapabilities = struct {
+    direct_swapchain: bool = true,
+    /// Vulkan owns the HWND swapchain memory contract. DXGI shared handles and
+    /// NT sections are external-memory tools, not the Win32 WSI present path.
+    external_memory: ExternalMemory = .not_used_for_vulkan_wsi,
+    shared_section: SharedSection = .not_used_for_vulkan_wsi,
+
+    pub const ExternalMemory = enum {
+        not_used_for_vulkan_wsi,
+    };
+
+    pub const SharedSection = enum {
+        not_used_for_vulkan_wsi,
+    };
+
+    pub fn supportsDirectSwapchain(self: SurfaceCapabilities) bool {
+        return self.direct_swapchain;
+    }
+};
+
 const DwmWindowCornerPreference = enum(windows.DWORD) {
     default = 0,
     do_not_round = 1,
@@ -410,6 +430,10 @@ pub const Window = struct {
             .hwnd = hwnd,
         };
         return idisp.createWin32SurfaceKHR(instance, &create_info, null) catch error.SurfaceCreationFailed;
+    }
+
+    pub fn surfaceCapabilities(_: *const Window) SurfaceCapabilities {
+        return .{};
     }
 
     fn refreshFramebufferSize(self: *Window) void {
@@ -881,6 +905,14 @@ test "Win32 DWM chrome helpers encode COLORREF palettes" {
     const dark = chromePalette(.dark);
     try std.testing.expect(light.caption != dark.caption);
     try std.testing.expect(light.text != dark.text);
+}
+
+test "Win32 surface capabilities keep zero-copy present on Vulkan WSI" {
+    const window: Window = .{};
+    const caps = window.surfaceCapabilities();
+    try std.testing.expect(caps.supportsDirectSwapchain());
+    try std.testing.expectEqual(SurfaceCapabilities.ExternalMemory.not_used_for_vulkan_wsi, caps.external_memory);
+    try std.testing.expectEqual(SurfaceCapabilities.SharedSection.not_used_for_vulkan_wsi, caps.shared_section);
 }
 
 fn makeLparamWords(low: u16, high: u16) windows.LPARAM {

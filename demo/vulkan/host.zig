@@ -103,6 +103,38 @@ const SurfaceConfig = struct {
     present_mode: vk.PresentModeKHR,
 };
 
+const SwapchainRenderPath = enum {
+    direct_wsi,
+};
+
+const SwapchainPlan = struct {
+    render_path: SwapchainRenderPath = .direct_wsi,
+    extent: vk.Extent2D,
+    image_count: u32 = 0,
+    image_usage: vk.ImageUsageFlags = .{},
+    sharing_mode: vk.SharingMode = .exclusive,
+    queue_family_indices: [2]u32 = .{ 0, 0 },
+    queue_family_index_count: u32 = 0,
+    composite_alpha: vk.CompositeAlphaFlagsKHR = .{},
+
+    fn isDrawable(self: SwapchainPlan) bool {
+        return self.extent.width > 0 and self.extent.height > 0;
+    }
+
+    fn isDirectZeroCopy(self: SwapchainPlan) bool {
+        return self.render_path == .direct_wsi and
+            self.image_usage.color_attachment_bit and
+            !self.image_usage.transfer_src_bit and
+            !self.image_usage.transfer_dst_bit and
+            !self.image_usage.storage_bit;
+    }
+
+    fn queueFamilyIndexPtr(self: *const SwapchainPlan) ?[*]const u32 {
+        if (self.queue_family_index_count == 0) return null;
+        return self.queue_family_indices[0..self.queue_family_index_count].ptr;
+    }
+};
+
 const FrameSlot = struct {
     command_buffer: vk.CommandBuffer = .null_handle,
     image_available: vk.Semaphore = .null_handle,
@@ -142,6 +174,11 @@ pub const Host = struct {
     pub const frames_in_flight = heavy_slug_vulkan.renderer.max_frames_in_flight;
 
     pub fn init(window: *demo_platform.Window, allocator: std.mem.Allocator) !Host {
+        const platform_surface = window.surfaceCapabilities();
+        if (!platform_surface.supportsDirectSwapchain()) {
+            return error.PlatformDirectSwapchainUnsupported;
+        }
+
         const base = BaseDispatch.load(getInstanceProcAddress);
         const platform_exts = getRequiredInstanceExtensions();
         const app_info = vk.ApplicationInfo{
@@ -265,38 +302,34 @@ pub const Host = struct {
             self.demo_idisp,
             self.allocator,
         );
-        const extent = chooseSwapchainExtent(surface_config.caps, window.framebufferSize());
-        if (extent.width == 0 or extent.height == 0) {
+        const plan = try chooseDirectSwapchainPlan(
+            surface_config,
+            window.framebufferSize(),
+            .{ .graphics = self.graphics_family, .present = self.present_family },
+        );
+        if (!plan.isDrawable()) {
             self.destroySwapchain();
             self.surface_format = surface_config.format;
-            self.swapchain_extent = extent;
+            self.swapchain_extent = plan.extent;
             return;
         }
-        if (!surface_config.caps.supported_usage_flags.color_attachment_bit) {
-            return error.SurfaceColorAttachmentUnsupported;
-        }
-        if (surface_config.caps.max_image_array_layers < 1) {
-            return error.SurfaceImageArrayUnsupported;
-        }
-
-        const image_count = chooseSwapchainImageCount(surface_config.caps);
-        const queue_families = [_]u32{ self.graphics_family, self.present_family };
-        const same_family = self.graphics_family == self.present_family;
+        std.debug.assert(plan.isDirectZeroCopy());
         const old_swapchain = self.swapchain;
+        const queue_family_indices = plan.queueFamilyIndexPtr();
 
         const new_swapchain = self.demo_ddisp.createSwapchainKHR(self.device, &.{
             .surface = self.surface,
-            .min_image_count = image_count,
+            .min_image_count = plan.image_count,
             .image_format = surface_config.format.format,
             .image_color_space = surface_config.format.color_space,
-            .image_extent = extent,
+            .image_extent = plan.extent,
             .image_array_layers = 1,
-            .image_usage = .{ .color_attachment_bit = true },
-            .image_sharing_mode = if (same_family) .exclusive else .concurrent,
-            .queue_family_index_count = if (same_family) 0 else queue_families.len,
-            .p_queue_family_indices = if (same_family) null else &queue_families,
+            .image_usage = plan.image_usage,
+            .image_sharing_mode = plan.sharing_mode,
+            .queue_family_index_count = plan.queue_family_index_count,
+            .p_queue_family_indices = queue_family_indices,
             .pre_transform = surface_config.caps.current_transform,
-            .composite_alpha = chooseCompositeAlpha(surface_config.caps.supported_composite_alpha),
+            .composite_alpha = plan.composite_alpha,
             .present_mode = surface_config.present_mode,
             .clipped = .true,
             .old_swapchain = old_swapchain,
@@ -327,7 +360,7 @@ pub const Host = struct {
         self.swapchain_images = images;
         self.swapchain_views = views;
         self.submit_finished = present_semaphores;
-        self.swapchain_extent = extent;
+        self.swapchain_extent = plan.extent;
         self.surface_format = surface_config.format;
     }
 
@@ -398,7 +431,7 @@ pub const Host = struct {
             .flags = .{ .one_time_submit_bit = true },
         });
 
-        self.transitionImage(cmd, colorAttachmentAcquireBarrier(self.swapchain_images[image_index]));
+        self.transitionImage(cmd, discardSwapchainAcquireBarrier(self.swapchain_images[image_index]));
 
         const clear_value = vk.ClearValue{ .color = .{ .float_32 = self.clear_color } };
         const color_attachment = vk.RenderingAttachmentInfo{
@@ -639,6 +672,42 @@ fn querySurfaceConfig(
     };
 }
 
+fn chooseDirectSwapchainPlan(
+    surface_config: SurfaceConfig,
+    framebuffer_size: [2]u32,
+    queues: QueueFamilies,
+) !SwapchainPlan {
+    var plan = SwapchainPlan{
+        .extent = chooseSwapchainExtent(surface_config.caps, framebuffer_size),
+        .composite_alpha = chooseCompositeAlpha(surface_config.caps.supported_composite_alpha),
+    };
+    if (!plan.isDrawable()) return plan;
+
+    if (!surface_config.caps.supported_usage_flags.color_attachment_bit) {
+        return error.SurfaceColorAttachmentUnsupported;
+    }
+    if (surface_config.caps.max_image_array_layers < 1) {
+        return error.SurfaceImageArrayUnsupported;
+    }
+
+    plan.image_count = chooseSwapchainImageCount(surface_config.caps);
+    plan.image_usage = directSwapchainImageUsage(surface_config.caps);
+    if (queues.isUnified()) {
+        plan.sharing_mode = .exclusive;
+        plan.queue_family_index_count = 0;
+    } else {
+        plan.sharing_mode = .concurrent;
+        plan.queue_family_indices = .{ queues.graphics, queues.present };
+        plan.queue_family_index_count = 2;
+    }
+    return plan;
+}
+
+fn directSwapchainImageUsage(caps: vk.SurfaceCapabilitiesKHR) vk.ImageUsageFlags {
+    std.debug.assert(caps.supported_usage_flags.color_attachment_bit);
+    return .{ .color_attachment_bit = true };
+}
+
 fn createSwapchainViews(
     self: *Host,
     images: []const vk.Image,
@@ -856,7 +925,7 @@ fn chooseQueueFamilies(support: []const QueueFamilySupport) ?QueueFamilies {
     };
 }
 
-fn colorAttachmentAcquireBarrier(image: vk.Image) vk.ImageMemoryBarrier2 {
+fn discardSwapchainAcquireBarrier(image: vk.Image) vk.ImageMemoryBarrier2 {
     return imageBarrier(
         image,
         .undefined,
@@ -978,6 +1047,62 @@ test "Vulkan demo swapchain image count respects bounded and unbounded caps" {
     try std.testing.expectEqual(@as(u32, 3), chooseSwapchainImageCount(caps));
 }
 
+test "Vulkan demo swapchain plan keeps the main pass zero-copy" {
+    const config = SurfaceConfig{
+        .caps = testSurfaceCapabilities(),
+        .format = .{
+            .format = .b8g8r8a8_srgb,
+            .color_space = .srgb_nonlinear_khr,
+        },
+        .present_mode = .fifo_khr,
+    };
+    const plan = try chooseDirectSwapchainPlan(config, .{ 1280, 720 }, .{ .graphics = 2, .present = 2 });
+
+    try std.testing.expect(plan.isDrawable());
+    try std.testing.expect(plan.isDirectZeroCopy());
+    try std.testing.expectEqual(SwapchainRenderPath.direct_wsi, plan.render_path);
+    try std.testing.expectEqual(vk.SharingMode.exclusive, plan.sharing_mode);
+    try std.testing.expectEqual(@as(u32, 0), plan.queue_family_index_count);
+    try std.testing.expect(plan.queueFamilyIndexPtr() == null);
+    try std.testing.expectEqual(@as(u32, 3), plan.image_count);
+    try std.testing.expect(plan.image_usage.color_attachment_bit);
+}
+
+test "Vulkan demo swapchain plan uses concurrent sharing only for split queues" {
+    const config = SurfaceConfig{
+        .caps = testSurfaceCapabilities(),
+        .format = .{
+            .format = .b8g8r8a8_srgb,
+            .color_space = .srgb_nonlinear_khr,
+        },
+        .present_mode = .fifo_khr,
+    };
+    const plan = try chooseDirectSwapchainPlan(config, .{ 800, 600 }, .{ .graphics = 1, .present = 3 });
+    const indices = plan.queueFamilyIndexPtr().?;
+
+    try std.testing.expect(plan.isDirectZeroCopy());
+    try std.testing.expectEqual(vk.SharingMode.concurrent, plan.sharing_mode);
+    try std.testing.expectEqual(@as(u32, 2), plan.queue_family_index_count);
+    try std.testing.expectEqual(@as(u32, 1), indices[0]);
+    try std.testing.expectEqual(@as(u32, 3), indices[1]);
+}
+
+test "Vulkan demo swapchain plan rejects non-renderable WSI images" {
+    var config = SurfaceConfig{
+        .caps = testSurfaceCapabilities(),
+        .format = .{
+            .format = .b8g8r8a8_srgb,
+            .color_space = .srgb_nonlinear_khr,
+        },
+        .present_mode = .fifo_khr,
+    };
+    config.caps.supported_usage_flags = .{ .transfer_dst_bit = true };
+    try std.testing.expectError(
+        error.SurfaceColorAttachmentUnsupported,
+        chooseDirectSwapchainPlan(config, .{ 800, 600 }, .{ .graphics = 0, .present = 0 }),
+    );
+}
+
 test "Vulkan demo composite alpha prefers opaque and falls back deterministically" {
     try std.testing.expectEqual(
         vk.CompositeAlphaFlagsKHR{ .opaque_bit_khr = true },
@@ -1038,7 +1163,7 @@ test "Vulkan demo queue selection prefers a unified graphics-present family" {
 }
 
 test "Vulkan demo swapchain barriers synchronize acquire and present layouts explicitly" {
-    const acquire = colorAttachmentAcquireBarrier(.null_handle);
+    const acquire = discardSwapchainAcquireBarrier(.null_handle);
     try std.testing.expect(acquire.src_stage_mask.color_attachment_output_bit);
     try std.testing.expect(acquire.dst_stage_mask.color_attachment_output_bit);
     try std.testing.expect(!acquire.src_access_mask.color_attachment_write_bit);
