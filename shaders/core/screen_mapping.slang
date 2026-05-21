@@ -16,11 +16,45 @@ public struct LocalFrame
     public float2 dy;
 };
 
-public float2 glyphLocalQToScreen(GlyphInstance glyph, int2 localQ)
+public bool localQToScreenExact(
+    float2 screenAnchorPx,
+    float4 screenFromLocal,
+    uint precisionBits,
+    int2 anchorQ,
+    int2 localQ,
+    out float2 screen)
 {
-    float invScale = exp2(-float(glyph.precision_bits));
-    float2 localDelta = float2(relativeClampQ2(localQ, glyph.glyph_anchor_q)) * invScale;
-    return glyph.screen_anchor_px + mul2x2(glyph.screen_from_local_2x2, localDelta);
+    screen = float2(0.0, 0.0);
+    int2 deltaQ;
+    if (!relativeExactQ2(localQ, anchorQ, deltaQ))
+        return false;
+
+    float invScale = exp2(-float(precisionBits));
+    float2 localDelta = float2(deltaQ) * invScale;
+    screen = screenAnchorPx + mul2x2(screenFromLocal, localDelta);
+    return isFinite2(screen);
+}
+
+public bool glyphLocalQToScreen(GlyphInstance glyph, int2 localQ, out float2 screen)
+{
+    return localQToScreenExact(
+        glyph.screen_anchor_px,
+        glyph.screen_from_local_2x2,
+        glyph.precision_bits,
+        glyph.glyph_anchor_q,
+        localQ,
+        screen);
+}
+
+public bool meshletLocalQToScreen(GlyphInstance glyph, GlyphMeshlet meshlet, int2 localQ, out float2 screen)
+{
+    return localQToScreenExact(
+        meshlet.screen_anchor_px,
+        glyph.screen_from_local_2x2,
+        glyph.precision_bits,
+        meshlet.mesh_anchor_q,
+        localQ,
+        screen);
 }
 
 public float2 screenToNdc(float2 screen, float2 viewportSize)

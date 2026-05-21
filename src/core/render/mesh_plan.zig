@@ -8,7 +8,8 @@ const core_types = @import("../types.zig");
 const mesh_limits = @import("../../gpu/mesh_limits.zig");
 
 const target_meshlet_extent_px: f64 = 96.0;
-const no_bounds_max_q: i32 = -2147483647;
+const no_bounds_min_q: i32 = std.math.maxInt(i32);
+const no_bounds_max_q: i32 = std.math.minInt(i32);
 
 pub const MeshletPlan = struct {
     mesh_metadata: cache_mod.MeshMetadata,
@@ -77,40 +78,68 @@ pub const MeshletPlan = struct {
         rect_min_q: [2]i32,
         rect_max_q: [2]i32,
     } {
+        const center_edge_min_y = bandEdgeQ(self.mesh_metadata.band_min, band_start, self.mesh_metadata.band_height_q);
+        const center_edge_max_y = bandEdgeQ(self.mesh_metadata.band_min, band_end, self.mesh_metadata.band_height_q);
+        const influence_min_y = saturatingSubQ(center_edge_min_y, self.dilate_q[1]);
+        const influence_max_y = saturatingAddQ(center_edge_max_y, self.dilate_q[1]);
+        const band_range = self.influenceBandRange(influence_min_y, influence_max_y) orelse return null;
+
         var candidate_count: u32 = 0;
+        var min_x_q = no_bounds_min_q;
+        var min_y_q = no_bounds_min_q;
         var max_x_q = no_bounds_max_q;
-        var band_index = band_start;
-        while (band_index < band_end) : (band_index += 1) {
+        var max_y_q = no_bounds_max_q;
+        var band_index = band_range.start;
+        while (band_index < band_range.end) : (band_index += 1) {
             const info = self.mesh_metadata.bands[band_index];
+            if (info.candidate_count == 0) continue;
             candidate_count +|= info.candidate_count;
+            min_x_q = @min(min_x_q, info.min_x_q);
+            min_y_q = @min(min_y_q, info.min_y_q);
             max_x_q = @max(max_x_q, info.max_x_q);
+            max_y_q = @max(max_y_q, info.max_y_q);
         }
         if (candidate_count == 0) return null;
+        if (min_x_q == no_bounds_min_q or min_y_q == no_bounds_min_q) return null;
 
-        var y_min_q = @max(
-            @max(self.bounds.y_min, saturatingSubQ(self.viewport_q[1], self.dilate_q[1])),
-            bandEdgeQ(self.mesh_metadata.band_min, band_start, self.mesh_metadata.band_height_q),
-        );
-        var y_max_q = @min(
-            @min(self.bounds.y_max, saturatingAddQ(self.viewport_q[3], self.dilate_q[1])),
-            bandEdgeQ(self.mesh_metadata.band_min, band_end, self.mesh_metadata.band_height_q),
-        );
-
-        if (band_start == 0) y_min_q = saturatingSubQ(y_min_q, self.dilate_q[1]);
-        if (band_end == self.mesh_metadata.band_count) y_max_q = saturatingAddQ(y_max_q, self.dilate_q[1]);
+        const support_min_y = saturatingSubQ(min_y_q, self.dilate_q[1]);
+        const support_max_y = saturatingAddQ(max_y_q, self.dilate_q[1]);
+        const center_min_y = if (band_start == 0)
+            support_min_y
+        else
+            @max(center_edge_min_y, support_min_y);
+        const center_max_y = if (band_end == self.mesh_metadata.band_count)
+            support_max_y
+        else
+            @min(center_edge_max_y, support_max_y);
+        const y_min_q = @max(center_min_y, saturatingSubQ(self.viewport_q[1], self.dilate_q[1]));
+        const y_max_q = @min(center_max_y, saturatingAddQ(self.viewport_q[3], self.dilate_q[1]));
 
         const rect_min_q = [2]i32{
-            @max(self.bounds.x_min, saturatingSubQ(self.viewport_q[0], self.dilate_q[0])),
+            @max(saturatingSubQ(min_x_q, self.dilate_q[0]), saturatingSubQ(self.viewport_q[0], self.dilate_q[0])),
             y_min_q,
         };
-        const rect_max_x_base = @min(self.bounds.x_max, max_x_q);
         const rect_max_q = [2]i32{
-            @min(saturatingAddQ(rect_max_x_base, self.dilate_q[0]), saturatingAddQ(self.viewport_q[2], self.dilate_q[0])),
+            @min(saturatingAddQ(max_x_q, self.dilate_q[0]), saturatingAddQ(self.viewport_q[2], self.dilate_q[0])),
             y_max_q,
         };
 
         if (rect_max_q[0] <= rect_min_q[0] or rect_max_q[1] <= rect_min_q[1]) return null;
         return .{ .rect_min_q = rect_min_q, .rect_max_q = rect_max_q };
+    }
+
+    fn influenceBandRange(self: MeshletPlan, min_y_q: i32, max_y_q: i32) ?struct {
+        start: u32,
+        end: u32,
+    } {
+        const first_i64 = @as(i64, @divFloor(min_y_q, self.mesh_metadata.band_height_q)) - @as(i64, self.mesh_metadata.band_min);
+        const last_i64 = @as(i64, @divFloor(max_y_q, self.mesh_metadata.band_height_q)) - @as(i64, self.mesh_metadata.band_min);
+        if (last_i64 < 0 or first_i64 >= self.mesh_metadata.band_count) return null;
+
+        const start_i64 = @max(first_i64, 0);
+        const end_i64 = @min(last_i64 + 1, @as(i64, self.mesh_metadata.band_count));
+        if (end_i64 <= start_i64) return null;
+        return .{ .start = @intCast(start_i64), .end = @intCast(end_i64) };
     }
 };
 
@@ -131,19 +160,19 @@ pub fn metadataFromBlobView(allocator: std.mem.Allocator, view: blob_decode.Blob
 
     for (bands, 0..) |*out, band_index| {
         const band = view.band(@intCast(band_index));
-        var max_x_q = no_bounds_max_q;
+        out.* = cache_mod.BandMeshInfo.empty();
         var i: u32 = 0;
         while (i < band.id_count) : (i += 1) {
             const curve_index = view.curveId(band.id_start + i);
             if (curve_index < header.curve_count) {
                 const curve = view.curve(curve_index);
-                max_x_q = @max(max_x_q, curve.bbox_max_x_q);
+                out.candidate_count +|= 1;
+                out.min_x_q = @min(out.min_x_q, curve.bbox_min_x_q);
+                out.min_y_q = @min(out.min_y_q, curve.bbox_min_y_q);
+                out.max_x_q = @max(out.max_x_q, curve.bbox_max_x_q);
+                out.max_y_q = @max(out.max_y_q, curve.bbox_max_y_q);
             }
         }
-        out.* = .{
-            .candidate_count = band.id_count,
-            .max_x_q = max_x_q,
-        };
     }
 
     return .{
@@ -435,10 +464,10 @@ test "render mesh plan: emits bounded strips from cached h-band metadata" {
     var batch = FrameBatch.init(&glyphs, &meshlets);
 
     var bands = [_]cache_mod.BandMeshInfo{
-        .{ .candidate_count = 1, .max_x_q = 16 },
-        .{ .candidate_count = 0, .max_x_q = no_bounds_max_q },
-        .{ .candidate_count = 2, .max_x_q = 32 },
-        .{ .candidate_count = 1, .max_x_q = 32 },
+        testBand(1, 0, 0, 16, 8),
+        cache_mod.BandMeshInfo.empty(),
+        testBand(2, 8, 16, 32, 24),
+        testBand(1, 8, 24, 32, 32),
     };
     const metadata = cache_mod.MeshMetadata{
         .curve_count = 4,
@@ -474,4 +503,101 @@ test "render mesh plan: emits bounded strips from cached h-band metadata" {
         try std.testing.expect(meshlet.rect_max_q[1] > meshlet.rect_min_q[1]);
         try std.testing.expect(meshlet.glyph_index == glyph_index);
     }
+}
+
+test "render mesh plan: includes left pixel support outside glyph bounds" {
+    const FrameBatch = @import("frame_batch.zig").FrameBatch(TestGlyphInstance, TestGlyphMeshlet);
+    var glyphs: [1]TestGlyphInstance = undefined;
+    var meshlets: [mesh_limits.max_subdivisions_per_glyph]TestGlyphMeshlet = undefined;
+    var batch = FrameBatch.init(&glyphs, &meshlets);
+
+    var bands = [_]cache_mod.BandMeshInfo{
+        testBand(1, 0, 0, 1, 1),
+    };
+    const metadata = cache_mod.MeshMetadata{
+        .curve_count = 1,
+        .band_min = 0,
+        .band_count = @intCast(bands.len),
+        .band_height_q = 2,
+        .bands = &bands,
+    };
+    const glyph = TestGlyphInstance{
+        .precision_bits = 0,
+        .glyph_anchor_q = .{ 0, 0 },
+        .screen_anchor_px = .{ 0, 0 },
+        .screen_from_local_2x2 = .{ 1, 0, 0, 1 },
+        .local_from_screen_2x2 = .{ 1, 0, 0, 1 },
+    };
+
+    const glyph_index = try batch.appendGlyph(glyph);
+    try appendGlyphMeshlets(
+        &batch,
+        glyph,
+        glyph_index,
+        metadata,
+        .{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 },
+        0,
+        core_types.Transform.identity,
+        core_types.View.identity(16, 16),
+        core_types.Rect.init(0, 0, 1, 1),
+    );
+
+    try std.testing.expectEqual(@as(u32, 1), batch.meshletCount());
+    try std.testing.expectEqual(@as(i32, -1), batch.meshletSlice()[0].rect_min_q[0]);
+}
+
+test "render mesh plan: lower center slice is emitted for upper-band influence" {
+    const FrameBatch = @import("frame_batch.zig").FrameBatch(TestGlyphInstance, TestGlyphMeshlet);
+    var glyphs: [1]TestGlyphInstance = undefined;
+    var meshlets: [mesh_limits.max_subdivisions_per_glyph]TestGlyphMeshlet = undefined;
+    var batch = FrameBatch.init(&glyphs, &meshlets);
+
+    var bands = [_]cache_mod.BandMeshInfo{
+        cache_mod.BandMeshInfo.empty(),
+        testBand(1, 9, 4, 10, 5),
+    };
+    const metadata = cache_mod.MeshMetadata{
+        .curve_count = 1,
+        .band_min = 0,
+        .band_count = @intCast(bands.len),
+        .band_height_q = 4,
+        .bands = &bands,
+    };
+    const glyph = TestGlyphInstance{
+        .precision_bits = 0,
+        .glyph_anchor_q = .{ 0, 0 },
+        .screen_anchor_px = .{ 0, 0 },
+        .screen_from_local_2x2 = .{ 1, 0, 0, 1 },
+        .local_from_screen_2x2 = .{ 1, 0, 0, 1 },
+    };
+
+    const glyph_index = try batch.appendGlyph(glyph);
+    try appendGlyphMeshlets(
+        &batch,
+        glyph,
+        glyph_index,
+        metadata,
+        .{ .x_min = 9, .y_min = 4, .x_max = 10, .y_max = 5 },
+        0,
+        core_types.Transform.identity,
+        core_types.View.identity(32, 32),
+        core_types.Rect.init(0, 0, 16, 16),
+    );
+
+    try std.testing.expect(batch.meshletCount() >= 2);
+    const lower = batch.meshletSlice()[0];
+    try std.testing.expect(lower.rect_min_q[1] <= 3);
+    try std.testing.expect(lower.rect_max_q[1] <= 4);
+    try std.testing.expect(lower.rect_min_q[0] <= 8);
+    try std.testing.expect(lower.rect_max_q[0] >= 11);
+}
+
+fn testBand(candidate_count: u32, min_x_q: i32, min_y_q: i32, max_x_q: i32, max_y_q: i32) cache_mod.BandMeshInfo {
+    return .{
+        .candidate_count = candidate_count,
+        .min_x_q = min_x_q,
+        .min_y_q = min_y_q,
+        .max_x_q = max_x_q,
+        .max_y_q = max_y_q,
+    };
 }

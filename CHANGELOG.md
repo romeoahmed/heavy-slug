@@ -47,6 +47,11 @@ implementation history belongs in commits and code review notes.
   resource shims; generated Zig GPU structs are reflection-derived with
   size/offset tests; the required render path is CPU-authored meshlets plus
   mesh/fragment shaders.
+- **Outline coverage contract tightened:** meshlet planning now describes
+  pixel-center support domains, shader geometry decode requires explicit
+  `2^24`-radius relative exactness instead of Bezier control-point clamping,
+  and the fast fill path is documented for valid font glyph outlines rather
+  than arbitrary self-intersecting vector paths.
 - **Vulkan backend modernized:** the backend requires Vulkan 1.4 with mesh
   shaders, shader objects, dynamic rendering, push descriptors, and checked
   mesh limits; device requirement validation, pNext chains, buffer allocation,
@@ -111,6 +116,10 @@ implementation history belongs in commits and code review notes.
   `zig env` object syntax instead of assuming JSON.
 - **CPU transform and fill-sign math:** affine transform behavior and cubic
   outline area integration are tested and aligned with the blob fill-sign path.
+- **Analytic outline edge cases:** CPU meshlets now include left/top/bottom
+  half-pixel support and scan neighboring h-bands for slice influence; cubic
+  regularization now reports `PrecisionUnsupported` instead of silently
+  accepting an unproven span at the subdivision depth cap.
 
 ### Removed
 

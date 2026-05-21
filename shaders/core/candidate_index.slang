@@ -116,20 +116,21 @@ void integrateCandidateCurve(
     result.bboxRejects += bboxRejected ? 1u : 0u;
     result.integrations += bboxRejected ? 0u : 1u;
 #else
-    float4 bbox = blob.readCurveBoundsRelative(curveBase, curveIndex, coordAnchorQ, invScale);
-    if (curveBboxMayContribute(bbox, renderCoord, dx, dy, invDet))
-    {
-        result.signedArea += integrateCurvePayload(
-            blob,
-            curveBase,
-            curveIndex,
-            coordAnchorQ,
-            invScale,
-            renderCoord,
-            dx,
-            dy,
-            invDet);
-    }
+    float contribution;
+    bool bboxRejected;
+    if (integrateCurveFromBlob(
+        blob,
+        curveBase,
+        curveIndex,
+        coordAnchorQ,
+        invScale,
+        renderCoord,
+        dx,
+        dy,
+        invDet,
+        contribution,
+        bboxRejected))
+        result.signedArea += contribution;
 #endif
 }
 

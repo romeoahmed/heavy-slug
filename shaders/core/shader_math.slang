@@ -71,18 +71,26 @@ bool diffLessThanNegativeExactRadius(int valueQ, int anchorQ)
     return valueQ < anchorQ - kExactF32IntRadius;
 }
 
-public int relativeClampQ(int valueQ, int anchorQ)
+public bool relativeExactQ(int valueQ, int anchorQ, out int deltaQ)
 {
-    if (diffGreaterThanExactRadius(valueQ, anchorQ))
-        return kExactF32IntRadius;
-    if (diffLessThanNegativeExactRadius(valueQ, anchorQ))
-        return -kExactF32IntRadius;
-    return valueQ - anchorQ;
+    deltaQ = 0;
+    if (diffGreaterThanExactRadius(valueQ, anchorQ) ||
+        diffLessThanNegativeExactRadius(valueQ, anchorQ))
+        return false;
+
+    deltaQ = valueQ - anchorQ;
+    return true;
 }
 
-public int2 relativeClampQ2(int2 valueQ, int2 anchorQ)
+public bool relativeExactQ2(int2 valueQ, int2 anchorQ, out int2 deltaQ)
 {
-    return int2(
-        relativeClampQ(valueQ.x, anchorQ.x),
-        relativeClampQ(valueQ.y, anchorQ.y));
+    deltaQ = int2(0, 0);
+    int dx;
+    int dy;
+    if (!relativeExactQ(valueQ.x, anchorQ.x, dx) ||
+        !relativeExactQ(valueQ.y, anchorQ.y, dy))
+        return false;
+
+    deltaQ = int2(dx, dy);
+    return true;
 }

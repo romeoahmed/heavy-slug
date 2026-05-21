@@ -179,17 +179,30 @@ public struct BlobReader
             loadI32(off + CURVE_BBOX_MAX_Y_Q));
     }
 
-    public float4 readCurveBoundsRelative(uint curveBaseWords, uint curveIndex, int2 anchorQ, float invScale)
+    public bool readCurveBoundsRelativeExact(
+        uint curveBaseWords,
+        uint curveIndex,
+        int2 anchorQ,
+        float invScale,
+        out float4 bounds)
     {
+        bounds = float4(0.0, 0.0, 0.0, 0.0);
         int4 bbox = readCurveBoundsQ(curveBaseWords, curveIndex);
-        return float4(
-            relativeClampQ(bbox.x, anchorQ.x),
-            relativeClampQ(bbox.y, anchorQ.y),
-            relativeClampQ(bbox.z, anchorQ.x),
-            relativeClampQ(bbox.w, anchorQ.y)) * invScale;
+        int minX;
+        int minY;
+        int maxX;
+        int maxY;
+        if (!relativeExactQ(bbox.x, anchorQ.x, minX) ||
+            !relativeExactQ(bbox.y, anchorQ.y, minY) ||
+            !relativeExactQ(bbox.z, anchorQ.x, maxX) ||
+            !relativeExactQ(bbox.w, anchorQ.y, maxY))
+            return false;
+
+        bounds = float4(minX, minY, maxX, maxY) * invScale;
+        return true;
     }
 
-    public void curvePointsRelative(
+    public bool curvePointsRelativeExact(
         CurveQ c,
         int2 anchorQ,
         float invScale,
@@ -198,13 +211,29 @@ public struct BlobReader
         out float2 p2,
         out float2 p3)
     {
-        p0 = float2(relativeClampQ2(c.p0, anchorQ)) * invScale;
-        p1 = float2(relativeClampQ2(c.p1, anchorQ)) * invScale;
-        p2 = float2(relativeClampQ2(c.p2, anchorQ)) * invScale;
-        p3 = float2(relativeClampQ2(c.p3, anchorQ)) * invScale;
+        p0 = float2(0.0, 0.0);
+        p1 = float2(0.0, 0.0);
+        p2 = float2(0.0, 0.0);
+        p3 = float2(0.0, 0.0);
+
+        int2 p0q;
+        int2 p1q;
+        int2 p2q;
+        int2 p3q;
+        if (!relativeExactQ2(c.p0, anchorQ, p0q) ||
+            !relativeExactQ2(c.p1, anchorQ, p1q) ||
+            !relativeExactQ2(c.p2, anchorQ, p2q) ||
+            !relativeExactQ2(c.p3, anchorQ, p3q))
+            return false;
+
+        p0 = float2(p0q) * invScale;
+        p1 = float2(p1q) * invScale;
+        p2 = float2(p2q) * invScale;
+        p3 = float2(p3q) * invScale;
+        return true;
     }
 
-    public void readCurvePointsRelative(
+    public bool readCurvePointsRelativeExact(
         uint curveBaseWords,
         uint curveIndex,
         int2 anchorQ,
@@ -214,7 +243,7 @@ public struct BlobReader
         out float2 p2,
         out float2 p3)
     {
-        curvePointsRelative(readCurveQ(curveBaseWords, curveIndex), anchorQ, invScale, p0, p1, p2, p3);
+        return curvePointsRelativeExact(readCurveQ(curveBaseWords, curveIndex), anchorQ, invScale, p0, p1, p2, p3);
     }
 
     public void readBand(uint bandBaseWords, uint bandIndex, out uint idStart, out uint bandIdCount)

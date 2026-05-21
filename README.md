@@ -166,8 +166,10 @@ I(\gamma)=
 ```
 
 Spans wholly left of the cell contribute `0`; spans wholly right contribute
-$y(b)-y(a)$; partial spans use the integral above. The signed sum resolves to
-non-zero winding or even-odd fill.
+$y(b)-y(a)$; partial spans use the integral above. For valid font glyph
+outlines with simple local winding, the signed sum resolves the fast non-zero
+or even-odd fill path. General overlapping or self-intersecting vector paths
+are outside the exact-fill contract of this renderer path.
 
 **Stable quintic evaluation**
 
@@ -216,6 +218,13 @@ The h-band table is a conservative CSR index from y bands to curve ids:
 Fragments merge a bounded number of adjacent band lists and deduplicate curve
 ids before integration; if the window is invalid or too wide, the shader falls
 back to a full curve scan.
+
+CPU meshlet planning emits pixel-center support domains, not just glyph bbox
+strips: curve bounds are inflated by the local half-pixel footprint on all
+sides, and y slices scan neighboring h-bands through that influence domain.
+Fixed-point geometry enters f32 only through explicit relative exact checks
+within the `2^24` integer radius of the current chart anchor; the shader does
+not clamp Bezier control points to make them representable.
 
 ## Requirements
 

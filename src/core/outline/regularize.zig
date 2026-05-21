@@ -142,10 +142,11 @@ const Regularizer = struct {
 
     fn appendPrepared(self: *Regularizer, curve: RegularizedCubicSpan, depth: u8) Error!void {
         if (!curve.isFinite()) return error.GlyphTooLarge;
-        if (depth >= max_cubic_prepare_depth or cubicControlPolygonMonotoneAfterQuantize(curve, self.fraction_bits)) {
+        if (cubicControlPolygonMonotoneAfterQuantize(curve, self.fraction_bits)) {
             try self.out.append(self.allocator, curve);
             return;
         }
+        if (depth >= max_cubic_prepare_depth) return error.PrecisionUnsupported;
 
         const split = geometry.splitCubic(curve, 0.5);
         try self.appendPrepared(split.left, depth + 1);
@@ -264,4 +265,26 @@ test "regularize prepared cubic control polygons stay monotone after quantizatio
     for (spans.items) |span| {
         try std.testing.expect(cubicControlPolygonMonotoneAfterQuantize(span, blob_format.default_fraction_bits));
     }
+}
+
+test "regularize rejects unproven cubic at subdivision depth cap" {
+    var spans: std.ArrayList(RegularizedCubicSpan) = .empty;
+    defer spans.deinit(std.testing.allocator);
+
+    var builder = Regularizer{
+        .out = &spans,
+        .allocator = std.testing.allocator,
+        .fraction_bits = blob_format.default_fraction_bits,
+    };
+
+    const unproven = RegularizedCubicSpan{
+        .p0 = .{ .x = 0, .y = 0 },
+        .p1 = .{ .x = 2, .y = 2 },
+        .p2 = .{ .x = -1, .y = 1 },
+        .p3 = .{ .x = 3, .y = 3 },
+    };
+
+    try std.testing.expect(!cubicControlPolygonMonotoneAfterQuantize(unproven, blob_format.default_fraction_bits));
+    try std.testing.expectError(error.PrecisionUnsupported, builder.appendPrepared(unproven, max_cubic_prepare_depth));
+    try std.testing.expectEqual(@as(usize, 0), spans.items.len);
 }

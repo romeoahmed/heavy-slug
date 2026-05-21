@@ -179,20 +179,26 @@ float slugRender(BlobReader blob, LocalFrame frame, int2 coordAnchorQ, uint flag
 
     float candidateMinY;
     float candidateMaxY;
-    float4 localBounds = rectBoundsRelativeTo(header.boundsQ, coordAnchorQ, invScale);
-    if (!conservativeHBandRange(renderCoord, dx, invDet, localBounds, candidateMinY, candidateMaxY))
-        return zeroCoverage(true);
+    float4 localBounds;
 
     uint firstBand;
     uint bandSpan;
     CoverageAccumulation coverage;
-    if (candidateBandWindow(
-        header,
-        coordAnchorQ,
-        candidateMinY,
-        candidateMaxY,
-        firstBand,
-        bandSpan))
+    bool useCandidateWindow = false;
+    if (rectBoundsRelativeTo(header.boundsQ, coordAnchorQ, invScale, localBounds))
+    {
+        if (!conservativeHBandRange(renderCoord, dx, invDet, localBounds, candidateMinY, candidateMaxY))
+            return zeroCoverage(true);
+
+        useCandidateWindow = candidateBandWindow(
+            header,
+            coordAnchorQ,
+            candidateMinY,
+            candidateMaxY,
+            firstBand,
+            bandSpan);
+    }
+    if (useCandidateWindow)
     {
         coverage = candidateCoverage(
             blob,

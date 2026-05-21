@@ -351,13 +351,21 @@ float2 toPixelLocal(float2 p, float2 center, float2 dx, float2 dy, float invDet)
 }
 
 // Blob header bounds are packed as [min_x, min_y, max_x, max_y].
-public float4 rectBoundsRelativeTo(int4 boundsQ, int2 anchorQ, float invScale)
+public bool rectBoundsRelativeTo(int4 boundsQ, int2 anchorQ, float invScale, out float4 bounds)
 {
-    return float4(
-        relativeClampQ(boundsQ.x, anchorQ.x),
-        relativeClampQ(boundsQ.y, anchorQ.y),
-        relativeClampQ(boundsQ.z, anchorQ.x),
-        relativeClampQ(boundsQ.w, anchorQ.y)) * invScale;
+    bounds = float4(0.0, 0.0, 0.0, 0.0);
+    int minX;
+    int minY;
+    int maxX;
+    int maxY;
+    if (!relativeExactQ(boundsQ.x, anchorQ.x, minX) ||
+        !relativeExactQ(boundsQ.y, anchorQ.y, minY) ||
+        !relativeExactQ(boundsQ.z, anchorQ.x, maxX) ||
+        !relativeExactQ(boundsQ.w, anchorQ.y, maxY))
+        return false;
+
+    bounds = float4(minX, minY, maxX, maxY) * invScale;
+    return true;
 }
 
 // Per-curve bounds are packed as [min_x, min_y, max_x, max_y].
@@ -421,7 +429,7 @@ public float resolveCoverage(float signedArea, float fillSign, float detSign, ui
     return coverage;
 }
 
-public float integrateCurvePayload(
+public bool integrateCurvePayload(
     BlobReader blob,
     uint curveBase,
     uint curveIndex,
@@ -430,18 +438,55 @@ public float integrateCurvePayload(
     float2 renderCoord,
     float2 dx,
     float2 dy,
-    float invDet)
+    float invDet,
+    out float contribution)
 {
+    contribution = 0.0;
     CurveQ cq = blob.readCurveQ(curveBase, curveIndex);
     float2 p0g, p1g, p2g, p3g;
-    blob.curvePointsRelative(cq, anchorQ, invScale, p0g, p1g, p2g, p3g);
+    if (!blob.curvePointsRelativeExact(cq, anchorQ, invScale, p0g, p1g, p2g, p3g))
+        return false;
+
     Cubic curve;
     curve.p0 = toPixelLocal(p0g, renderCoord, dx, dy, invDet);
     curve.p1 = toPixelLocal(p1g, renderCoord, dx, dy, invDet);
     curve.p2 = toPixelLocal(p2g, renderCoord, dx, dy, invDet);
     curve.p3 = toPixelLocal(p3g, renderCoord, dx, dy, invDet);
 
-    return integrateCurve(curve);
+    contribution = integrateCurve(curve);
+    return true;
+}
+
+public bool integrateCurveFromBlob(
+    BlobReader blob,
+    uint curveBase,
+    uint curveIndex,
+    int2 anchorQ,
+    float invScale,
+    float2 renderCoord,
+    float2 dx,
+    float2 dy,
+    float invDet,
+    out float contribution,
+    out bool bboxRejected)
+{
+    contribution = 0.0;
+    bboxRejected = false;
+
+    float4 bbox;
+    if (!blob.readCurveBoundsRelativeExact(curveBase, curveIndex, anchorQ, invScale, bbox))
+    {
+        bboxRejected = true;
+        return false;
+    }
+
+    if (!curveBboxMayContribute(bbox, renderCoord, dx, dy, invDet))
+    {
+        bboxRejected = true;
+        return false;
+    }
+
+    return integrateCurvePayload(blob, curveBase, curveIndex, anchorQ, invScale, renderCoord, dx, dy, invDet, contribution);
 }
 
 public float integrateFullScan(
@@ -458,9 +503,10 @@ public float integrateFullScan(
     float signedArea = 0.0;
     for (uint ci = 0; ci < curveCount; ci++)
     {
-        float4 bbox = blob.readCurveBoundsRelative(curveBase, ci, anchorQ, invScale);
-        if (curveBboxMayContribute(bbox, renderCoord, dx, dy, invDet))
-            signedArea += integrateCurvePayload(blob, curveBase, ci, anchorQ, invScale, renderCoord, dx, dy, invDet);
+        float contribution;
+        bool bboxRejected;
+        if (integrateCurveFromBlob(blob, curveBase, ci, anchorQ, invScale, renderCoord, dx, dy, invDet, contribution, bboxRejected))
+            signedArea += contribution;
     }
     return signedArea;
 }
@@ -478,15 +524,20 @@ public float integrateCurveFromBlobWithStats(
     float invDet,
     out bool bboxRejected)
 {
-    float4 bbox = blob.readCurveBoundsRelative(curveBase, curveIndex, anchorQ, invScale);
-    if (!curveBboxMayContribute(bbox, renderCoord, dx, dy, invDet))
-    {
-        bboxRejected = true;
-        return 0.0;
-    }
-
-    bboxRejected = false;
-    return integrateCurvePayload(blob, curveBase, curveIndex, anchorQ, invScale, renderCoord, dx, dy, invDet);
+    float contribution;
+    bool integrated = integrateCurveFromBlob(
+        blob,
+        curveBase,
+        curveIndex,
+        anchorQ,
+        invScale,
+        renderCoord,
+        dx,
+        dy,
+        invDet,
+        contribution,
+        bboxRejected);
+    return integrated ? contribution : 0.0;
 }
 
 public float integrateFullScanWithStats(

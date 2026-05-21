@@ -49,7 +49,20 @@ pub const FixedBounds = extern struct {
 
 pub const BandMeshInfo = struct {
     candidate_count: u32,
+    min_x_q: i32,
+    min_y_q: i32,
     max_x_q: i32,
+    max_y_q: i32,
+
+    pub fn empty() BandMeshInfo {
+        return .{
+            .candidate_count = 0,
+            .min_x_q = std.math.maxInt(i32),
+            .min_y_q = std.math.maxInt(i32),
+            .max_x_q = std.math.minInt(i32),
+            .max_y_q = std.math.minInt(i32),
+        };
+    }
 };
 
 pub const MeshMetadata = struct {
@@ -478,8 +491,8 @@ test "GlyphCache: cached mesh metadata is owned by cache entries" {
     defer cache.deinit();
 
     const bands = try std.testing.allocator.alloc(BandMeshInfo, 2);
-    bands[0] = .{ .candidate_count = 3, .max_x_q = 10 };
-    bands[1] = .{ .candidate_count = 0, .max_x_q = -2147483647 };
+    bands[0] = .{ .candidate_count = 3, .min_x_q = 0, .min_y_q = -16, .max_x_q = 10, .max_y_q = 16 };
+    bands[1] = BandMeshInfo.empty();
 
     const key = CacheKey{ .font_id = 1, .glyph_id = 65 };
     const box = EmBox{ .x_min = 0, .y_min = 0, .x_max = 1, .y_max = 1 };
@@ -513,7 +526,7 @@ test "GlyphCache: insert reports duplicate and frees rejected metadata" {
     try insertTestGlyph(&cache, .cold, key, testBlobRef(1), .{ .offset = 0, .size = 64 }, box);
 
     const duplicate_bands = try std.testing.allocator.alloc(BandMeshInfo, 1);
-    duplicate_bands[0] = .{ .candidate_count = 1, .max_x_q = 1 };
+    duplicate_bands[0] = .{ .candidate_count = 1, .min_x_q = 0, .min_y_q = 0, .max_x_q = 1, .max_y_q = 1 };
     try std.testing.expectError(error.CacheDuplicateEntry, cache.insert(.cold, key, .{
         .blob_ref = testBlobRef(2),
         .pool_alloc = .{ .offset = 64, .size = 64 },
@@ -522,7 +535,7 @@ test "GlyphCache: insert reports duplicate and frees rejected metadata" {
     }));
 
     const full_bands = try std.testing.allocator.alloc(BandMeshInfo, 1);
-    full_bands[0] = .{ .candidate_count = 2, .max_x_q = 2 };
+    full_bands[0] = .{ .candidate_count = 2, .min_x_q = 0, .min_y_q = 0, .max_x_q = 2, .max_y_q = 2 };
     try std.testing.expectError(error.CacheTierFull, cache.insert(.cold, .{ .font_id = 1, .glyph_id = 2 }, .{
         .blob_ref = testBlobRef(3),
         .pool_alloc = .{ .offset = 128, .size = 64 },

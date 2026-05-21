@@ -47,14 +47,22 @@ bool meshletQuadNdc(
     out float2 p2,
     out float2 p3)
 {
-    p0 = screenToNdc(glyphLocalQToScreen(glyph, meshlet.rect_min_q), pc.viewport_size);
-    p1 = screenToNdc(
-        glyphLocalQToScreen(glyph, int2(meshlet.rect_max_q.x, meshlet.rect_min_q.y)),
-        pc.viewport_size);
-    p2 = screenToNdc(glyphLocalQToScreen(glyph, meshlet.rect_max_q), pc.viewport_size);
-    p3 = screenToNdc(
-        glyphLocalQToScreen(glyph, int2(meshlet.rect_min_q.x, meshlet.rect_max_q.y)),
-        pc.viewport_size);
+    p0 = float2(0.0, 0.0);
+    p1 = float2(0.0, 0.0);
+    p2 = float2(0.0, 0.0);
+    p3 = float2(0.0, 0.0);
+
+    float2 s0, s1, s2, s3;
+    if (!meshletLocalQToScreen(glyph, meshlet, meshlet.rect_min_q, s0) ||
+        !meshletLocalQToScreen(glyph, meshlet, int2(meshlet.rect_max_q.x, meshlet.rect_min_q.y), s1) ||
+        !meshletLocalQToScreen(glyph, meshlet, meshlet.rect_max_q, s2) ||
+        !meshletLocalQToScreen(glyph, meshlet, int2(meshlet.rect_min_q.x, meshlet.rect_max_q.y), s3))
+        return false;
+
+    p0 = screenToNdc(s0, pc.viewport_size);
+    p1 = screenToNdc(s1, pc.viewport_size);
+    p2 = screenToNdc(s2, pc.viewport_size);
+    p3 = screenToNdc(s3, pc.viewport_size);
 
     return isFinite2(meshlet.screen_anchor_px) &&
            isFinite2(p0) &&
