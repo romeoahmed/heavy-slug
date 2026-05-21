@@ -24,8 +24,7 @@ pub const Error = error{
     ShapingFailed,
     PoolExhausted,
     InvalidView,
-    InvalidTransform,
-    PrecisionUnsupported,
+    InvalidPrecisionPolicy,
     TextPositionOverflow,
     MeshletCapacityExceeded,
 };
@@ -38,16 +37,189 @@ pub const TextRun = struct {
     fill_rule: core_types.FillRule = .non_zero,
 };
 
-pub const FrameDiagnostics = struct {
+pub const ScreenTextRun = struct {
+    font: core_types.FontHandle,
+    text: []const u8,
+    screen_from_text: core_types.Transform = .identity,
+    color: core_types.Color = .black,
+    fill_rule: core_types.FillRule = .non_zero,
+};
+
+pub const RunRejectReason = enum(u8) {
+    invalid_world_transform,
+};
+
+pub const GlyphRejectReason = enum(u8) {
+    invalid_transform,
+    precision_unsupported,
+    cache_encode_unsupported,
+    nonfinite_bounds,
+    host_culled,
+    f32_chart_overflow,
+    meshlet_empty,
+    empty_glyph,
+};
+
+pub const FrameBlockingReason = union(enum) {
+    run: RunRejectReason,
+    glyph: GlyphRejectReason,
+};
+
+pub const FrameWarning = enum(u8) {
+    invalid_world_transform,
+    invalid_transform,
+    precision_unsupported,
+    cache_encode_unsupported,
+    nonfinite_bounds,
+    f32_chart_overflow,
+    meshlet_empty,
+    empty_after_blocking_rejects,
+};
+
+pub const max_frame_warnings = @typeInfo(FrameWarning).@"enum".fields.len;
+
+pub const FrameWarnings = struct {
+    items: [max_frame_warnings]FrameWarning = undefined,
+    len: u8 = 0,
+
+    pub fn slice(self: *const FrameWarnings) []const FrameWarning {
+        return self.items[0..self.len];
+    }
+
+    fn appendUnique(self: *FrameWarnings, warning: FrameWarning) void {
+        for (self.slice()) |existing| {
+            if (existing == warning) return;
+        }
+        if (self.len >= self.items.len) return;
+        self.items[self.len] = warning;
+        self.len += 1;
+    }
+};
+
+pub const RunRejectCounters = struct {
+    invalid_world_transform: u32 = 0,
+
+    pub fn total(self: RunRejectCounters) u32 {
+        return self.invalid_world_transform;
+    }
+
+    pub fn hasBlocking(self: RunRejectCounters) bool {
+        return self.total() != 0;
+    }
+};
+
+pub const RejectCounters = struct {
+    invalid_transform: u32 = 0,
     precision_unsupported: u32 = 0,
+    cache_encode_unsupported: u32 = 0,
+    nonfinite_bounds: u32 = 0,
+    host_culled: u32 = 0,
+    f32_chart_overflow: u32 = 0,
+    meshlet_empty: u32 = 0,
+    empty_glyph: u32 = 0,
+
+    pub fn total(self: RejectCounters) u32 {
+        var sum: u32 = 0;
+        sum = saturatingAdd(sum, self.invalid_transform);
+        sum = saturatingAdd(sum, self.precision_unsupported);
+        sum = saturatingAdd(sum, self.cache_encode_unsupported);
+        sum = saturatingAdd(sum, self.nonfinite_bounds);
+        sum = saturatingAdd(sum, self.host_culled);
+        sum = saturatingAdd(sum, self.f32_chart_overflow);
+        sum = saturatingAdd(sum, self.meshlet_empty);
+        sum = saturatingAdd(sum, self.empty_glyph);
+        return sum;
+    }
+
+    pub fn totalBlocking(self: RejectCounters) u32 {
+        var sum: u32 = 0;
+        sum = saturatingAdd(sum, self.invalid_transform);
+        sum = saturatingAdd(sum, self.precision_unsupported);
+        sum = saturatingAdd(sum, self.cache_encode_unsupported);
+        sum = saturatingAdd(sum, self.nonfinite_bounds);
+        sum = saturatingAdd(sum, self.f32_chart_overflow);
+        sum = saturatingAdd(sum, self.meshlet_empty);
+        return sum;
+    }
+
+    pub fn totalNonBlocking(self: RejectCounters) u32 {
+        var sum: u32 = 0;
+        sum = saturatingAdd(sum, self.host_culled);
+        sum = saturatingAdd(sum, self.empty_glyph);
+        return sum;
+    }
+
+    pub fn hasBlocking(self: RejectCounters) bool {
+        return self.totalBlocking() != 0;
+    }
+};
+
+pub const DrawTextResult = struct {
+    shaped_glyphs: u32 = 0,
+    emitted_glyphs: u32 = 0,
+    emitted_meshlets: u32 = 0,
+    run_rejects: RunRejectCounters = .{},
+    glyph_rejects: RejectCounters = .{},
+
+    pub fn emitted(self: DrawTextResult) bool {
+        return self.emitted_glyphs != 0 and self.emitted_meshlets != 0;
+    }
+
+    pub fn degraded(self: DrawTextResult) bool {
+        return self.run_rejects.hasBlocking() or self.glyph_rejects.total() != 0;
+    }
+};
+
+pub const FrameDiagnostics = struct {
+    runs: u32 = 0,
+    shaped_glyphs: u32 = 0,
+    emitted_glyphs: u32 = 0,
+    emitted_meshlets: u32 = 0,
+    run_rejects: RunRejectCounters = .{},
+    glyph_rejects: RejectCounters = .{},
+    max_sigma: f64 = 0,
+    max_required_fraction_bits: u16 = 0,
+    first_blocking_reason: ?FrameBlockingReason = null,
 
     pub fn hasPrecisionUnsupported(self: FrameDiagnostics) bool {
-        return self.precision_unsupported != 0;
+        return self.glyph_rejects.precision_unsupported != 0;
+    }
+
+    pub fn hasVisiblePayload(self: FrameDiagnostics) bool {
+        return self.emitted_glyphs != 0 and self.emitted_meshlets != 0;
+    }
+
+    pub fn hasBlockingRejects(self: FrameDiagnostics) bool {
+        return self.run_rejects.hasBlocking() or self.glyph_rejects.hasBlocking();
+    }
+
+    pub fn warnings(self: FrameDiagnostics) FrameWarnings {
+        var out: FrameWarnings = .{};
+        if (self.run_rejects.invalid_world_transform != 0) out.appendUnique(.invalid_world_transform);
+        if (self.glyph_rejects.invalid_transform != 0) out.appendUnique(.invalid_transform);
+        if (self.glyph_rejects.precision_unsupported != 0) out.appendUnique(.precision_unsupported);
+        if (self.glyph_rejects.cache_encode_unsupported != 0) out.appendUnique(.cache_encode_unsupported);
+        if (self.glyph_rejects.nonfinite_bounds != 0) out.appendUnique(.nonfinite_bounds);
+        if (self.glyph_rejects.f32_chart_overflow != 0) out.appendUnique(.f32_chart_overflow);
+        if (self.glyph_rejects.meshlet_empty != 0) out.appendUnique(.meshlet_empty);
+        if (!self.hasVisiblePayload() and self.hasBlockingRejects()) out.appendUnique(.empty_after_blocking_rejects);
+        return out;
     }
 
     fn reset(self: *FrameDiagnostics) void {
         self.* = .{};
     }
+};
+
+pub const EmptyFrame = struct {
+    previous_token: FrameToken,
+    diagnostics: FrameDiagnostics,
+};
+
+pub const SubmitResult = union(enum) {
+    submitted_text: FrameToken,
+    submitted_clear_only: FrameToken,
+    empty_noop: EmptyFrame,
 };
 
 pub const Stats = if (@import("builtin").mode == .Debug) struct {
@@ -126,6 +298,28 @@ const CachedGlyph = struct {
     precision_bits: u8,
     mesh_metadata: cache_mod.MeshMetadata,
 };
+
+const TextSpace = enum {
+    world,
+    screen,
+};
+
+const InternalTextRun = struct {
+    font: core_types.FontHandle,
+    text: []const u8,
+    transform: core_types.Transform,
+    color: core_types.Color,
+    fill_rule: core_types.FillRule,
+    space: TextSpace,
+};
+
+fn saturatingAdd(a: u32, b: u32) u32 {
+    return if (std.math.maxInt(u32) - a < b) std.math.maxInt(u32) else a + b;
+}
+
+fn saturatingIncrement(value: *u32) void {
+    if (value.* != std.math.maxInt(u32)) value.* += 1;
+}
 
 pub fn emBoxFromExtents(ext: hb.GlyphExtents) cache_mod.EmBox {
     const x0: f32 = @floatFromInt(ext.x_bearing);
@@ -292,7 +486,41 @@ pub const RendererCore = struct {
         batch: anytype,
         view: core_types.View,
         run: TextRun,
-    ) !void {
+    ) !DrawTextResult {
+        return self.appendTextRun(backend, batch, view, .{
+            .font = run.font,
+            .text = run.text,
+            .transform = run.transform,
+            .color = run.color,
+            .fill_rule = run.fill_rule,
+            .space = .world,
+        });
+    }
+
+    pub fn appendScreenRun(
+        self: *RendererCore,
+        backend: anytype,
+        batch: anytype,
+        view: core_types.View,
+        run: ScreenTextRun,
+    ) !DrawTextResult {
+        return self.appendTextRun(backend, batch, view, .{
+            .font = run.font,
+            .text = run.text,
+            .transform = run.screen_from_text,
+            .color = run.color,
+            .fill_rule = run.fill_rule,
+            .space = .screen,
+        });
+    }
+
+    fn appendTextRun(
+        self: *RendererCore,
+        backend: anytype,
+        batch: anytype,
+        view: core_types.View,
+        run: InternalTextRun,
+    ) !DrawTextResult {
         comptime backend_contract.checkBackend(@TypeOf(backend));
         comptime {
             const ExpectedBatch = *frame_batch_mod.FrameBatch(
@@ -303,18 +531,27 @@ pub const RendererCore = struct {
                 @compileError("RendererCore.appendRun requires *FrameBatch(backend GlyphInstance, backend GlyphMeshlet)");
             }
         }
-        if (!view.isFinite()) return Error.InvalidView;
+        if (!view.hasFiniteViewport()) return Error.InvalidView;
+        var result: DrawTextResult = .{};
+        if (run.space == .world and !view.hasFiniteWorldTransform()) {
+            self.recordRunReject(&result, .invalid_world_transform);
+            return result;
+        }
         const font = run.font;
         const font_entry = self.fonts.get(font.id) orelse return Error.ShapingFailed;
 
         const shaped = font_entry.loaded.shape(&self.shape_plan, run.text, .{}) catch return Error.ShapingFailed;
         const infos = shaped.infos;
         const positions = shaped.positions;
+        self.recordShapedRun(&result, @intCast(infos.len));
         if (@import("builtin").mode == .Debug) {
             self.stats.runs_shaped += 1;
             self.stats.glyphs_shaped += @intCast(infos.len);
         }
-        const run_screen_from_text = core_types.Transform.compose(view.screen_from_world, run.transform);
+        const run_screen_from_text = switch (run.space) {
+            .world => core_types.Transform.compose(view.screen_from_world, run.transform),
+            .screen => run.transform,
+        };
         const color = run.color.rgba;
         const flags = run.fill_rule.shaderFlags();
         const start_glyph_count = batch.glyph_count;
@@ -326,6 +563,11 @@ pub const RendererCore = struct {
         var pen_x: i64 = 0;
         var pen_y: i64 = 0;
 
+        if (!run_screen_from_text.isFinite()) {
+            for (infos) |_| self.recordGlyphReject(&result, .invalid_transform);
+            return result;
+        }
+
         for (infos, positions) |info, pos| {
             const glyph_x_hb = std.math.add(i64, pen_x, pos.x_offset) catch return Error.TextPositionOverflow;
             const glyph_y_hb = std.math.add(i64, pen_y, pos.y_offset) catch return Error.TextPositionOverflow;
@@ -334,18 +576,25 @@ pub const RendererCore = struct {
             const screen_from_glyph_pixels = run_screen_from_text.translate(glyph_x, glyph_y);
             const screen_from_local = screen_from_glyph_pixels.scaleLinear(1.0 / units.hb_subpixels_per_pixel_f64);
             const local_from_screen = screen_from_local.inverse() orelse {
-                if (@import("builtin").mode == .Debug) self.stats.invalid_transform += 1;
+                self.recordGlyphReject(&result, .invalid_transform);
                 try advancePen(&pen_x, &pen_y, pos);
                 continue;
             };
-            const precision_bits = self.precision_policy.selectFractionBits(screen_from_local) catch |err| switch (err) {
-                error.PrecisionUnsupported => {
-                    self.recordPrecisionUnsupported();
+            const precision_bits = switch (self.precision_policy.selectFractionBits(screen_from_local) catch |err| switch (err) {
+                error.InvalidTransform => {
+                    self.recordGlyphReject(&result, .invalid_transform);
                     try advancePen(&pen_x, &pen_y, pos);
                     continue;
                 },
-                else => {
-                    if (@import("builtin").mode == .Debug) self.stats.invalid_transform += 1;
+                error.InvalidPrecisionPolicy => return Error.InvalidPrecisionPolicy,
+            }) {
+                .supported => |supported| blk: {
+                    self.recordPrecisionSelection(supported.sigma, supported.required_bits);
+                    break :blk supported.fraction_bits;
+                },
+                .unsupported => |unsupported| {
+                    self.recordPrecisionSelection(unsupported.sigma, unsupported.required_bits);
+                    self.recordGlyphReject(&result, .precision_unsupported);
                     try advancePen(&pen_x, &pen_y, pos);
                     continue;
                 },
@@ -375,8 +624,8 @@ pub const RendererCore = struct {
             } else blk: {
                 if (@import("builtin").mode == .Debug) self.stats.cache_misses += 1;
                 break :blk self.ensureGlyphCached(backend, font_entry, cache_key, precision_bits) catch |err| switch (err) {
-                    Error.PrecisionUnsupported => {
-                        self.recordPrecisionUnsupported();
+                    error.CacheEncodeUnsupported => {
+                        self.recordGlyphReject(&result, .cache_encode_unsupported);
                         try advancePen(&pen_x, &pen_y, pos);
                         continue;
                     },
@@ -388,12 +637,12 @@ pub const RendererCore = struct {
                 const local_bounds = mesh_plan.localRectFromFixed(cached_glyph.bounds_q, cached_glyph.precision_bits);
                 const screen_bounds = screen_from_local.applyRect(local_bounds);
                 if (!screen_bounds.isFinite() or screen_bounds.isEmpty()) {
-                    if (@import("builtin").mode == .Debug) self.stats.invalid_transform += 1;
+                    self.recordGlyphReject(&result, .nonfinite_bounds);
                     try advancePen(&pen_x, &pen_y, pos);
                     continue;
                 }
                 if (!screen_bounds.intersects(mesh_plan.inflatedViewportRect(view, 1.0))) {
-                    if (@import("builtin").mode == .Debug) self.stats.host_culled += 1;
+                    self.recordGlyphReject(&result, .host_culled);
                     try advancePen(&pen_x, &pen_y, pos);
                     continue;
                 }
@@ -410,17 +659,17 @@ pub const RendererCore = struct {
                 const anchor_local = mesh_plan.localPointFromFixed(glyph_anchor_q, cached_glyph.precision_bits);
                 const screen_anchor = screen_from_local.apply(anchor_local);
                 const screen_anchor_px = mesh_plan.castPoint2F32(screen_anchor) orelse {
-                    if (@import("builtin").mode == .Debug) self.stats.invalid_transform += 1;
+                    self.recordGlyphReject(&result, .f32_chart_overflow);
                     try advancePen(&pen_x, &pen_y, pos);
                     continue;
                 };
                 const screen_from_local_2x2 = mesh_plan.castAffineLinear2x2F32(screen_from_local) orelse {
-                    if (@import("builtin").mode == .Debug) self.stats.invalid_transform += 1;
+                    self.recordGlyphReject(&result, .f32_chart_overflow);
                     try advancePen(&pen_x, &pen_y, pos);
                     continue;
                 };
                 const local_from_screen_2x2 = mesh_plan.castAffineLinear2x2F32(local_from_screen) orelse {
-                    if (@import("builtin").mode == .Debug) self.stats.invalid_transform += 1;
+                    self.recordGlyphReject(&result, .f32_chart_overflow);
                     try advancePen(&pen_x, &pen_y, pos);
                     continue;
                 };
@@ -453,24 +702,69 @@ pub const RendererCore = struct {
                 );
                 if (batch.meshlet_count == meshlet_mark) {
                     batch.rollback(glyph_mark, meshlet_mark);
-                    if (@import("builtin").mode == .Debug) self.stats.host_culled += 1;
-                } else if (@import("builtin").mode == .Debug) {
-                    self.stats.glyphs_written += 1;
-                    self.stats.meshlets_written += batch.meshlet_count - meshlet_mark;
+                    self.recordGlyphReject(&result, .meshlet_empty);
+                } else {
+                    self.recordEmitted(&result, 1, batch.meshlet_count - meshlet_mark);
                 }
             } else {
-                if (@import("builtin").mode == .Debug) self.stats.empty_glyphs_skipped += 1;
+                self.recordGlyphReject(&result, .empty_glyph);
             }
 
             try advancePen(&pen_x, &pen_y, pos);
         }
+
+        return result;
     }
 
-    fn recordPrecisionUnsupported(self: *RendererCore) void {
-        if (self.frame_diagnostics.precision_unsupported < std.math.maxInt(u32)) {
-            self.frame_diagnostics.precision_unsupported += 1;
+    fn recordShapedRun(self: *RendererCore, result: *DrawTextResult, glyphs: u32) void {
+        saturatingIncrement(&self.frame_diagnostics.runs);
+        self.frame_diagnostics.shaped_glyphs = saturatingAdd(self.frame_diagnostics.shaped_glyphs, glyphs);
+        result.shaped_glyphs = saturatingAdd(result.shaped_glyphs, glyphs);
+    }
+
+    fn recordEmitted(self: *RendererCore, result: *DrawTextResult, glyphs: u32, meshlets: u32) void {
+        self.frame_diagnostics.emitted_glyphs = saturatingAdd(self.frame_diagnostics.emitted_glyphs, glyphs);
+        self.frame_diagnostics.emitted_meshlets = saturatingAdd(self.frame_diagnostics.emitted_meshlets, meshlets);
+        result.emitted_glyphs = saturatingAdd(result.emitted_glyphs, glyphs);
+        result.emitted_meshlets = saturatingAdd(result.emitted_meshlets, meshlets);
+        if (@import("builtin").mode == .Debug) {
+            self.stats.glyphs_written = saturatingAdd(self.stats.glyphs_written, glyphs);
+            self.stats.meshlets_written = saturatingAdd(self.stats.meshlets_written, meshlets);
         }
-        if (@import("builtin").mode == .Debug) self.stats.precision_insufficient += 1;
+    }
+
+    fn recordPrecisionSelection(self: *RendererCore, sigma: f64, required_bits: u16) void {
+        if (std.math.isFinite(sigma) and sigma > self.frame_diagnostics.max_sigma) {
+            self.frame_diagnostics.max_sigma = sigma;
+        }
+        if (required_bits > self.frame_diagnostics.max_required_fraction_bits) {
+            self.frame_diagnostics.max_required_fraction_bits = required_bits;
+        }
+    }
+
+    fn recordRunReject(self: *RendererCore, result: *DrawTextResult, reason: RunRejectReason) void {
+        incrementRunReject(&self.frame_diagnostics.run_rejects, reason);
+        incrementRunReject(&result.run_rejects, reason);
+        if (self.frame_diagnostics.first_blocking_reason == null) {
+            self.frame_diagnostics.first_blocking_reason = .{ .run = reason };
+        }
+    }
+
+    fn recordGlyphReject(self: *RendererCore, result: *DrawTextResult, reason: GlyphRejectReason) void {
+        incrementGlyphReject(&self.frame_diagnostics.glyph_rejects, reason);
+        incrementGlyphReject(&result.glyph_rejects, reason);
+        if (isBlockingGlyphReject(reason) and self.frame_diagnostics.first_blocking_reason == null) {
+            self.frame_diagnostics.first_blocking_reason = .{ .glyph = reason };
+        }
+        if (@import("builtin").mode == .Debug) {
+            switch (reason) {
+                .invalid_transform, .nonfinite_bounds, .f32_chart_overflow => self.stats.invalid_transform += 1,
+                .precision_unsupported => self.stats.precision_insufficient += 1,
+                .host_culled, .meshlet_empty => self.stats.host_culled += 1,
+                .empty_glyph => self.stats.empty_glyphs_skipped += 1,
+                .cache_encode_unsupported => {},
+            }
+        }
     }
 
     fn ensureGlyphCached(
@@ -481,7 +775,7 @@ pub const RendererCore = struct {
         precision_bits: u8,
     ) !CachedGlyph {
         const encoded = font_entry.loaded.encodeGlyph(cache_key.glyph_id, precision_bits) catch |err| switch (err) {
-            error.PrecisionUnsupported, error.GlyphTooLarge, error.GlyphOffsetOverflow => return Error.PrecisionUnsupported,
+            error.PrecisionUnsupported, error.GlyphTooLarge, error.GlyphOffsetOverflow => return error.CacheEncodeUnsupported,
             else => return Error.ShapingFailed,
         };
         defer encoded.deinit();
@@ -552,6 +846,40 @@ pub const RendererCore = struct {
         };
     }
 };
+
+fn incrementRunReject(counters: *RunRejectCounters, reason: RunRejectReason) void {
+    switch (reason) {
+        .invalid_world_transform => saturatingIncrement(&counters.invalid_world_transform),
+    }
+}
+
+fn incrementGlyphReject(counters: *RejectCounters, reason: GlyphRejectReason) void {
+    switch (reason) {
+        .invalid_transform => saturatingIncrement(&counters.invalid_transform),
+        .precision_unsupported => saturatingIncrement(&counters.precision_unsupported),
+        .cache_encode_unsupported => saturatingIncrement(&counters.cache_encode_unsupported),
+        .nonfinite_bounds => saturatingIncrement(&counters.nonfinite_bounds),
+        .host_culled => saturatingIncrement(&counters.host_culled),
+        .f32_chart_overflow => saturatingIncrement(&counters.f32_chart_overflow),
+        .meshlet_empty => saturatingIncrement(&counters.meshlet_empty),
+        .empty_glyph => saturatingIncrement(&counters.empty_glyph),
+    }
+}
+
+fn isBlockingGlyphReject(reason: GlyphRejectReason) bool {
+    return switch (reason) {
+        .invalid_transform,
+        .precision_unsupported,
+        .cache_encode_unsupported,
+        .nonfinite_bounds,
+        .f32_chart_overflow,
+        .meshlet_empty,
+        => true,
+        .host_culled,
+        .empty_glyph,
+        => false,
+    };
+}
 
 fn advancePen(pen_x: *i64, pen_y: *i64, pos: anytype) Error!void {
     pen_x.* = std.math.add(i64, pen_x.*, pos.x_advance) catch return Error.TextPositionOverflow;
@@ -647,7 +975,7 @@ test "render: RendererCore appends shaped glyph instances and caches blobs" {
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);
-    try core.appendRun(&backend, &batch, test_view, .{
+    _ = try core.appendRun(&backend, &batch, test_view, .{
         .font = font,
         .text = "Hi",
         .transform = core_types.Transform.translation(10, 20),
@@ -678,7 +1006,7 @@ test "render: RendererCore appends shaped glyph instances and caches blobs" {
     }
 
     const refs_after_first = backend.next_ref;
-    try core.appendRun(&backend, &batch, test_view, .{
+    _ = try core.appendRun(&backend, &batch, test_view, .{
         .font = font,
         .text = "Hi",
         .transform = core_types.Transform.translation(10, 20),
@@ -703,7 +1031,7 @@ test "render: RendererCore skips empty glyph instances while preserving cache en
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);
-    try core.appendRun(&backend, &batch, test_view, .{
+    _ = try core.appendRun(&backend, &batch, test_view, .{
         .font = font,
         .text = " ",
         .color = .white,
@@ -757,7 +1085,7 @@ test "render: RendererCore writes fill-rule flags into glyph instances" {
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);
-    try core.appendRun(&backend, &batch, test_view, .{
+    _ = try core.appendRun(&backend, &batch, test_view, .{
         .font = font,
         .text = "A",
         .color = .white,
@@ -783,7 +1111,7 @@ test "render: RendererCore emits finite chart payload after large pan cancellati
     const world = core_types.Transform.translation(-1.0e12, -1.0e12);
     const run_transform = core_types.Transform.translation(1.0e12 + 32.0, 1.0e12 + 48.0);
     core.beginFrame(0, &backend);
-    try core.appendRun(&backend, &batch, core_types.View.init(1280, 720, world), .{
+    _ = try core.appendRun(&backend, &batch, core_types.View.init(1280, 720, world), .{
         .font = font,
         .text = "A",
         .transform = run_transform,
@@ -810,7 +1138,7 @@ test "render: RendererCore reports unsupported precision instead of emitting uns
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);
-    try core.appendRun(&backend, &batch, test_view, .{
+    const result = try core.appendRun(&backend, &batch, test_view, .{
         .font = font,
         .text = "A",
         .transform = core_types.Transform.scale(1.0e12, 1.0e12),
@@ -819,13 +1147,54 @@ test "render: RendererCore reports unsupported precision instead of emitting uns
 
     try std.testing.expectEqual(@as(u32, 0), batch.glyphCount());
     try std.testing.expectEqual(@as(u32, 0), batch.meshletCount());
+    try std.testing.expect(result.shaped_glyphs > 0);
+    try std.testing.expectEqual(result.shaped_glyphs, result.glyph_rejects.total());
+    try std.testing.expectEqual(@as(u32, 0), result.emitted_glyphs);
+    try std.testing.expectEqual(result.shaped_glyphs, core.frameDiagnostics().glyph_rejects.total());
     try std.testing.expect(core.frameDiagnostics().hasPrecisionUnsupported());
+    const warnings = core.frameDiagnostics().warnings();
+    try std.testing.expect(warnings.slice().len >= 2);
     if (@import("builtin").mode == .Debug) {
         try std.testing.expect(core.stats.precision_insufficient > 0);
     }
 
     core.beginFrame(0, &backend);
     try std.testing.expect(!core.frameDiagnostics().hasPrecisionUnsupported());
+}
+
+test "render: screen-space runs only require a finite viewport" {
+    var core = try RendererCore.init(std.testing.allocator, .{ .max_glyphs_per_frame = 4 });
+    defer core.deinit();
+
+    var pool: [16 * 1024]u8 = undefined;
+    var backend = FakeBackend{ .pool = &pool };
+    var glyphs: [4]TestGlyphInstance = undefined;
+    var meshlets: [4 * mesh_limits.max_subdivisions_per_glyph]TestGlyphMeshlet = undefined;
+    var batch = frame_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
+
+    const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
+    const invalid_world = core_types.Transform.init(std.math.nan(f64), 0, 0, 1, 0, 0);
+    const view = core_types.View.init(1280, 720, invalid_world);
+    core.beginFrame(0, &backend);
+
+    const world_result = try core.appendRun(&backend, &batch, view, .{
+        .font = font,
+        .text = "A",
+        .color = .white,
+    });
+    try std.testing.expectEqual(@as(u32, 0), world_result.shaped_glyphs);
+    try std.testing.expectEqual(@as(u32, 1), world_result.run_rejects.invalid_world_transform);
+
+    const screen_result = try core.appendScreenRun(&backend, &batch, view, .{
+        .font = font,
+        .text = "A",
+        .screen_from_text = core_types.Transform.translation(32, 48),
+        .color = .white,
+    });
+    try std.testing.expect(screen_result.emitted());
+    try std.testing.expect(batch.glyphCount() > 0);
+    try std.testing.expectEqual(@as(u32, 1), core.frameDiagnostics().run_rejects.invalid_world_transform);
+    try std.testing.expect(core.frameDiagnostics().hasVisiblePayload());
 }
 
 test "render: RendererCore defers evicted glyph retirement until frame token completes" {
@@ -845,7 +1214,7 @@ test "render: RendererCore defers evicted glyph retirement until frame token com
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.setRetireAfterToken(7);
     core.beginFrame(0, &backend);
-    try core.appendRun(&backend, &batch, test_view, .{
+    _ = try core.appendRun(&backend, &batch, test_view, .{
         .font = font,
         .text = "A",
         .color = .white,
@@ -853,7 +1222,7 @@ test "render: RendererCore defers evicted glyph retirement until frame token com
 
     core.setRetireAfterToken(7);
     core.beginFrame(0, &backend);
-    try core.appendRun(&backend, &batch, test_view, .{
+    _ = try core.appendRun(&backend, &batch, test_view, .{
         .font = font,
         .text = "B",
         .color = .white,
@@ -889,7 +1258,7 @@ test "render: RendererCore unloadFont removes handle and defers cached glyph ret
 
     const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
     core.beginFrame(0, &backend);
-    try core.appendRun(&backend, &batch, test_view, .{
+    _ = try core.appendRun(&backend, &batch, test_view, .{
         .font = font,
         .text = "A",
         .color = .white,

@@ -15,9 +15,10 @@ implementation history belongs in commits and code review notes.
 - **Demo metrics overlay:** the shared demo scene now renders a
   backend-neutral screen-space readout for FPS, relative view zoom, and native
   display scale.
-- **Demo precision alert:** native demos now show a prominent screen-space
-  warning when the renderer reports an unsupported precision tier, including
-  the frame where `PrecisionUnsupported` is caught.
+- **Structured frame warnings:** native demos now show every public renderer
+  warning vertically in screen space, including invalid transforms, precision
+  limits, glyph encode limits, f32 chart overflow, meshlet-empty output, and
+  empty-after-blocking-reject frames.
 - **Direct-present demo surface contract:** Vulkan demos now model platform
   presentation as a direct WSI swapchain path. Wayland binds
   linux-dmabuf-v1 feedback when advertised; Windows documents that DXGI shared
@@ -46,6 +47,13 @@ implementation history belongs in commits and code review notes.
   `Transform`/`View`, precision tiers are selected from CPU affine charts, and
   extreme zoom rendering avoids f32 absolute-coordinate cancellation through
   meshlet-local anchors and integer-relative shader decoding.
+- **Breaking frame API and diagnostics rewrite:** `Frame.drawText()` now returns
+  `DrawTextResult`, `Frame.drawScreenText()` draws native screen-space text
+  without inverting the world view, and `Frame.submit()` returns `SubmitResult`
+  instead of overloading `FrameToken` for submitted, clear-only, and empty-noop
+  frames. `FrameDiagnostics` now exposes structured run/glyph reject counters,
+  precision scale maxima, first blocking reason, and stable `FrameWarning`
+  snapshots.
 - **GPU ABI and shader pipeline rewritten:** shared Slang 2026 modules now own
   coverage, h-band traversal, chart mapping, stats, mesh clipping, and backend
   resource shims; generated Zig GPU structs are reflection-derived with
@@ -66,6 +74,10 @@ implementation history belongs in commits and code review notes.
   values, explicit status/out-handle results, diagnostics buffers, and
   protocol-versioned raw request blocks. Zig mirrors the bridge from
   `src/backends/metal/context.zig`.
+- **Metal empty frames now clear and present:** empty text batches are submitted
+  through a clear-only Metal bridge request instead of silently releasing the
+  frame slot. Vulkan keeps empty text batches as explicit `.empty_noop` results
+  because the application-owned host still completes swapchain clear/present.
 - **Build graph rewritten:** build options expose derived backend/demo needs,
   Vulkan packages and Wayland protocol XML are lazy, shader artifacts are cached
   inside the configure graph, Swift toolchain resolution happens once per Metal

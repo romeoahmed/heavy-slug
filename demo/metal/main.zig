@@ -53,10 +53,13 @@ pub fn main() !void {
 
         const view = scene.frameView(frame_metrics);
         var text_frame = try text_renderer.beginFrame(view);
+        var text_frame_open = true;
+        errdefer if (text_frame_open) text_frame.discard();
         try scene.draw(&text_frame, font, view, frame_metrics);
         _ = try text_frame.submit(.{
             .clear_color = scene.clearColor(),
         });
+        text_frame_open = false;
         if (heavy_slug_metal.shader_stats_enabled and now - stats_log_time >= 1.0) {
             text_renderer.stats().log();
             stats_log_time = now;

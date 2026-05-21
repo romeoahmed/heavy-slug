@@ -100,7 +100,7 @@ pub fn frameParams(geometry: FrameGeometry, chunk: DrawChunk) bindings.FramePara
 }
 
 fn viewSizeF32(view: core_types.View) ?[2]f32 {
-    if (!view.isFinite()) return null;
+    if (!view.hasFiniteViewport()) return null;
     if (view.width > @as(f64, @floatFromInt(std.math.maxInt(u32))) or
         view.height > @as(f64, @floatFromInt(std.math.maxInt(u32))))
     {

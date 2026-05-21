@@ -500,6 +500,10 @@ pub const Host = struct {
         return needs_recreate;
     }
 
+    pub fn abortFrame(self: *Host, frame: SwapchainFrame) !void {
+        _ = try self.endFrame(frame);
+    }
+
     fn acquireNextImage(self: *Host, semaphore: vk.Semaphore) !AcquiredImage {
         const acquire_info = vk.AcquireNextImageInfoKHR{
             .swapchain = self.swapchain,

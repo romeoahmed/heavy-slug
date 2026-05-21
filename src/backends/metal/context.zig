@@ -36,8 +36,9 @@ pub const GeometryLimits = struct {
 };
 
 pub const frame_slot_count: usize = 3;
-pub const draw_request_protocol_version = ProtocolVersion.init(1, 0);
+pub const draw_request_protocol_version = ProtocolVersion.init(1, 1);
 pub const draw_request_protocol_version_word: u32 = draw_request_protocol_version.word();
+pub const draw_request_flag_clear_only: u32 = 1 << 0;
 pub const buffer_glyph_pool: u32 = @intFromEnum(resource_model.BufferBinding.glyph_pool);
 pub const buffer_glyphs: u32 = @intFromEnum(resource_model.BufferBinding.glyphs);
 pub const buffer_meshlets: u32 = @intFromEnum(resource_model.BufferBinding.meshlets);
@@ -209,6 +210,7 @@ pub fn waitSubmitted(ctx: Context) void {
 pub const DrawInfo = struct {
     viewport: [2]u32,
     clear_color: [4]f32,
+    clear_only: bool,
     glyphs: Buffer,
     meshlets: Buffer,
     frame_params: Buffer,
@@ -225,7 +227,7 @@ pub const DrawRequest = extern struct {
     height: u32,
     slot_index: u32,
     workgroup_count: u32,
-    reserved0: u32,
+    flags: u32,
     clear_color: [4]f32,
     frame_params_stride: usize,
     glyphs: ?*BufferHandle,
@@ -241,7 +243,7 @@ pub const DrawRequest = extern struct {
             .height = info.viewport[1],
             .slot_index = info.slot_index,
             .workgroup_count = info.workgroup_count,
-            .reserved0 = 0,
+            .flags = if (info.clear_only) draw_request_flag_clear_only else 0,
             .clear_color = info.clear_color,
             .frame_params_stride = info.frame_params_stride,
             .glyphs = info.glyphs.handle,
@@ -296,7 +298,8 @@ test "Metal context mirrors Swift bridge ABI constants" {
     try std.testing.expectEqual(@as(c_int, 1), @intFromEnum(Status.err));
     try std.testing.expectEqual(@as(usize, 1), @sizeOf(U8));
     try std.testing.expectEqual(@as(usize, 3), frame_slot_count);
-    try std.testing.expectEqual(ProtocolVersion.init(1, 0).word(), draw_request_protocol_version_word);
+    try std.testing.expectEqual(ProtocolVersion.init(1, 1).word(), draw_request_protocol_version_word);
+    try std.testing.expectEqual(@as(u32, 1), draw_request_flag_clear_only);
     try std.testing.expectEqual(@as(u32, 0), buffer_glyph_pool);
     try std.testing.expectEqual(@as(u32, 1), buffer_glyphs);
     try std.testing.expectEqual(@as(u32, 2), buffer_meshlets);
@@ -314,7 +317,7 @@ test "Metal draw request protocol layout is explicit and pointer-sized" {
     try std.testing.expectEqual(@as(usize, 8), @offsetOf(DrawRequest, "height"));
     try std.testing.expectEqual(@as(usize, 12), @offsetOf(DrawRequest, "slot_index"));
     try std.testing.expectEqual(@as(usize, 16), @offsetOf(DrawRequest, "workgroup_count"));
-    try std.testing.expectEqual(@as(usize, 20), @offsetOf(DrawRequest, "reserved0"));
+    try std.testing.expectEqual(@as(usize, 20), @offsetOf(DrawRequest, "flags"));
     try std.testing.expectEqual(@as(usize, 24), @offsetOf(DrawRequest, "clear_color"));
     try std.testing.expectEqual(@as(usize, 40), @offsetOf(DrawRequest, "frame_params_stride"));
     try std.testing.expectEqual(@as(usize, 48), @offsetOf(DrawRequest, "glyphs"));

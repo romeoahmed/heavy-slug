@@ -12,6 +12,8 @@ pub const RendererOptions = renderer.RendererOptions;
 pub const FontHandle = renderer.FontHandle;
 pub const GlyphBlobRef = Renderer.GlyphBlobRef;
 pub const FrameToken = renderer.FrameToken;
+pub const DrawTextResult = renderer.DrawTextResult;
+pub const SubmitResult = renderer.SubmitResult;
 pub const Stats = renderer.Stats;
 pub const shader_stats_enabled = renderer.shader_stats_enabled;
 

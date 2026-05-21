@@ -20,6 +20,8 @@ pub const Error = memory.Error || draw_plan.Error || error{
 pub const RendererOptions = render.RendererOptions;
 pub const FontHandle = render.FontHandle;
 pub const FrameToken = render.FrameToken;
+pub const DrawTextResult = render.DrawTextResult;
+pub const SubmitResult = render.SubmitResult;
 pub const max_frames_in_flight = frames_in_flight;
 pub const shader_stats_enabled = backend_options.shader_stats;
 
@@ -102,21 +104,35 @@ pub const Frame = struct {
     pub fn drawText(
         self: *Frame,
         run: heavy_slug.TextRun,
-    ) !void {
+    ) !render.DrawTextResult {
         if (self.submitted) return error.FrameAlreadySubmitted;
-        try self.renderer.core.appendRun(self.renderer, &self.batch, self.view, run);
+        return self.renderer.core.appendRun(self.renderer, &self.batch, self.view, run);
+    }
+
+    pub fn drawScreenText(
+        self: *Frame,
+        run: heavy_slug.ScreenTextRun,
+    ) !render.DrawTextResult {
+        if (self.submitted) return error.FrameAlreadySubmitted;
+        return self.renderer.core.appendScreenRun(self.renderer, &self.batch, self.view, run);
     }
 
     pub fn diagnostics(self: *const Frame) render.FrameDiagnostics {
         return self.renderer.core.frameDiagnostics();
     }
 
-    pub fn submit(self: *Frame, target: Target) !render.FrameToken {
+    pub fn submit(self: *Frame, target: Target) !render.SubmitResult {
         if (self.submitted) return error.FrameAlreadySubmitted;
-        const token = try self.renderer.submitFrame(target, self.view, self.batch.glyphCount(), self.batch.meshletCount());
+        const result = try self.renderer.submitFrame(target, self.view, self.batch.glyphCount(), self.batch.meshletCount());
         self.batch.markSubmitted();
         self.submitted = true;
-        return token;
+        return result;
+    }
+
+    pub fn discard(self: *Frame) void {
+        if (self.submitted) return;
+        self.batch.rollback(0, 0);
+        self.submitted = true;
     }
 };
 
@@ -288,6 +304,7 @@ pub const Renderer = struct {
     }
 
     pub fn beginFrame(self: *Renderer, view: core_types.View) Error!Frame {
+        if (!view.hasFiniteViewport()) return Error.InvalidView;
         try self.reserveFrameSlot();
         const glyphs: [*]bindings.GlyphInstance = @ptrCast(@alignCast(self.glyph_buffers[self.active_frame].mapped));
         const glyph_slice = glyphs[0..self.core.max_glyphs_per_frame];
@@ -350,8 +367,14 @@ pub const Renderer = struct {
     /// rendering pass. The caller is responsible for starting/ending the
     /// render pass and submitting the command buffer.
     ///
-    fn submitFrame(self: *Renderer, target: Target, view: core_types.View, glyph_count: u32, meshlet_count: u32) Error!render.FrameToken {
-        if (glyph_count == 0 or meshlet_count == 0) return self.last_submitted_frame;
+    fn submitFrame(self: *Renderer, target: Target, view: core_types.View, glyph_count: u32, meshlet_count: u32) Error!render.SubmitResult {
+        if (!view.hasFiniteViewport()) return Error.InvalidView;
+        if (glyph_count == 0 or meshlet_count == 0) {
+            return .{ .empty_noop = .{
+                .previous_token = self.last_submitted_frame,
+                .diagnostics = self.core.frameDiagnostics(),
+            } };
+        }
         const vk_cmd = target.command_buffer;
         const geometry = try draw_plan.frameGeometry(view);
 
@@ -414,7 +437,7 @@ pub const Renderer = struct {
         self.last_submitted_frame +%= 1;
         self.frame_tokens[self.active_frame] = self.last_submitted_frame;
         self.core.setRetireAfterToken(self.last_submitted_frame);
-        return self.last_submitted_frame;
+        return .{ .submitted_text = self.last_submitted_frame };
     }
 
     pub fn deinit(self: *Renderer) void {

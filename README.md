@@ -46,10 +46,13 @@ graphics objects and call the backend renderer from its frame loop.
 | `heavy_slug_metal` | `-Dmetal=true` or Metal demo builds | Metal 4 backend. |
 
 Primary `heavy_slug` exports are `FontSource`, `FontOptions`, `FontHandle`,
-`TextRun`, `Color`, `Transform`, `View`, `PrecisionPolicy`, `FillRule`,
-`RendererOptions`, `FrameToken`, and `ShaderStats`. Backend modules expose the
-application-facing flow through `Context`, `Renderer`, `Frame`, `Target`,
-`RendererOptions`, `FontHandle`, `FrameToken`, `Stats`, and
+`TextRun`, `ScreenTextRun`, `Color`, `Transform`, `View`, `PrecisionPolicy`,
+`PrecisionSelection`, `FillRule`, `RendererOptions`, `DrawTextResult`,
+`SubmitResult`, `FrameDiagnostics`, `FrameWarning`, `FrameToken`, and
+`ShaderStats`. Backend
+modules expose the application-facing flow through `Context`, `Renderer`,
+`Frame`, `Target`, `RendererOptions`, `FontHandle`, `DrawTextResult`,
+`SubmitResult`, `FrameToken`, `Stats`, and
 `shader_stats_enabled`. Vulkan also exposes requirement helpers such as
 `required_api_version` and `required_device_extensions`; Metal exposes `Host`,
 the borrowed native object bundle used to create a backend context.
@@ -65,14 +68,26 @@ const font = try renderer.loadFont(.{ .path = "assets/NotoSansJP-Regular.otf" },
 
 const view = heavy_slug.View.identity(width_px, height_px);
 var frame = try renderer.beginFrame(view);
-try frame.drawText(.{
+_ = try frame.drawText(.{
     .font = font,
     .text = "Heavy Slug",
     .transform = heavy_slug.Transform.translation(80, 140),
     .color = heavy_slug.Color.white,
 });
 
-const token = try frame.submit(target);
+_ = try frame.drawScreenText(.{
+    .font = font,
+    .text = "FPS 60.0  Zoom 1.00x",
+    .screen_from_text = heavy_slug.Transform.translation(24, height_px - 28),
+    .color = heavy_slug.Color.white,
+});
+
+const submit = try frame.submit(target);
+const token = switch (submit) {
+    .submitted_text => |token| token,
+    .submitted_clear_only => |token| token,
+    .empty_noop => |empty| empty.previous_token,
+};
 ```
 
 Useful commands:
@@ -207,6 +222,9 @@ used, the policy bounds rounding error by:
 
 It requires that value to stay below `target_error_px`, rejects non-finite or
 ill-conditioned transforms, and encodes glyph bounds with outward rounding.
+Precision selection returns structured supported/unsupported data so frame
+diagnostics can report the largest observed screen-space scale and required
+fraction bits without turning a single degraded glyph into a whole-frame error.
 
 The h-band table is a conservative CSR index from y bands to curve ids:
 
@@ -252,18 +270,24 @@ or Wayland; Metal uses SwiftUI/AppKit with a `CAMetalLayer`. All demos use `B`
 to switch between explicit light and dark appearance. The shared scene uses
 `NotoSansJP-Regular.otf` for a dense vertically grouped multilingual and symbol
 sample corpus, plus a screen-space metrics overlay for FPS, relative view zoom,
-native display scale, and precision-limit alerts. Vulkan demo window titles are
+native display scale, and renderer warnings. Vulkan demo window titles are
 validated UTF-8; Win32 presents them as UTF-16 native titles, and Wayland
 publishes the exact title through xdg-shell.
 
 Vulkan hosts report completed GPU work with `Renderer.markFrameComplete(token)`.
 The Metal backend tracks completion through bridge-managed frame slots and waits
-for submitted work during teardown. `Renderer.stats()` exposes CPU/backend
-counters for shaping, cache, uploads, retirements, pool state, submitted glyphs,
-and meshlets; `Frame.diagnostics()` exposes frame-local precision-limit
-diagnostics for application UI. `-Dshader-stats=true` adds GPU counters for
-meshlet culling, h-band candidate use, full-scan fallback, bbox rejection, and
-curve integration.
+for submitted work during teardown. `Frame.submit()` returns an explicit
+`SubmitResult`: Vulkan reports empty text batches as `.empty_noop` because the
+host still owns swapchain presentation, while Metal submits `.submitted_clear_only`
+for empty text batches so the drawable is cleared and presented.
+`Renderer.stats()` exposes CPU/backend counters for shaping, cache, uploads,
+retirements, pool state, submitted glyphs, and meshlets; `Frame.diagnostics()`
+exposes frame-local run/glyph reject counters and stable `FrameWarning` values
+for application UI. The demo snapshots those warnings before drawing its
+screen-space overlay, then displays every public warning vertically with
+`Frame.drawScreenText()`. `-Dshader-stats=true` adds GPU counters for meshlet
+culling, h-band candidate use, full-scan fallback, bbox rejection, and curve
+integration.
 
 ## Development
 

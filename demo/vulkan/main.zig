@@ -59,6 +59,10 @@ pub fn main() !void {
             try host.recreateSwapchain(&window);
             continue;
         };
+        var host_frame_open = true;
+        errdefer if (host_frame_open) host.abortFrame(frame) catch |abort_err| {
+            std.log.err("abort Vulkan frame failed after draw error: {}", .{abort_err});
+        };
         text_renderer.markFrameComplete(submitted_text_tokens[frame.frame_index]);
         if (heavy_slug_vulkan.shader_stats_enabled and now - stats_log_time >= 1.0) {
             text_renderer.stats().log();
@@ -67,11 +71,20 @@ pub fn main() !void {
 
         const view = scene.frameView(frame_metrics);
         var text_frame = try text_renderer.beginFrame(view);
+        var text_frame_open = true;
+        errdefer if (text_frame_open) text_frame.discard();
         try scene.draw(&text_frame, font, view, frame_metrics);
-        submitted_text_tokens[frame.frame_index] = try text_frame.submit(.{
+        const submit_result = try text_frame.submit(.{
             .command_buffer = frame.cmd,
         });
+        text_frame_open = false;
+        submitted_text_tokens[frame.frame_index] = switch (submit_result) {
+            .submitted_text => |token| token,
+            .submitted_clear_only => |token| token,
+            .empty_noop => |empty| empty.previous_token,
+        };
 
+        host_frame_open = false;
         if (try host.endFrame(frame)) {
             try host.recreateSwapchain(&window);
         }

@@ -29,6 +29,8 @@ pub const Error = metal.Error || error{
 pub const RendererOptions = render.RendererOptions;
 pub const FontHandle = render.FontHandle;
 pub const FrameToken = render.FrameToken;
+pub const DrawTextResult = render.DrawTextResult;
+pub const SubmitResult = render.SubmitResult;
 pub const shader_stats_enabled = backend_options.shader_stats;
 pub const Stats = if (@import("builtin").mode == .Debug) struct {
     core: render.Stats = .{},
@@ -119,7 +121,7 @@ fn readShaderStatsBuffer(buffer: metal.Buffer) heavy_slug.ShaderStats {
 }
 
 fn viewSizeU32(view: core_types.View) ?[2]u32 {
-    if (!view.isFinite()) return null;
+    if (!view.hasFiniteViewport()) return null;
     if (view.width > @as(f64, @floatFromInt(std.math.maxInt(u32))) or
         view.height > @as(f64, @floatFromInt(std.math.maxInt(u32))))
     {
@@ -187,21 +189,39 @@ pub const Frame = struct {
     pub fn drawText(
         self: *Frame,
         run: heavy_slug.TextRun,
-    ) !void {
+    ) !render.DrawTextResult {
         if (self.submitted) return error.FrameAlreadySubmitted;
-        try self.renderer.core.appendRun(self.renderer, &self.batch, self.view, run);
+        return self.renderer.core.appendRun(self.renderer, &self.batch, self.view, run);
+    }
+
+    pub fn drawScreenText(
+        self: *Frame,
+        run: heavy_slug.ScreenTextRun,
+    ) !render.DrawTextResult {
+        if (self.submitted) return error.FrameAlreadySubmitted;
+        return self.renderer.core.appendScreenRun(self.renderer, &self.batch, self.view, run);
     }
 
     pub fn diagnostics(self: *const Frame) render.FrameDiagnostics {
         return self.renderer.core.frameDiagnostics();
     }
 
-    pub fn submit(self: *Frame, target: Target) !render.FrameToken {
+    pub fn submit(self: *Frame, target: Target) !render.SubmitResult {
         if (self.submitted) return error.FrameAlreadySubmitted;
-        const token = try self.renderer.submitFrame(target, self.view, self.batch.glyphCount(), self.batch.meshletCount());
+        const result = try self.renderer.submitFrame(target, self.view, self.batch.glyphCount(), self.batch.meshletCount());
         self.batch.markSubmitted();
         self.submitted = true;
-        return token;
+        return result;
+    }
+
+    pub fn discard(self: *Frame) void {
+        if (self.submitted) return;
+        self.batch.rollback(0, 0);
+        if (self.renderer.frame_reserved) {
+            metal.releaseFrameSlot(self.renderer.context, @intCast(self.renderer.active_frame));
+            self.renderer.frame_reserved = false;
+        }
+        self.submitted = true;
     }
 };
 
@@ -335,6 +355,7 @@ pub const Renderer = struct {
     }
 
     pub fn beginFrame(self: *Renderer, view: core_types.View) Error!Frame {
+        if (!view.hasFiniteViewport()) return Error.InvalidView;
         try self.reserveFrameSlot();
         const glyphs: [*]AbiGlyphInstance = @ptrCast(@alignCast(self.frame_slots[self.active_frame].glyphs.mapped));
         const glyph_slice = glyphs[0..self.core.max_glyphs_per_frame];
@@ -366,15 +387,7 @@ pub const Renderer = struct {
         return self.completed_frame;
     }
 
-    fn submitFrame(self: *Renderer, target: Target, view: core_types.View, glyph_count: u32, meshlet_count: u32) Error!render.FrameToken {
-        if (glyph_count == 0 or meshlet_count == 0) {
-            if (self.frame_reserved) {
-                metal.releaseFrameSlot(self.context, @intCast(self.active_frame));
-                self.frame_reserved = false;
-            }
-            return self.last_submitted_frame;
-        }
-
+    fn submitFrame(self: *Renderer, target: Target, view: core_types.View, glyph_count: u32, meshlet_count: u32) Error!render.SubmitResult {
         const view_size = viewSizeU32(view) orelse return Error.InvalidView;
         const clear_color = target.clear_color;
         const frame_slot = &self.frame_slots[self.active_frame];
@@ -387,7 +400,7 @@ pub const Renderer = struct {
         else
             null;
 
-        try writeFrameParams(frame_slot.frame_params, view_size, meshlet_count);
+        if (meshlet_count != 0) try writeFrameParams(frame_slot.frame_params, view_size, meshlet_count);
 
         const workgroup_count = meshlet_count;
         var error_buf: [metal.diagnostic_capacity]u8 = undefined;
@@ -395,6 +408,7 @@ pub const Renderer = struct {
         metal.draw(self.context, .{
             .viewport = view_size,
             .clear_color = clear_color,
+            .clear_only = glyph_count == 0 or meshlet_count == 0,
             .glyphs = frame_slot.glyphs,
             .meshlets = frame_slot.meshlets,
             .frame_params = frame_slot.frame_params,
@@ -419,7 +433,10 @@ pub const Renderer = struct {
         self.last_submitted_frame +%= 1;
         self.slot_tokens[self.active_frame] = self.last_submitted_frame;
         self.core.setRetireAfterToken(self.last_submitted_frame);
-        return self.last_submitted_frame;
+        if (glyph_count == 0 or meshlet_count == 0) {
+            return .{ .submitted_clear_only = self.last_submitted_frame };
+        }
+        return .{ .submitted_text = self.last_submitted_frame };
     }
 
     pub fn deinit(self: *Renderer) void {

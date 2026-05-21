@@ -202,13 +202,40 @@ pub const View = extern struct {
         return .{ .x_min = 0, .y_min = 0, .x_max = self.width, .y_max = self.height };
     }
 
-    pub fn isFinite(self: View) bool {
+    pub fn hasFiniteViewport(self: View) bool {
         return std.math.isFinite(self.width) and
             std.math.isFinite(self.height) and
             self.width > 0 and
-            self.height > 0 and
-            self.screen_from_world.isFinite();
+            self.height > 0;
     }
+
+    pub fn hasFiniteWorldTransform(self: View) bool {
+        return self.screen_from_world.isFinite();
+    }
+
+    pub fn isFinite(self: View) bool {
+        return self.hasFiniteViewport() and self.hasFiniteWorldTransform();
+    }
+};
+
+pub const PrecisionSelection = union(enum) {
+    supported: struct {
+        fraction_bits: u8,
+        required_bits: u16,
+        sigma: f64,
+        condition: f64,
+    },
+    unsupported: struct {
+        required_bits: u16,
+        max_fraction_bits: u8,
+        sigma: f64,
+        condition: f64,
+    },
+};
+
+pub const PrecisionSelectionError = error{
+    InvalidTransform,
+    InvalidPrecisionPolicy,
 };
 
 pub const PrecisionPolicy = extern struct {
@@ -219,7 +246,7 @@ pub const PrecisionPolicy = extern struct {
     hysteresis_frames: u8 = 8,
     _pad: u8 = 0,
 
-    pub fn selectFractionBits(self: PrecisionPolicy, screen_from_local: Transform) !u8 {
+    pub fn selectFractionBits(self: PrecisionPolicy, screen_from_local: Transform) PrecisionSelectionError!PrecisionSelection {
         if (!screen_from_local.isFinite()) return error.InvalidTransform;
         const sigma = screen_from_local.linearNormInf();
         if (!std.math.isFinite(sigma) or sigma <= 0) return error.InvalidTransform;
@@ -238,17 +265,31 @@ pub const PrecisionPolicy = extern struct {
         if (self.min_fraction_bits > self.max_fraction_bits) return error.InvalidPrecisionPolicy;
 
         const required_f = std.math.log2(sigma / (2.0 * self.target_error_px));
-        if (!std.math.isFinite(required_f)) return error.PrecisionUnsupported;
-        if (required_f > @as(f64, @floatFromInt(std.math.maxInt(i32)))) return error.PrecisionUnsupported;
-        const required_i: i32 = if (required_f <= 0)
-            0
-        else
-            @intFromFloat(@ceil(required_f));
-        if (required_i > self.max_fraction_bits) return error.PrecisionUnsupported;
+        const required_bits = requiredFractionBits(required_f);
+        if (required_bits > self.max_fraction_bits) {
+            return .{ .unsupported = .{
+                .required_bits = required_bits,
+                .max_fraction_bits = self.max_fraction_bits,
+                .sigma = sigma,
+                .condition = condition,
+            } };
+        }
 
-        const min_bits: i32 = self.min_fraction_bits;
-        const clamped: u8 = @intCast(@max(required_i, min_bits));
-        return nextEvenTier(clamped, self.max_fraction_bits) orelse error.PrecisionUnsupported;
+        const clamped: u8 = @intCast(@max(required_bits, self.min_fraction_bits));
+        const fraction_bits = nextEvenTier(clamped, self.max_fraction_bits) orelse {
+            return .{ .unsupported = .{
+                .required_bits = required_bits,
+                .max_fraction_bits = self.max_fraction_bits,
+                .sigma = sigma,
+                .condition = condition,
+            } };
+        };
+        return .{ .supported = .{
+            .fraction_bits = fraction_bits,
+            .required_bits = required_bits,
+            .sigma = sigma,
+            .condition = condition,
+        } };
     }
 
     pub fn fixedScale(_: PrecisionPolicy, fraction_bits: u8) !i32 {
@@ -256,6 +297,13 @@ pub const PrecisionPolicy = extern struct {
         return @as(i32, 1) << @intCast(fraction_bits);
     }
 };
+
+fn requiredFractionBits(required_f: f64) u16 {
+    if (!std.math.isFinite(required_f)) return std.math.maxInt(u16);
+    if (required_f <= 0) return 0;
+    if (required_f >= @as(f64, @floatFromInt(std.math.maxInt(u16)))) return std.math.maxInt(u16);
+    return @intFromFloat(@ceil(required_f));
+}
 
 fn nextEvenTier(bits: u8, max_bits: u8) ?u8 {
     var tier = bits;
@@ -362,13 +410,15 @@ test "Transform composes, inverts, and applies to bounds" {
 test "PrecisionPolicy selects even tiers and rejects unsupported zoom" {
     const policy = PrecisionPolicy{};
     const moderate = Transform.scale(1024, 1024);
-    try std.testing.expectEqual(@as(u8, 12), try policy.selectFractionBits(moderate));
+    try std.testing.expectEqual(@as(u8, 12), (try policy.selectFractionBits(moderate)).supported.fraction_bits);
 
     const high = Transform.scale(1_000_000, 1_000_000);
-    try std.testing.expectEqual(@as(u8, 22), try policy.selectFractionBits(high));
+    try std.testing.expectEqual(@as(u8, 22), (try policy.selectFractionBits(high)).supported.fraction_bits);
 
     const too_high = Transform.scale(100_000_000, 100_000_000);
-    try std.testing.expectError(error.PrecisionUnsupported, policy.selectFractionBits(too_high));
+    const unsupported = (try policy.selectFractionBits(too_high)).unsupported;
+    try std.testing.expectEqual(policy.max_fraction_bits, unsupported.max_fraction_bits);
+    try std.testing.expect(unsupported.required_bits > policy.max_fraction_bits);
 
     try std.testing.expectError(
         error.InvalidPrecisionPolicy,

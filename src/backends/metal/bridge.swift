@@ -9,7 +9,9 @@ private let statusOK: Int32 = 0
 private let statusError: Int32 = 1
 
 private let frameSlotCount = 3
-private let drawRequestProtocolVersion = protocolVersion(major: 1, minor: 0)
+private let drawRequestProtocolVersion = protocolVersion(major: 1, minor: 1)
+private let drawRequestFlagClearOnly: UInt32 = 1 << 0
+private let drawRequestKnownFlags = drawRequestFlagClearOnly
 private let bufferGlyphPool: UInt32 = 0
 private let bufferGlyphs: UInt32 = 1
 private let bufferMeshlets: UInt32 = 2
@@ -41,7 +43,7 @@ private enum DrawRequestLayout {
   static let height = 8
   static let slotIndex = 12
   static let workgroupCount = 16
-  static let reserved0 = 20
+  static let flags = 20
   static let clearR = 24
   static let clearG = 28
   static let clearB = 32
@@ -59,6 +61,7 @@ private struct DrawRequest {
   let height: UInt32
   let slotIndex: UInt32
   let workgroupCount: UInt32
+  let flags: UInt32
   let clearR: Float
   let clearG: Float
   let clearB: Float
@@ -88,9 +91,9 @@ private struct DrawRequest {
         "unsupported Metal draw request protocol version \(protocolVersionDescription(protocolVersion))"
       )
     }
-    let reserved0 = data.load(fromByteOffset: DrawRequestLayout.reserved0, as: UInt32.self)
-    guard reserved0 == 0 else {
-      throw fail("Metal draw request reserved field must be zero")
+    flags = data.load(fromByteOffset: DrawRequestLayout.flags, as: UInt32.self)
+    guard (flags & ~drawRequestKnownFlags) == 0 else {
+      throw fail("Metal draw request contains unknown flags")
     }
 
     width = data.load(fromByteOffset: DrawRequestLayout.width, as: UInt32.self)
@@ -608,17 +611,25 @@ private func draw(context: MetalContext, request: DrawRequest) throws {
     }
   }
 
-  guard request.workgroupCount > 0 else {
-    return
-  }
   guard request.width > 0, request.height > 0 else {
     throw fail("Metal draw requires a nonzero viewport")
   }
-  guard request.frameParamsStride > 0 else {
-    throw fail("Metal draw received a zero frame parameter stride")
+  let clearOnly = (request.flags & drawRequestFlagClearOnly) != 0
+  guard request.workgroupCount > 0 || clearOnly else {
+    throw fail("Metal draw request with zero workgroups must be marked clear-only")
+  }
+  guard request.workgroupCount == 0 || !clearOnly else {
+    throw fail("Metal draw request cannot be both clear-only and non-empty")
+  }
+  if request.workgroupCount > 0 {
+    guard request.frameParamsStride > 0 else {
+      throw fail("Metal draw received a zero frame parameter stride")
+    }
   }
 
-  let resources = try drawResources(context: context, request: request)
+  let resources =
+    request.workgroupCount > 0
+    ? try drawResources(context: context, request: request) : nil
 
   guard context.layer.pixelFormat == context.colorFormat else {
     throw fail("CAMetalLayer pixelFormat changed after Metal pipeline creation")
@@ -649,57 +660,59 @@ private func draw(context: MetalContext, request: DrawRequest) throws {
     throw fail("renderCommandEncoderWithDescriptor returned nil")
   }
 
-  bindBuffer(frameSlot.arguments, resources.glyphPool, slot: bufferGlyphPool)
-  bindBuffer(frameSlot.arguments, resources.glyphs, slot: bufferGlyphs)
-  bindBuffer(frameSlot.arguments, resources.meshlets, slot: bufferMeshlets)
-  #if HEAVY_SLUG_SHADER_STATS
-    bindBuffer(frameSlot.arguments, resources.shaderStats, slot: bufferShaderStats)
-  #endif
+  if let resources {
+    bindBuffer(frameSlot.arguments, resources.glyphPool, slot: bufferGlyphPool)
+    bindBuffer(frameSlot.arguments, resources.glyphs, slot: bufferGlyphs)
+    bindBuffer(frameSlot.arguments, resources.meshlets, slot: bufferMeshlets)
+    #if HEAVY_SLUG_SHADER_STATS
+      bindBuffer(frameSlot.arguments, resources.shaderStats, slot: bufferShaderStats)
+    #endif
 
-  encoder.setViewport(
-    MTLViewport(
-      originX: 0,
-      originY: 0,
-      width: Double(request.width),
-      height: Double(request.height),
-      znear: 0,
-      zfar: 1
-    ))
-  encoder.setScissorRect(
-    MTLScissorRect(x: 0, y: 0, width: Int(request.width), height: Int(request.height)))
-  encoder.setCullMode(.none)
-  encoder.setFrontFacing(.counterClockwise)
-  encoder.setTriangleFillMode(.fill)
-  encoder.setDepthClipMode(.clip)
-  encoder.setDepthStencilState(nil)
-  encoder.setRenderPipelineState(context.pipeline)
+    encoder.setViewport(
+      MTLViewport(
+        originX: 0,
+        originY: 0,
+        width: Double(request.width),
+        height: Double(request.height),
+        znear: 0,
+        zfar: 1
+      ))
+    encoder.setScissorRect(
+      MTLScissorRect(x: 0, y: 0, width: Int(request.width), height: Int(request.height)))
+    encoder.setCullMode(.none)
+    encoder.setFrontFacing(.counterClockwise)
+    encoder.setTriangleFillMode(.fill)
+    encoder.setDepthClipMode(.clip)
+    encoder.setDepthStencilState(nil)
+    encoder.setRenderPipelineState(context.pipeline)
 
-  var meshletBase: UInt32 = 0
-  var chunkIndex: UInt32 = 0
-  while meshletBase < request.workgroupCount {
-    let chunkCount = min(request.workgroupCount - meshletBase, maxMeshThreadgroupsPerDraw)
-    do {
-      try bindFrameParams(
-        table: frameSlot.arguments,
-        frameParams: resources.frameParams,
-        chunkIndex: chunkIndex,
-        stride: request.frameParamsStride
+    var meshletBase: UInt32 = 0
+    var chunkIndex: UInt32 = 0
+    while meshletBase < request.workgroupCount {
+      let chunkCount = min(request.workgroupCount - meshletBase, maxMeshThreadgroupsPerDraw)
+      do {
+        try bindFrameParams(
+          table: frameSlot.arguments,
+          frameParams: resources.frameParams,
+          chunkIndex: chunkIndex,
+          stride: request.frameParamsStride
+        )
+      } catch {
+        encoder.endEncoding()
+        commandBuffer.endCommandBuffer()
+        throw error
+      }
+
+      encoder.setArgumentTable(frameSlot.arguments, stages: boundRenderStages)
+      encoder.drawMeshThreadgroups(
+        threadgroupsPerGrid: MTLSize(width: Int(chunkCount), height: 1, depth: 1),
+        threadsPerObjectThreadgroup: MTLSize(width: 0, height: 0, depth: 0),
+        threadsPerMeshThreadgroup: MTLSize(width: meshThreadgroupSize, height: 1, depth: 1)
       )
-    } catch {
-      encoder.endEncoding()
-      commandBuffer.endCommandBuffer()
-      throw error
+
+      meshletBase += chunkCount
+      chunkIndex += 1
     }
-
-    encoder.setArgumentTable(frameSlot.arguments, stages: boundRenderStages)
-    encoder.drawMeshThreadgroups(
-      threadgroupsPerGrid: MTLSize(width: Int(chunkCount), height: 1, depth: 1),
-      threadsPerObjectThreadgroup: MTLSize(width: 0, height: 0, depth: 0),
-      threadsPerMeshThreadgroup: MTLSize(width: meshThreadgroupSize, height: 1, depth: 1)
-    )
-
-    meshletBase += chunkCount
-    chunkIndex += 1
   }
 
   encoder.endEncoding()

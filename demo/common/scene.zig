@@ -21,20 +21,15 @@ const body_scale: f64 = 0.84;
 const overlay_margin: f64 = 24;
 const overlay_baseline_from_top: f64 = 28;
 const overlay_scale: f64 = 0.76;
-const precision_alert_baseline_from_top: f64 = 66;
-const precision_alert_scale: f64 = 0.98;
-const precision_alert_text = "PRECISION UNSUPPORTED: zoom out or press R";
+const warning_first_baseline_from_top: f64 = 66;
+const warning_line_advance: f64 = 26;
+const warning_scale: f64 = 0.98;
 
 const TextTone = enum {
     title,
     subtitle,
     body,
     accent,
-};
-
-const SceneAlert = enum {
-    none,
-    precision_unsupported,
 };
 
 const TextLine = struct {
@@ -338,7 +333,6 @@ pub const Scene = struct {
     view: ViewState = .{},
     view_initialized: bool = false,
     color_scheme: ColorScheme = .light,
-    alert: SceneAlert = .none,
     fps_meter: FpsMeter = .{},
     color_scheme_key_was_pressed: bool = false,
     r_was_pressed: bool = false,
@@ -430,13 +424,9 @@ pub const Scene = struct {
     }
 
     pub fn draw(self: *Scene, renderer: anytype, font: anytype, view: heavy_slug.View, frame: FrameMetrics) !void {
-        self.alert = .none;
-        self.drawContent(renderer, font) catch |err| switch (err) {
-            error.PrecisionUnsupported => self.alert = .precision_unsupported,
-            else => return err,
-        };
-        if (renderer.diagnostics().hasPrecisionUnsupported()) self.alert = .precision_unsupported;
-        try self.drawOverlay(renderer, font, view, frame);
+        try self.drawContent(renderer, font);
+        const warnings = renderer.diagnostics().warnings();
+        try self.drawOverlay(renderer, font, view, frame, warnings);
     }
 
     fn drawContent(self: Scene, renderer: anytype, font: anytype) !void {
@@ -448,7 +438,7 @@ pub const Scene = struct {
                     heavy_slug.Transform.translation(content_margin, y),
                     text_from_local,
                 );
-                try renderer.drawText(.{
+                _ = try renderer.drawText(.{
                     .font = font,
                     .text = line.text,
                     .transform = world_from_text,
@@ -459,12 +449,9 @@ pub const Scene = struct {
         }
     }
 
-    fn drawOverlay(self: *Scene, renderer: anytype, font: anytype, view: heavy_slug.View, frame: FrameMetrics) !void {
-        self.drawMetricsOverlay(renderer, font, view, frame) catch |err| switch (err) {
-            error.PrecisionUnsupported => self.alert = .precision_unsupported,
-            else => return err,
-        };
-        if (self.alert == .precision_unsupported) try self.drawPrecisionAlert(renderer, font, view);
+    fn drawOverlay(self: Scene, renderer: anytype, font: anytype, view: heavy_slug.View, frame: FrameMetrics, warnings: heavy_slug.FrameWarnings) !void {
+        try self.drawMetricsOverlay(renderer, font, view, frame);
+        try self.drawWarnings(renderer, font, view, warnings);
     }
 
     fn drawMetricsOverlay(self: Scene, renderer: anytype, font: anytype, view: heavy_slug.View, frame: FrameMetrics) !void {
@@ -474,27 +461,29 @@ pub const Scene = struct {
             heavy_slug.Transform.translation(overlay_margin, view.height - overlay_baseline_from_top),
             heavy_slug.Transform.scale(overlay_scale, overlay_scale),
         );
-        const world_from_text = screenSpaceTextTransform(view, screen_from_text) orelse return;
-        try renderer.drawText(.{
+        _ = try renderer.drawScreenText(.{
             .font = font,
             .text = label,
-            .transform = world_from_text,
+            .screen_from_text = screen_from_text,
             .color = self.color_scheme.overlayColor(),
         });
     }
 
-    fn drawPrecisionAlert(self: Scene, renderer: anytype, font: anytype, view: heavy_slug.View) !void {
-        const screen_from_text = heavy_slug.Transform.compose(
-            heavy_slug.Transform.translation(overlay_margin, view.height - precision_alert_baseline_from_top),
-            heavy_slug.Transform.scale(precision_alert_scale, precision_alert_scale),
-        );
-        const world_from_text = screenSpaceTextTransform(view, screen_from_text) orelse return;
-        try renderer.drawText(.{
-            .font = font,
-            .text = precision_alert_text,
-            .transform = world_from_text,
-            .color = self.color_scheme.alertColor(),
-        });
+    fn drawWarnings(self: Scene, renderer: anytype, font: anytype, view: heavy_slug.View, warnings: heavy_slug.FrameWarnings) !void {
+        var baseline = view.height - warning_first_baseline_from_top;
+        for (warnings.slice()) |warning| {
+            const screen_from_text = heavy_slug.Transform.compose(
+                heavy_slug.Transform.translation(overlay_margin, baseline),
+                heavy_slug.Transform.scale(warning_scale, warning_scale),
+            );
+            _ = try renderer.drawScreenText(.{
+                .font = font,
+                .text = warningText(warning),
+                .screen_from_text = screen_from_text,
+                .color = self.color_scheme.alertColor(),
+            });
+            baseline -= warning_line_advance;
+        }
     }
 
     fn writeOverlayLabel(self: Scene, frame: FrameMetrics, buffer: []u8) []const u8 {
@@ -633,33 +622,53 @@ fn viewTransform(view: ViewState) heavy_slug.Transform {
     };
 }
 
-fn screenSpaceTextTransform(view: heavy_slug.View, screen_from_text: heavy_slug.Transform) ?heavy_slug.Transform {
-    const world_from_screen = view.screen_from_world.inverse() orelse return null;
-    return heavy_slug.Transform.compose(world_from_screen, screen_from_text);
+fn warningText(warning: heavy_slug.FrameWarning) []const u8 {
+    return switch (warning) {
+        .invalid_world_transform => "INVALID WORLD TRANSFORM: reset with R",
+        .invalid_transform => "INVALID TRANSFORM: reset with R",
+        .precision_unsupported => "PRECISION LIMIT: zoom out or press R",
+        .cache_encode_unsupported => "GLYPH ENCODE LIMIT: unsupported outline at this scale",
+        .nonfinite_bounds => "NONFINITE BOUNDS: reset view with R",
+        .f32_chart_overflow => "F32 CHART LIMIT: reset view or reduce pan",
+        .meshlet_empty => "MESHLET LIMIT: visible glyph produced no meshlets",
+        .empty_after_blocking_rejects => "TEXT EMPTY AFTER REJECTS: reset view with R",
+    };
 }
 
 const FakeRenderFrame = struct {
     diagnostics_value: heavy_slug.core.render.FrameDiagnostics = .{},
     fail_next: ?anyerror = null,
     draw_count: u32 = 0,
-    saw_precision_alert: bool = false,
+    screen_draw_count: u32 = 0,
+    warning_draw_count: u32 = 0,
 
-    fn drawText(self: *FakeRenderFrame, run: anytype) !void {
+    fn drawText(self: *FakeRenderFrame, run: anytype) !heavy_slug.DrawTextResult {
         self.draw_count += 1;
-        if (std.mem.eql(u8, run.text, precision_alert_text)) {
-            self.saw_precision_alert = true;
-            return;
-        }
         if (self.fail_next) |err| {
             self.fail_next = null;
             return err;
         }
+        return .{ .shaped_glyphs = @intCast(run.text.len), .emitted_glyphs = @intCast(run.text.len), .emitted_meshlets = @intCast(run.text.len) };
+    }
+
+    fn drawScreenText(self: *FakeRenderFrame, run: anytype) !heavy_slug.DrawTextResult {
+        self.screen_draw_count += 1;
+        if (isWarningText(run.text)) self.warning_draw_count += 1;
+        return .{ .shaped_glyphs = @intCast(run.text.len), .emitted_glyphs = @intCast(run.text.len), .emitted_meshlets = @intCast(run.text.len) };
     }
 
     fn diagnostics(self: *const FakeRenderFrame) heavy_slug.core.render.FrameDiagnostics {
         return self.diagnostics_value;
     }
 };
+
+fn isWarningText(text: []const u8) bool {
+    inline for (@typeInfo(heavy_slug.FrameWarning).@"enum".fields) |field| {
+        const warning: heavy_slug.FrameWarning = @enumFromInt(field.value);
+        if (std.mem.eql(u8, text, warningText(warning))) return true;
+    }
+    return false;
+}
 
 test "demo scene exposes shared content settings" {
     var visible_lines: usize = 0;
@@ -676,6 +685,13 @@ test "demo scene exposes shared content settings" {
     try std.testing.expect(section_breaks >= 5);
     try std.testing.expect(content_width > 0);
     try std.testing.expect(content_height > 0);
+}
+
+test "demo scene content fit math is stable" {
+    try std.testing.expectApproxEqAbs(@as(f64, 1164), content_height, 1.0e-12);
+    const fit = contentFit(window_width, window_height);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.556701030927835), fit.fit_scale, 1.0e-15);
+    try std.testing.expectApproxEqAbs(fit.fit_scale, fit.scale, 1.0e-15);
 }
 
 test "demo scene uses the multilingual Noto Sans JP asset" {
@@ -735,6 +751,14 @@ test "demo scene frame view keeps glyph outlines y-up" {
     try std.testing.expect(frame_view.screen_from_world.yy > 0);
 }
 
+test "demo scene rotation linear norm is bounded by sqrt2" {
+    const angles = [_]f64{ 0, 0.17, 0.5, 1.0, 1.7, std.math.pi };
+    for (angles) |angle| {
+        const rotation = heavy_slug.Transform.rotation(angle);
+        try std.testing.expect(rotation.linearNormInf() <= @sqrt(@as(f64, 2.0)) + 1.0e-12);
+    }
+}
+
 test "demo scene frame metrics keep framebuffer pixels and display scale explicit" {
     const frame = FrameMetrics.init(1920, 1080, 1.5).?;
     try std.testing.expectEqual(@as(u32, 1920), frame.framebuffer_width);
@@ -758,7 +782,18 @@ test "demo scene overlay label reports fps zoom and platform display scale" {
     try std.testing.expectEqualStrings("FPS 60.0  Zoom 2.00x  Display 2.00x", label);
 }
 
-test "demo scene draws precision alert from frame diagnostics" {
+test "demo scene screen-space overlay precision selects the minimum tier" {
+    const policy = heavy_slug.PrecisionPolicy{};
+    const overlay = heavy_slug.Transform.scale(overlay_scale, overlay_scale)
+        .scaleLinear(1.0 / heavy_slug.core.units.hb_subpixels_per_pixel_f64);
+    const warning = heavy_slug.Transform.scale(warning_scale, warning_scale)
+        .scaleLinear(1.0 / heavy_slug.core.units.hb_subpixels_per_pixel_f64);
+
+    try std.testing.expectEqual(policy.min_fraction_bits, (try policy.selectFractionBits(overlay)).supported.fraction_bits);
+    try std.testing.expectEqual(policy.min_fraction_bits, (try policy.selectFractionBits(warning)).supported.fraction_bits);
+}
+
+test "demo scene draws all public warnings from frame diagnostics" {
     var scene = Scene{
         .view = contentFit(window_width, window_height),
         .view_initialized = true,
@@ -766,33 +801,26 @@ test "demo scene draws precision alert from frame diagnostics" {
     const frame_metrics = testFrame();
     const view = scene.frameView(frame_metrics);
     var frame = FakeRenderFrame{
-        .diagnostics_value = .{ .precision_unsupported = 3 },
+        .diagnostics_value = .{
+            .run_rejects = .{ .invalid_world_transform = 1 },
+            .glyph_rejects = .{
+                .invalid_transform = 1,
+                .precision_unsupported = 1,
+                .cache_encode_unsupported = 1,
+                .nonfinite_bounds = 1,
+                .f32_chart_overflow = 1,
+                .meshlet_empty = 1,
+            },
+        },
     };
 
     try scene.draw(&frame, testFont(), view, frame_metrics);
 
-    try std.testing.expectEqual(SceneAlert.precision_unsupported, scene.alert);
-    try std.testing.expect(frame.saw_precision_alert);
+    try std.testing.expectEqual(@as(u32, heavy_slug.max_frame_warnings), frame.warning_draw_count);
+    try std.testing.expectEqual(@as(u32, heavy_slug.max_frame_warnings + 1), frame.screen_draw_count);
 }
 
-test "demo scene catches PrecisionUnsupported and renders alert instead of exiting" {
-    var scene = Scene{
-        .view = contentFit(window_width, window_height),
-        .view_initialized = true,
-    };
-    const frame_metrics = testFrame();
-    const view = scene.frameView(frame_metrics);
-    var frame = FakeRenderFrame{
-        .fail_next = error.PrecisionUnsupported,
-    };
-
-    try scene.draw(&frame, testFont(), view, frame_metrics);
-
-    try std.testing.expectEqual(SceneAlert.precision_unsupported, scene.alert);
-    try std.testing.expect(frame.saw_precision_alert);
-}
-
-test "demo scene propagates non precision draw errors" {
+test "demo scene propagates draw errors before overlay" {
     var scene = Scene{
         .view = contentFit(window_width, window_height),
         .view_initialized = true,
@@ -804,7 +832,7 @@ test "demo scene propagates non precision draw errors" {
     };
 
     try std.testing.expectError(error.GlyphCapacityExceeded, scene.draw(&frame, testFont(), view, frame_metrics));
-    try std.testing.expect(!frame.saw_precision_alert);
+    try std.testing.expectEqual(@as(u32, 0), frame.screen_draw_count);
 }
 
 test "demo scene ignores invalid frame dt for motion state" {
@@ -855,38 +883,38 @@ test "demo scene fps meter reports sampled rate without allocating" {
     try std.testing.expectApproxEqAbs(@as(f64, 60), meter.fps(), 1.0e-9);
 }
 
-test "demo scene screen-space overlay cancels content transform" {
-    const scene = Scene{
-        .view = contentFit(window_width, window_height),
-        .rotation_angle = 0.35,
-    };
-    const frame_view = scene.frameView(testFrame());
-    const screen_from_text = heavy_slug.Transform.compose(
-        heavy_slug.Transform.translation(overlay_margin, @as(f64, @floatFromInt(window_height)) - overlay_baseline_from_top),
-        heavy_slug.Transform.scale(overlay_scale, overlay_scale),
-    );
-    const world_from_text = screenSpaceTextTransform(frame_view, screen_from_text).?;
-    const actual = heavy_slug.Transform.compose(frame_view.screen_from_world, world_from_text).apply(.{ 0, 0 });
-    const expected = screen_from_text.apply(.{ 0, 0 });
-
-    try std.testing.expectApproxEqAbs(expected[0], actual[0], 1.0e-9);
-    try std.testing.expectApproxEqAbs(expected[1], actual[1], 1.0e-9);
-}
-
-test "demo scene zoom keeps the requested screen anchor stable" {
+test "demo scene draws overlay through native screen-space text" {
     var scene = Scene{
         .view = contentFit(window_width, window_height),
         .view_initialized = true,
+        .rotation_angle = 0.35,
+    };
+    const frame_view = scene.frameView(testFrame());
+    var frame = FakeRenderFrame{};
+
+    try scene.draw(&frame, testFont(), frame_view, testFrame());
+
+    try std.testing.expect(frame.draw_count > 0);
+    try std.testing.expectEqual(@as(u32, 1), frame.screen_draw_count);
+    try std.testing.expectEqual(@as(u32, 0), frame.warning_draw_count);
+}
+
+test "demo scene zoom keeps the requested screen anchor stable through rotation" {
+    var scene = Scene{
+        .view = contentFit(window_width, window_height),
+        .view_initialized = true,
+        .rotation_angle = 0.37,
     };
     const anchor = [2]f64{
         @as(f64, @floatFromInt(window_width)) * 0.5,
         @as(f64, @floatFromInt(window_height)) * 0.5,
     };
-    const world = viewTransform(scene.view).inverse().?.apply(anchor);
+    const before = scene.frameView(testFrame()).screen_from_world;
+    const world = before.inverse().?.apply(anchor);
 
     scene.zoomAt(anchor[0], anchor[1], 0.5);
 
-    const screen = viewTransform(scene.view).apply(world);
+    const screen = scene.frameView(testFrame()).screen_from_world.apply(world);
     try std.testing.expectApproxEqAbs(anchor[0], screen[0], 1.0e-9);
     try std.testing.expectApproxEqAbs(anchor[1], screen[1], 1.0e-9);
 }
