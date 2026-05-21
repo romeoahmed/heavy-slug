@@ -17,7 +17,7 @@ pub const TextRun = core.TextRun;
 pub const FrameToken = core.FrameToken;
 pub const ShaderStats = gpu.ShaderStats;
 
-const test_font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
+const test_font_path: [*:0]const u8 = "assets/NotoSansJP-Regular.otf";
 const font = core.font;
 
 test {

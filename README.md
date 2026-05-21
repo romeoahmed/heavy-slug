@@ -59,7 +59,7 @@ Typical frame shape:
 ```zig
 const heavy_slug = @import("heavy_slug");
 
-const font = try renderer.loadFont(.{ .path = "assets/Inter-Regular.otf" }, .{
+const font = try renderer.loadFont(.{ .path = "assets/NotoSansJP-Regular.otf" }, .{
     .size_px = 32,
 });
 
@@ -240,7 +240,9 @@ Metal, Wayland, Cocoa, or a window toolkit.
 
 The demos are native host examples, not a portability layer. Vulkan uses Win32
 or Wayland; Metal uses SwiftUI/AppKit with a `CAMetalLayer`. All demos use `B`
-to switch between explicit light and dark appearance.
+to switch between explicit light and dark appearance. The shared scene uses
+`NotoSansJP-Regular.otf` for multilingual sample text and a screen-space FPS
+overlay.
 
 Vulkan hosts report completed GPU work with `Renderer.markFrameComplete(token)`.
 The Metal backend tracks completion through bridge-managed frame slots and waits

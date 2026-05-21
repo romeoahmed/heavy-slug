@@ -62,8 +62,9 @@ pub fn main() !void {
             stats_log_time = now;
         }
 
-        var text_frame = try text_renderer.beginFrame(scene.frameView(w, h));
-        try scene.draw(&text_frame, font);
+        const view = scene.frameView(w, h);
+        var text_frame = try text_renderer.beginFrame(view);
+        try scene.draw(&text_frame, font, view);
         submitted_text_tokens[frame.frame_index] = try text_frame.submit(.{
             .command_buffer = frame.cmd,
         });

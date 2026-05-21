@@ -49,7 +49,7 @@ pub const ShapePlan = struct {
 
 test "ShapePlan: creates an empty run for empty text" {
     const ft = @import("freetype.zig");
-    const font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
+    const font_path: [*:0]const u8 = "assets/NotoSansJP-Regular.otf";
     const lib = try ft.Library.init();
     defer lib.deinit();
     const face = ft.Face.init(lib, font_path, 0) catch return;
@@ -67,7 +67,7 @@ test "ShapePlan: creates an empty run for empty text" {
 
 test "ShapePlan: reuses one HarfBuzz buffer for repeated shaping" {
     const ft = @import("freetype.zig");
-    const font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
+    const font_path: [*:0]const u8 = "assets/NotoSansJP-Regular.otf";
     const lib = try ft.Library.init();
     defer lib.deinit();
     const face = ft.Face.init(lib, font_path, 0) catch return;
@@ -87,7 +87,7 @@ test "ShapePlan: reuses one HarfBuzz buffer for repeated shaping" {
 
 test "ShapePlan: guesses missing segment fields after explicit direction" {
     const ft = @import("freetype.zig");
-    const font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
+    const font_path: [*:0]const u8 = "assets/NotoSansJP-Regular.otf";
     const lib = try ft.Library.init();
     defer lib.deinit();
     const face = ft.Face.init(lib, font_path, 0) catch return;

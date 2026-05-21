@@ -39,6 +39,7 @@ pub fn build(b: *std.Build) void {
     addModuleTest(b, test_step, "heavy_slug", core.module);
     addBuildHelperTests(b, test_step);
     addToolTests(b, test_step);
+    addDemoCommonTests(b, test_step, opts, core.module);
 
     const vulkan_backend = if (opts.vulkan)
         backends.buildVulkan(
@@ -198,6 +199,29 @@ fn addToolTests(b: *std.Build, test_step: *std.Build.Step) void {
         .target = b.graph.host,
     });
     addModuleTest(b, test_step, "layout_gen", layout_gen_mod);
+}
+
+fn addDemoCommonTests(
+    b: *std.Build,
+    test_step: *std.Build.Step,
+    opts: deps.BuildOptions,
+    core_mod: *std.Build.Module,
+) void {
+    const demo_input = b.createModule(.{
+        .root_source_file = b.path("demo/common/input.zig"),
+        .target = opts.target,
+        .optimize = opts.optimize,
+    });
+    const demo_scene = b.createModule(.{
+        .root_source_file = b.path("demo/common/scene.zig"),
+        .target = opts.target,
+        .optimize = opts.optimize,
+        .imports = &.{
+            .{ .name = "heavy_slug", .module = core_mod },
+            .{ .name = "demo_input", .module = demo_input },
+        },
+    });
+    addModuleTest(b, test_step, "heavy_slug_demo_common", demo_scene);
 }
 
 fn addDemoRunStep(b: *std.Build, exe: *std.Build.Step.Compile) void {

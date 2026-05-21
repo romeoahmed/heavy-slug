@@ -1,52 +1,87 @@
-//! Shared demo scene state and input handling.
+//! Shared demo scene state, sample content, FPS display, and input handling.
 
 const std = @import("std");
 const heavy_slug = @import("heavy_slug");
 const demo_input = @import("demo_input");
 
-pub const font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
+pub const font_path: [*:0]const u8 = "assets/NotoSansJP-Regular.otf";
 pub const font_size_px: u32 = 24;
 pub const window_width: c_int = 1280;
 pub const window_height: c_int = 720;
 
-const lines = [_][]const u8{
-    "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nullam tincidunt nibh",
-    "quis semper malesuada. Mauris sit amet metus sed tellus gravida maximus sit",
-    "amet a enim. Morbi et lorem congue, aliquam lorem vitae, condimentum erat.",
-    "Mauris aliquet, sapien consequat blandit mattis, velit ante molestie mi, ac",
-    "condimentum justo leo sed odio. Curabitur at suscipit quam.",
-    "",
-    "Ut ac convallis ante, at sollicitudin sapien. Nulla pellentesque felis id mi",
-    "blandit dictum. Phasellus ultrices, odio non volutpat tincidunt, neque quam",
-    "tristique lacus, nec gravida nulla ante id risus. Nulla sit amet bibendum",
-    "lectus, sed bibendum lectus. Vivamus ultrices metus sit amet sapien posuere",
-    "volutpat. Suspendisse luctus non mauris nec iaculis.",
-    "",
-    "Duis mattis enim libero, ac malesuada tortor gravida tempor. Cras sagittis",
-    "felis at sollicitudin fermentum. Duis et ipsum bibendum, viverra felis quis,",
-    "consectetur lacus. Donec vulputate risus imperdiet, tincidunt purus nec,",
-    "vestibulum lorem. Morbi iaculis tincidunt rutrum.",
-    "",
-    "Duis sit amet nulla ut lectus efficitur suscipit. Curabitur urna turpis,",
-    "congue lacinia varius vitae, interdum vel dolor. Vestibulum sit amet suscipit",
-    "arcu, sit amet tincidunt ipsum. Maecenas feugiat ante vel fermentum viverra.",
-    "Sed aliquam sem ac quam bibendum, sit amet fringilla augue pharetra.",
-    "",
-    "Morbi scelerisque tempus purus, interdum tempor est pulvinar bibendum. Duis",
-    "tincidunt dictum ante vel sodales. Fusce quis cursus metus. Pellentesque mi",
-    "mauris, tincidunt ut orci ut, interdum dapibus dolor. Aliquam blandit, nisl",
-    "et rhoncus laoreet, tellus nulla blandit tellus, sit amet cursus magna enim",
-    "nec ante. Integer venenatis a est sed hendrerit.",
-    "",
-    "Proin id porttitor turpis, aliquam tempus ex. Morbi tristique, felis ut",
-    "aliquet luctus, orci tortor sodales sem, vel imperdiet justo tortor sit amet",
-    "arcu. Quisque ipsum sem, lacinia in fermentum eu, maximus in lectus.",
+const content_margin: f64 = 48;
+const content_width: f64 = 1180;
+const body_advance: f64 = 34;
+const title_advance: f64 = 54;
+const subtitle_advance: f64 = 34;
+const group_gap: f64 = 20;
+
+const overlay_margin: f64 = 24;
+const overlay_baseline_from_top: f64 = 28;
+const overlay_scale: f64 = 0.76;
+
+const TextTone = enum {
+    title,
+    subtitle,
+    body,
+    accent,
 };
 
-const line_height: f64 = 32;
-const margin: f64 = 40;
-const content_width: f64 = 1100;
-const content_height: f64 = @as(f64, @floatFromInt(lines.len)) * line_height + 2 * margin;
+const TextLine = struct {
+    text: []const u8,
+    advance: f64 = body_advance,
+    scale: f64 = 1.0,
+    tone: TextTone = .body,
+};
+
+const sample_lines = [_]TextLine{
+    .{
+        .text = "heavy-slug multilingual demo",
+        .advance = title_advance,
+        .scale = 1.42,
+        .tone = .title,
+    },
+    .{
+        .text = "Noto Sans JP · analytic glyph coverage · pan, zoom, rotate",
+        .advance = subtitle_advance,
+        .scale = 0.86,
+        .tone = .subtitle,
+    },
+    .{ .text = "", .advance = group_gap },
+    .{
+        .text = "English: resolution-independent text remains crisp while the view moves.",
+        .tone = .body,
+    },
+    .{
+        .text = "日本語: かなと漢字を同じパイプラインで描画します。",
+        .tone = .accent,
+    },
+    .{
+        .text = "中文: 漢字、假名、Latin、数字 0123456789。",
+        .tone = .body,
+    },
+    .{
+        .text = "Русский: кириллица проверяет контуры и кернинг.",
+        .tone = .body,
+    },
+    .{
+        .text = "Ελληνικά: γεωμετρία, χρώμα, κίνηση.",
+        .tone = .body,
+    },
+    .{
+        .text = "Español Français Português Deutsch: acción, façade, coração, Größe.",
+        .tone = .body,
+    },
+    .{ .text = "", .advance = group_gap },
+    .{
+        .text = "Controls: drag to pan, right-drag to spin, wheel or +/- to zoom, B toggles appearance.",
+        .advance = subtitle_advance,
+        .scale = 0.84,
+        .tone = .subtitle,
+    },
+};
+
+const content_height: f64 = measureContentHeight();
 const content_cx: f64 = content_width / 2;
 const content_cy: f64 = content_height / 2;
 
@@ -67,15 +102,32 @@ pub const ColorScheme = enum {
 
     fn clearColor(self: ColorScheme) [4]f32 {
         return switch (self) {
-            .light => .{ 1, 1, 1, 1 },
-            .dark => .{ 0, 0, 0, 1 },
+            .light => .{ 0.965, 0.972, 0.965, 1 },
+            .dark => .{ 0.026, 0.029, 0.032, 1 },
         };
     }
 
-    fn textColor(self: ColorScheme) heavy_slug.Color {
+    fn color(self: ColorScheme, tone: TextTone) heavy_slug.Color {
         return switch (self) {
-            .light => .black,
-            .dark => .white,
+            .light => switch (tone) {
+                .title => heavy_slug.Color.fromRgba(0.055, 0.07, 0.065, 1),
+                .subtitle => heavy_slug.Color.fromRgba(0.33, 0.38, 0.36, 1),
+                .body => heavy_slug.Color.fromRgba(0.105, 0.12, 0.112, 1),
+                .accent => heavy_slug.Color.fromRgba(0.02, 0.34, 0.38, 1),
+            },
+            .dark => switch (tone) {
+                .title => heavy_slug.Color.fromRgba(0.92, 0.95, 0.92, 1),
+                .subtitle => heavy_slug.Color.fromRgba(0.63, 0.69, 0.66, 1),
+                .body => heavy_slug.Color.fromRgba(0.82, 0.86, 0.83, 1),
+                .accent => heavy_slug.Color.fromRgba(0.48, 0.86, 0.9, 1),
+            },
+        };
+    }
+
+    fn overlayColor(self: ColorScheme) heavy_slug.Color {
+        return switch (self) {
+            .light => heavy_slug.Color.fromRgba(0.06, 0.16, 0.16, 1),
+            .dark => heavy_slug.Color.fromRgba(0.7, 0.92, 0.86, 1),
         };
     }
 };
@@ -86,10 +138,53 @@ const ViewState = struct {
     pan_y: f64 = 0,
 };
 
+const FpsMeter = struct {
+    sample_seconds: f64 = 0,
+    sample_frames: u32 = 0,
+    displayed_fps: f64 = 0,
+
+    const sample_period_s: f64 = 0.5;
+
+    fn update(self: *FpsMeter, dt: f64) void {
+        if (!std.math.isFinite(dt) or dt <= 0) return;
+
+        self.sample_seconds += dt;
+        self.sample_frames += 1;
+        if (self.sample_seconds >= sample_period_s) {
+            self.publish();
+        } else if (self.displayed_fps == 0) {
+            self.displayed_fps = self.sampleRate();
+        }
+    }
+
+    fn fps(self: FpsMeter) f64 {
+        if (self.displayed_fps > 0) return self.displayed_fps;
+        return self.sampleRate();
+    }
+
+    fn writeLabel(self: FpsMeter, buffer: []u8) []const u8 {
+        const value = self.fps();
+        if (!std.math.isFinite(value) or value <= 0) return "FPS --";
+        return std.fmt.bufPrint(buffer, "FPS {d:.1}", .{value}) catch "FPS --";
+    }
+
+    fn publish(self: *FpsMeter) void {
+        self.displayed_fps = self.sampleRate();
+        self.sample_seconds = 0;
+        self.sample_frames = 0;
+    }
+
+    fn sampleRate(self: FpsMeter) f64 {
+        if (self.sample_seconds <= 0 or self.sample_frames == 0) return 0;
+        return @as(f64, @floatFromInt(self.sample_frames)) / self.sample_seconds;
+    }
+};
+
 pub const Scene = struct {
     view: ViewState = .{},
     view_initialized: bool = false,
     color_scheme: ColorScheme = .light,
+    fps_meter: FpsMeter = .{},
     color_scheme_key_was_pressed: bool = false,
     r_was_pressed: bool = false,
     space_was_pressed: bool = false,
@@ -112,6 +207,7 @@ pub const Scene = struct {
         const width64: f64 = width;
         const height64: f64 = height;
         const dt64: f64 = dt;
+        self.fps_meter.update(dt64);
 
         if (!self.view_initialized) {
             self.view = contentFit(width64, height64);
@@ -162,7 +258,11 @@ pub const Scene = struct {
     }
 
     pub fn textColor(self: Scene) heavy_slug.Color {
-        return self.color_scheme.textColor();
+        return self.color_scheme.color(.body);
+    }
+
+    pub fn currentFps(self: Scene) f64 {
+        return self.fps_meter.fps();
     }
 
     pub fn frameView(self: Scene, width: f64, height: f64) heavy_slug.View {
@@ -171,18 +271,45 @@ pub const Scene = struct {
         return heavy_slug.View.init(width, height, heavy_slug.Transform.compose(view, rotation));
     }
 
-    pub fn draw(self: Scene, renderer: anytype, font: anytype) !void {
-        const fg = self.textColor();
-        for (lines, 0..) |line, i| {
-            if (line.len == 0) continue;
-            const y = content_height - margin - @as(f64, @floatFromInt(i)) * line_height;
-            try renderer.drawText(.{
-                .font = font,
-                .text = line,
-                .transform = heavy_slug.Transform.translation(margin, y),
-                .color = fg,
-            });
+    pub fn draw(self: Scene, renderer: anytype, font: anytype, view: heavy_slug.View) !void {
+        try self.drawContent(renderer, font);
+        try self.drawOverlay(renderer, font, view);
+    }
+
+    fn drawContent(self: Scene, renderer: anytype, font: anytype) !void {
+        var y = content_height - content_margin;
+        for (sample_lines) |line| {
+            if (line.text.len != 0) {
+                const text_from_local = heavy_slug.Transform.scale(line.scale, line.scale);
+                const world_from_text = heavy_slug.Transform.compose(
+                    heavy_slug.Transform.translation(content_margin, y),
+                    text_from_local,
+                );
+                try renderer.drawText(.{
+                    .font = font,
+                    .text = line.text,
+                    .transform = world_from_text,
+                    .color = self.color_scheme.color(line.tone),
+                });
+            }
+            y -= line.advance;
         }
+    }
+
+    fn drawOverlay(self: Scene, renderer: anytype, font: anytype, view: heavy_slug.View) !void {
+        var label_buffer: [32]u8 = undefined;
+        const label = self.fps_meter.writeLabel(&label_buffer);
+        const screen_from_text = heavy_slug.Transform.compose(
+            heavy_slug.Transform.translation(overlay_margin, view.height - overlay_baseline_from_top),
+            heavy_slug.Transform.scale(overlay_scale, overlay_scale),
+        );
+        const world_from_text = screenSpaceTextTransform(view, screen_from_text) orelse return;
+        try renderer.drawText(.{
+            .font = font,
+            .text = label,
+            .transform = world_from_text,
+            .color = self.color_scheme.overlayColor(),
+        });
     }
 
     fn updateColorScheme(self: *Scene, input: *const demo_input.State) void {
@@ -272,6 +399,12 @@ pub const Scene = struct {
     }
 };
 
+fn measureContentHeight() f64 {
+    var total = content_margin * 2;
+    for (sample_lines) |line| total += line.advance;
+    return total;
+}
+
 fn contentFit(width: f64, height: f64) ViewState {
     const s = 0.9 * @min(width / content_width, height / content_height);
     return .{
@@ -292,10 +425,57 @@ fn viewTransform(view: ViewState) heavy_slug.Transform {
     };
 }
 
+fn screenSpaceTextTransform(view: heavy_slug.View, screen_from_text: heavy_slug.Transform) ?heavy_slug.Transform {
+    const world_from_screen = view.screen_from_world.inverse() orelse return null;
+    return heavy_slug.Transform.compose(world_from_screen, screen_from_text);
+}
+
 test "demo scene exposes shared content settings" {
-    try std.testing.expect(lines.len > 1);
+    try std.testing.expect(sample_lines.len > 1);
     try std.testing.expect(content_width > 0);
     try std.testing.expect(content_height > 0);
+}
+
+test "demo scene uses the multilingual Noto Sans JP asset" {
+    try std.testing.expectEqualStrings("assets/NotoSansJP-Regular.otf", std.mem.span(font_path));
+}
+
+test "demo scene sample text covers supported scripts" {
+    var saw_latin = false;
+    var saw_japanese = false;
+    var saw_cyrillic = false;
+    var saw_greek = false;
+
+    for (sample_lines) |line| {
+        saw_latin = saw_latin or std.mem.indexOf(u8, line.text, "English") != null;
+        saw_japanese = saw_japanese or std.mem.indexOf(u8, line.text, "日本語") != null;
+        saw_cyrillic = saw_cyrillic or std.mem.indexOf(u8, line.text, "Русский") != null;
+        saw_greek = saw_greek or std.mem.indexOf(u8, line.text, "Ελληνικά") != null;
+    }
+
+    try std.testing.expect(saw_latin);
+    try std.testing.expect(saw_japanese);
+    try std.testing.expect(saw_cyrillic);
+    try std.testing.expect(saw_greek);
+}
+
+test "demo scene Noto font covers all sample text" {
+    var system = try heavy_slug.core.font.FontSystem.init(std.testing.allocator);
+    defer system.deinit();
+
+    var loaded = try system.load(.{ .path = font_path }, .{ .size_px = font_size_px });
+    defer loaded.deinit();
+
+    var shape_plan = try heavy_slug.core.font.ShapePlan.init();
+    defer shape_plan.deinit();
+
+    for (sample_lines) |line| {
+        if (line.text.len == 0) continue;
+        const shaped = try loaded.shape(&shape_plan, line.text, .{});
+        for (shaped.infos) |info| {
+            try std.testing.expect(info.codepoint != 0);
+        }
+    }
 }
 
 test "demo scene frame view keeps glyph outlines y-up" {
@@ -310,7 +490,7 @@ test "demo scene starts light and toggles color scheme only on B key edges" {
 
     try std.testing.expectEqual(ColorScheme.light, scene.color_scheme);
     try std.testing.expect(!scene.darkModeEnabled());
-    try std.testing.expectEqual(@as([4]f32, .{ 1, 1, 1, 1 }), scene.clearColor());
+    try std.testing.expectEqual(ColorScheme.light.clearColor(), scene.clearColor());
 
     input.setKey(.b, true);
     scene.update(&input, 0, 0, window_width, window_height);
@@ -326,6 +506,34 @@ test "demo scene starts light and toggles color scheme only on B key edges" {
     scene.update(&input, 0, 0, window_width, window_height);
     try std.testing.expectEqual(ColorScheme.light, scene.color_scheme);
     try std.testing.expect(!scene.darkModeEnabled());
+}
+
+test "demo scene fps meter reports sampled rate without allocating" {
+    var meter: FpsMeter = .{};
+    for (0..30) |_| meter.update(1.0 / 60.0);
+
+    try std.testing.expectApproxEqAbs(@as(f64, 60), meter.fps(), 1.0e-9);
+
+    var label_buffer: [32]u8 = undefined;
+    try std.testing.expectEqualStrings("FPS 60.0", meter.writeLabel(&label_buffer));
+}
+
+test "demo scene screen-space overlay cancels content transform" {
+    const scene = Scene{
+        .view = contentFit(window_width, window_height),
+        .rotation_angle = 0.35,
+    };
+    const frame_view = scene.frameView(window_width, window_height);
+    const screen_from_text = heavy_slug.Transform.compose(
+        heavy_slug.Transform.translation(overlay_margin, @as(f64, @floatFromInt(window_height)) - overlay_baseline_from_top),
+        heavy_slug.Transform.scale(overlay_scale, overlay_scale),
+    );
+    const world_from_text = screenSpaceTextTransform(frame_view, screen_from_text).?;
+    const actual = heavy_slug.Transform.compose(frame_view.screen_from_world, world_from_text).apply(.{ 0, 0 });
+    const expected = screen_from_text.apply(.{ 0, 0 });
+
+    try std.testing.expectApproxEqAbs(expected[0], actual[0], 1.0e-9);
+    try std.testing.expectApproxEqAbs(expected[1], actual[1], 1.0e-9);
 }
 
 test "demo scene zoom keeps the requested screen anchor stable" {

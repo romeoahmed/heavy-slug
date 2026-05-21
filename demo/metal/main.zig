@@ -52,8 +52,9 @@ pub fn main() !void {
         scene.update(window.input(), dt, now, w, h);
         window.setColorScheme(if (scene.darkModeEnabled()) .dark else .light);
 
-        var text_frame = try text_renderer.beginFrame(scene.frameView(w, h));
-        try scene.draw(&text_frame, font);
+        const view = scene.frameView(w, h);
+        var text_frame = try text_renderer.beginFrame(view);
+        try scene.draw(&text_frame, font, view);
         _ = try text_frame.submit(.{
             .clear_color = scene.clearColor(),
         });

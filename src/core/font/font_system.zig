@@ -95,7 +95,7 @@ test "FontSystem loads repository font" {
     var system = try FontSystem.init(std.testing.allocator);
     defer system.deinit();
 
-    var loaded = system.load(.{ .path = "assets/Inter-Regular.otf" }, .{ .size_px = 24 }) catch return;
+    var loaded = system.load(.{ .path = "assets/NotoSansJP-Regular.otf" }, .{ .size_px = 24 }) catch return;
     defer loaded.deinit();
 
     try std.testing.expect(loaded.glyphCount() > 0);
@@ -105,7 +105,7 @@ test "FontSystem shapes and encodes through explicit plan" {
     var system = try FontSystem.init(std.testing.allocator);
     defer system.deinit();
 
-    var loaded = system.load(.{ .path = "assets/Inter-Regular.otf" }, .{
+    var loaded = system.load(.{ .path = "assets/NotoSansJP-Regular.otf" }, .{
         .size_px = 24,
         .face_index = 0,
     }) catch return;

@@ -573,7 +573,7 @@ const FakeBackend = struct {
     }
 };
 
-const test_font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
+const test_font_path: [*:0]const u8 = "assets/NotoSansJP-Regular.otf";
 const test_view = core_types.View.identity(1280, 720);
 
 test "render: FakeBackend satisfies backend contract" {

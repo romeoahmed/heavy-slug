@@ -47,7 +47,7 @@ pub const GlyphEncoder = struct {
 
 const ft = @import("freetype.zig");
 const shape = @import("shape.zig");
-const test_font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
+const test_font_path: [*:0]const u8 = "assets/NotoSansJP-Regular.otf";
 
 test "GlyphEncoder: captures native outlines and encodes CoverageBlob" {
     const ft_lib = try ft.Library.init();

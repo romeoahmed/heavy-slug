@@ -177,7 +177,7 @@ pub fn shape(font: Font, buf: Buffer) Error!void {
     try buf.ensureAllocated();
 }
 
-const test_font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
+const test_font_path: [*:0]const u8 = "assets/NotoSansJP-Regular.otf";
 
 test "init and deinit HarfBuzz buffer" {
     const buf = try Buffer.init();

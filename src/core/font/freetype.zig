@@ -149,7 +149,7 @@ fn spanOptionalCString(ptr: [*c]const u8) ?[:0]const u8 {
     return std.mem.span(ptr);
 }
 
-const test_font_path: [*:0]const u8 = "assets/Inter-Regular.otf";
+const test_font_path: [*:0]const u8 = "assets/NotoSansJP-Regular.otf";
 
 test "Face: load repository font and query face metadata" {
     const lib = try Library.init();

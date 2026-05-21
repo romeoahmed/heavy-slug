@@ -12,6 +12,8 @@ implementation history belongs in commits and code review notes.
 
 ### Added
 
+- **Demo FPS overlay:** the shared demo scene now renders a backend-neutral
+  frames-per-second readout in screen space.
 - **Direct-present demo surface contract:** Vulkan demos now model platform
   presentation as a direct WSI swapchain path. Wayland binds
   linux-dmabuf-v1 feedback when advertised; Windows documents that DXGI shared
@@ -73,6 +75,9 @@ implementation history belongs in commits and code review notes.
 - **Demo appearance policy unified:** all native demos start from an explicit
   light appearance and use `B` to toggle light/dark rendering and available
   native chrome instead of following the system setting.
+- **Demo sample content changed:** native demos now use `NotoSansJP-Regular.otf`
+  and multilingual Latin, Japanese, Chinese, Cyrillic, Greek, and accented
+  Latin text instead of the old Inter/Lorem Ipsum sample.
 - **CI architecture refactored:** the public CI workflow is now a small
   orchestrator over reusable quality, core, shader, Vulkan, and Metal
   workflows. Composite actions own Zig/Slang setup, cache restore/save, and
@@ -117,6 +122,8 @@ implementation history belongs in commits and code review notes.
   indexing as glyph addressing are not part of the current backend.
 - **Wayland xdg-decoration fallback removed:** the Linux demo keeps
   client-side decorations as the single path.
+- **Inter demo font removed:** `assets/Inter-Regular.otf` was replaced by
+  `assets/NotoSansJP-Regular.otf`.
 - **Stale public names removed:** old viewport/affine/glyph-batch/debug-stat
   names were contracted around `Transform`, `View`, `FrameBatch`,
   `GlyphBlobRef`, and submitted glyph/meshlet terminology.
