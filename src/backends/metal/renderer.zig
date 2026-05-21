@@ -192,6 +192,10 @@ pub const Frame = struct {
         try self.renderer.core.appendRun(self.renderer, &self.batch, self.view, run);
     }
 
+    pub fn diagnostics(self: *const Frame) render.FrameDiagnostics {
+        return self.renderer.core.frameDiagnostics();
+    }
+
     pub fn submit(self: *Frame, target: Target) !render.FrameToken {
         if (self.submitted) return error.FrameAlreadySubmitted;
         const token = try self.renderer.submitFrame(target, self.view, self.batch.glyphCount(), self.batch.meshletCount());
@@ -441,6 +445,7 @@ test "Metal renderer public API compiles" {
     try std.testing.expectEqual(backend_options.shader_stats, shader_stats_enabled);
     _ = @TypeOf(Context.init);
     _ = @TypeOf(Renderer.init);
+    _ = @TypeOf(Frame.diagnostics);
     heavy_slug.core.render.checkBackend(Renderer);
 }
 

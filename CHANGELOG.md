@@ -15,6 +15,9 @@ implementation history belongs in commits and code review notes.
 - **Demo metrics overlay:** the shared demo scene now renders a
   backend-neutral screen-space readout for FPS, relative view zoom, and native
   display scale.
+- **Demo precision alert:** native demos now show a prominent screen-space
+  warning when the renderer reports an unsupported precision tier, including
+  the frame where `PrecisionUnsupported` is caught.
 - **Direct-present demo surface contract:** Vulkan demos now model platform
   presentation as a direct WSI swapchain path. Wayland binds
   linux-dmabuf-v1 feedback when advertised; Windows documents that DXGI shared

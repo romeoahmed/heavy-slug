@@ -38,6 +38,18 @@ pub const TextRun = struct {
     fill_rule: core_types.FillRule = .non_zero,
 };
 
+pub const FrameDiagnostics = struct {
+    precision_unsupported: u32 = 0,
+
+    pub fn hasPrecisionUnsupported(self: FrameDiagnostics) bool {
+        return self.precision_unsupported != 0;
+    }
+
+    fn reset(self: *FrameDiagnostics) void {
+        self.* = .{};
+    }
+};
+
 pub const Stats = if (@import("builtin").mode == .Debug) struct {
     runs_shaped: u32 = 0,
     glyphs_shaped: u32 = 0,
@@ -165,6 +177,7 @@ pub const RendererCore = struct {
     max_glyphs_per_frame: u32,
     precision_policy: core_types.PrecisionPolicy,
     shape_plan: font_mod.ShapePlan,
+    frame_diagnostics: FrameDiagnostics,
     stats: Stats,
     allocator: std.mem.Allocator,
 
@@ -187,6 +200,7 @@ pub const RendererCore = struct {
             .max_glyphs_per_frame = options.max_glyphs_per_frame,
             .precision_policy = options.precision_policy,
             .shape_plan = shape_plan,
+            .frame_diagnostics = .{},
             .stats = .{},
             .allocator = allocator,
         };
@@ -242,6 +256,7 @@ pub const RendererCore = struct {
 
     pub fn beginFrame(self: *RendererCore, completed_token: FrameToken, backend: anytype) void {
         comptime backend_contract.checkBackend(@TypeOf(backend));
+        self.frame_diagnostics.reset();
         self.stats.reset();
         const retired = self.store.beginFrame(completed_token, backend);
         if (@import("builtin").mode == .Debug) {
@@ -265,6 +280,10 @@ pub const RendererCore = struct {
 
     pub fn poolSnapshot(self: *const RendererCore) pool_mod.Snapshot {
         return self.store.poolSnapshot();
+    }
+
+    pub fn frameDiagnostics(self: *const RendererCore) FrameDiagnostics {
+        return self.frame_diagnostics;
     }
 
     pub fn appendRun(
@@ -321,7 +340,7 @@ pub const RendererCore = struct {
             };
             const precision_bits = self.precision_policy.selectFractionBits(screen_from_local) catch |err| switch (err) {
                 error.PrecisionUnsupported => {
-                    if (@import("builtin").mode == .Debug) self.stats.precision_insufficient += 1;
+                    self.recordPrecisionUnsupported();
                     try advancePen(&pen_x, &pen_y, pos);
                     continue;
                 },
@@ -357,7 +376,7 @@ pub const RendererCore = struct {
                 if (@import("builtin").mode == .Debug) self.stats.cache_misses += 1;
                 break :blk self.ensureGlyphCached(backend, font_entry, cache_key, precision_bits) catch |err| switch (err) {
                     Error.PrecisionUnsupported => {
-                        if (@import("builtin").mode == .Debug) self.stats.precision_insufficient += 1;
+                        self.recordPrecisionUnsupported();
                         try advancePen(&pen_x, &pen_y, pos);
                         continue;
                     },
@@ -445,6 +464,13 @@ pub const RendererCore = struct {
 
             try advancePen(&pen_x, &pen_y, pos);
         }
+    }
+
+    fn recordPrecisionUnsupported(self: *RendererCore) void {
+        if (self.frame_diagnostics.precision_unsupported < std.math.maxInt(u32)) {
+            self.frame_diagnostics.precision_unsupported += 1;
+        }
+        if (@import("builtin").mode == .Debug) self.stats.precision_insufficient += 1;
     }
 
     fn ensureGlyphCached(
@@ -793,9 +819,13 @@ test "render: RendererCore reports unsupported precision instead of emitting uns
 
     try std.testing.expectEqual(@as(u32, 0), batch.glyphCount());
     try std.testing.expectEqual(@as(u32, 0), batch.meshletCount());
+    try std.testing.expect(core.frameDiagnostics().hasPrecisionUnsupported());
     if (@import("builtin").mode == .Debug) {
         try std.testing.expect(core.stats.precision_insufficient > 0);
     }
+
+    core.beginFrame(0, &backend);
+    try std.testing.expect(!core.frameDiagnostics().hasPrecisionUnsupported());
 }
 
 test "render: RendererCore defers evicted glyph retirement until frame token completes" {

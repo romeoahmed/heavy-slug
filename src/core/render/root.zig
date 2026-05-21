@@ -18,6 +18,7 @@ pub const TextRun = renderer_core.TextRun;
 pub const FontHandle = renderer_core.FontHandle;
 pub const GlyphBlobRef = renderer_core.GlyphBlobRef;
 pub const FrameToken = renderer_core.FrameToken;
+pub const FrameDiagnostics = renderer_core.FrameDiagnostics;
 
 test {
     _ = backend_contract;

@@ -21,12 +21,20 @@ const body_scale: f64 = 0.84;
 const overlay_margin: f64 = 24;
 const overlay_baseline_from_top: f64 = 28;
 const overlay_scale: f64 = 0.76;
+const precision_alert_baseline_from_top: f64 = 66;
+const precision_alert_scale: f64 = 0.98;
+const precision_alert_text = "PRECISION UNSUPPORTED: zoom out or press R";
 
 const TextTone = enum {
     title,
     subtitle,
     body,
     accent,
+};
+
+const SceneAlert = enum {
+    none,
+    precision_unsupported,
 };
 
 const TextLine = struct {
@@ -262,6 +270,13 @@ pub const ColorScheme = enum {
             .dark => heavy_slug.Color.fromRgba(0.7, 0.92, 0.86, 1),
         };
     }
+
+    fn alertColor(self: ColorScheme) heavy_slug.Color {
+        return switch (self) {
+            .light => heavy_slug.Color.fromRgba(0.82, 0.05, 0.02, 1),
+            .dark => heavy_slug.Color.fromRgba(1.0, 0.36, 0.12, 1),
+        };
+    }
 };
 
 const ViewState = struct {
@@ -323,6 +338,7 @@ pub const Scene = struct {
     view: ViewState = .{},
     view_initialized: bool = false,
     color_scheme: ColorScheme = .light,
+    alert: SceneAlert = .none,
     fps_meter: FpsMeter = .{},
     color_scheme_key_was_pressed: bool = false,
     r_was_pressed: bool = false,
@@ -413,8 +429,13 @@ pub const Scene = struct {
         return heavy_slug.View.init(frame.width(), frame.height(), heavy_slug.Transform.compose(view, rotation));
     }
 
-    pub fn draw(self: Scene, renderer: anytype, font: anytype, view: heavy_slug.View, frame: FrameMetrics) !void {
-        try self.drawContent(renderer, font);
+    pub fn draw(self: *Scene, renderer: anytype, font: anytype, view: heavy_slug.View, frame: FrameMetrics) !void {
+        self.alert = .none;
+        self.drawContent(renderer, font) catch |err| switch (err) {
+            error.PrecisionUnsupported => self.alert = .precision_unsupported,
+            else => return err,
+        };
+        if (renderer.diagnostics().hasPrecisionUnsupported()) self.alert = .precision_unsupported;
         try self.drawOverlay(renderer, font, view, frame);
     }
 
@@ -438,7 +459,15 @@ pub const Scene = struct {
         }
     }
 
-    fn drawOverlay(self: Scene, renderer: anytype, font: anytype, view: heavy_slug.View, frame: FrameMetrics) !void {
+    fn drawOverlay(self: *Scene, renderer: anytype, font: anytype, view: heavy_slug.View, frame: FrameMetrics) !void {
+        self.drawMetricsOverlay(renderer, font, view, frame) catch |err| switch (err) {
+            error.PrecisionUnsupported => self.alert = .precision_unsupported,
+            else => return err,
+        };
+        if (self.alert == .precision_unsupported) try self.drawPrecisionAlert(renderer, font, view);
+    }
+
+    fn drawMetricsOverlay(self: Scene, renderer: anytype, font: anytype, view: heavy_slug.View, frame: FrameMetrics) !void {
         var label_buffer: [96]u8 = undefined;
         const label = self.writeOverlayLabel(frame, &label_buffer);
         const screen_from_text = heavy_slug.Transform.compose(
@@ -451,6 +480,20 @@ pub const Scene = struct {
             .text = label,
             .transform = world_from_text,
             .color = self.color_scheme.overlayColor(),
+        });
+    }
+
+    fn drawPrecisionAlert(self: Scene, renderer: anytype, font: anytype, view: heavy_slug.View) !void {
+        const screen_from_text = heavy_slug.Transform.compose(
+            heavy_slug.Transform.translation(overlay_margin, view.height - precision_alert_baseline_from_top),
+            heavy_slug.Transform.scale(precision_alert_scale, precision_alert_scale),
+        );
+        const world_from_text = screenSpaceTextTransform(view, screen_from_text) orelse return;
+        try renderer.drawText(.{
+            .font = font,
+            .text = precision_alert_text,
+            .transform = world_from_text,
+            .color = self.color_scheme.alertColor(),
         });
     }
 
@@ -595,6 +638,29 @@ fn screenSpaceTextTransform(view: heavy_slug.View, screen_from_text: heavy_slug.
     return heavy_slug.Transform.compose(world_from_screen, screen_from_text);
 }
 
+const FakeRenderFrame = struct {
+    diagnostics_value: heavy_slug.core.render.FrameDiagnostics = .{},
+    fail_next: ?anyerror = null,
+    draw_count: u32 = 0,
+    saw_precision_alert: bool = false,
+
+    fn drawText(self: *FakeRenderFrame, run: anytype) !void {
+        self.draw_count += 1;
+        if (std.mem.eql(u8, run.text, precision_alert_text)) {
+            self.saw_precision_alert = true;
+            return;
+        }
+        if (self.fail_next) |err| {
+            self.fail_next = null;
+            return err;
+        }
+    }
+
+    fn diagnostics(self: *const FakeRenderFrame) heavy_slug.core.render.FrameDiagnostics {
+        return self.diagnostics_value;
+    }
+};
+
 test "demo scene exposes shared content settings" {
     var visible_lines: usize = 0;
     var section_breaks: usize = 0;
@@ -692,6 +758,55 @@ test "demo scene overlay label reports fps zoom and platform display scale" {
     try std.testing.expectEqualStrings("FPS 60.0  Zoom 2.00x  Display 2.00x", label);
 }
 
+test "demo scene draws precision alert from frame diagnostics" {
+    var scene = Scene{
+        .view = contentFit(window_width, window_height),
+        .view_initialized = true,
+    };
+    const frame_metrics = testFrame();
+    const view = scene.frameView(frame_metrics);
+    var frame = FakeRenderFrame{
+        .diagnostics_value = .{ .precision_unsupported = 3 },
+    };
+
+    try scene.draw(&frame, testFont(), view, frame_metrics);
+
+    try std.testing.expectEqual(SceneAlert.precision_unsupported, scene.alert);
+    try std.testing.expect(frame.saw_precision_alert);
+}
+
+test "demo scene catches PrecisionUnsupported and renders alert instead of exiting" {
+    var scene = Scene{
+        .view = contentFit(window_width, window_height),
+        .view_initialized = true,
+    };
+    const frame_metrics = testFrame();
+    const view = scene.frameView(frame_metrics);
+    var frame = FakeRenderFrame{
+        .fail_next = error.PrecisionUnsupported,
+    };
+
+    try scene.draw(&frame, testFont(), view, frame_metrics);
+
+    try std.testing.expectEqual(SceneAlert.precision_unsupported, scene.alert);
+    try std.testing.expect(frame.saw_precision_alert);
+}
+
+test "demo scene propagates non precision draw errors" {
+    var scene = Scene{
+        .view = contentFit(window_width, window_height),
+        .view_initialized = true,
+    };
+    const frame_metrics = testFrame();
+    const view = scene.frameView(frame_metrics);
+    var frame = FakeRenderFrame{
+        .fail_next = error.GlyphCapacityExceeded,
+    };
+
+    try std.testing.expectError(error.GlyphCapacityExceeded, scene.draw(&frame, testFont(), view, frame_metrics));
+    try std.testing.expect(!frame.saw_precision_alert);
+}
+
 test "demo scene ignores invalid frame dt for motion state" {
     var scene = Scene{
         .view = contentFit(window_width, window_height),
@@ -778,4 +893,8 @@ test "demo scene zoom keeps the requested screen anchor stable" {
 
 fn testFrame() FrameMetrics {
     return FrameMetrics.init(window_width, window_height, 1.0).?;
+}
+
+fn testFont() heavy_slug.FontHandle {
+    return .{ .id = 0 };
 }

@@ -107,6 +107,10 @@ pub const Frame = struct {
         try self.renderer.core.appendRun(self.renderer, &self.batch, self.view, run);
     }
 
+    pub fn diagnostics(self: *const Frame) render.FrameDiagnostics {
+        return self.renderer.core.frameDiagnostics();
+    }
+
     pub fn submit(self: *Frame, target: Target) !render.FrameToken {
         if (self.submitted) return error.FrameAlreadySubmitted;
         const token = try self.renderer.submitFrame(target, self.view, self.batch.glyphCount(), self.batch.meshletCount());
@@ -462,6 +466,7 @@ test "RendererOptions has correct defaults" {
 
 test "Renderer satisfies core backend contract" {
     heavy_slug.core.render.checkBackend(Renderer);
+    _ = @TypeOf(Frame.diagnostics);
     try std.testing.expect(true);
 }
 

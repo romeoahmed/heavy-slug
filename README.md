@@ -252,16 +252,18 @@ or Wayland; Metal uses SwiftUI/AppKit with a `CAMetalLayer`. All demos use `B`
 to switch between explicit light and dark appearance. The shared scene uses
 `NotoSansJP-Regular.otf` for a dense vertically grouped multilingual and symbol
 sample corpus, plus a screen-space metrics overlay for FPS, relative view zoom,
-and native display scale. Vulkan demo window titles are validated UTF-8; Win32
-presents them as UTF-16 native titles, and Wayland publishes the exact title
-through xdg-shell.
+native display scale, and precision-limit alerts. Vulkan demo window titles are
+validated UTF-8; Win32 presents them as UTF-16 native titles, and Wayland
+publishes the exact title through xdg-shell.
 
 Vulkan hosts report completed GPU work with `Renderer.markFrameComplete(token)`.
 The Metal backend tracks completion through bridge-managed frame slots and waits
 for submitted work during teardown. `Renderer.stats()` exposes CPU/backend
 counters for shaping, cache, uploads, retirements, pool state, submitted glyphs,
-and meshlets; `-Dshader-stats=true` adds GPU counters for meshlet culling,
-h-band candidate use, full-scan fallback, bbox rejection, and curve integration.
+and meshlets; `Frame.diagnostics()` exposes frame-local precision-limit
+diagnostics for application UI. `-Dshader-stats=true` adds GPU counters for
+meshlet culling, h-band candidate use, full-scan fallback, bbox rejection, and
+curve integration.
 
 ## Development
 
