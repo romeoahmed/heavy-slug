@@ -82,8 +82,9 @@ implementation history belongs in commits and code review notes.
   light appearance and use `B` to toggle light/dark rendering and available
   native chrome instead of following the system setting.
 - **Demo sample content changed:** native demos now use `NotoSansJP-Regular.otf`
-  and multilingual Latin, Japanese, Chinese, Cyrillic, Greek, and accented
-  Latin text instead of the old Inter/Lorem Ipsum sample.
+  and a denser vertically grouped corpus covering Latin, Japanese, Chinese,
+  Cyrillic, Greek, accented Latin, mathematical symbols, arrows, and fullwidth
+  punctuation instead of the old Inter/Lorem Ipsum sample.
 - **CI architecture refactored:** the public CI workflow is now a small
   orchestrator over reusable quality, core, shader, Vulkan, and Metal
   workflows. Composite actions own Zig/Slang setup, cache restore/save, and

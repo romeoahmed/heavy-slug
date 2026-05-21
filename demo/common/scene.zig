@@ -10,11 +10,13 @@ pub const window_width: c_int = 1280;
 pub const window_height: c_int = 720;
 
 const content_margin: f64 = 48;
-const content_width: f64 = 1180;
-const body_advance: f64 = 34;
-const title_advance: f64 = 54;
-const subtitle_advance: f64 = 34;
-const group_gap: f64 = 20;
+const content_width: f64 = 1220;
+const body_advance: f64 = 28;
+const title_advance: f64 = 50;
+const section_advance: f64 = 34;
+const subtitle_advance: f64 = 30;
+const group_gap: f64 = 18;
+const body_scale: f64 = 0.84;
 
 const overlay_margin: f64 = 24;
 const overlay_baseline_from_top: f64 = 28;
@@ -30,54 +32,161 @@ const TextTone = enum {
 const TextLine = struct {
     text: []const u8,
     advance: f64 = body_advance,
-    scale: f64 = 1.0,
+    scale: f64 = body_scale,
     tone: TextTone = .body,
 };
 
 const sample_lines = [_]TextLine{
     .{
-        .text = "heavy-slug multilingual demo",
+        .text = "heavy-slug sample corpus",
         .advance = title_advance,
-        .scale = 1.42,
+        .scale = 1.36,
         .tone = .title,
     },
     .{
-        .text = "Noto Sans JP · analytic glyph coverage · pan, zoom, rotate",
+        .text = "Noto Sans JP · analytic glyph coverage · multilingual outlines · pan, zoom, rotate",
         .advance = subtitle_advance,
-        .scale = 0.86,
+        .scale = 0.76,
         .tone = .subtitle,
     },
     .{ .text = "", .advance = group_gap },
+    .{
+        .text = "Latin, spacing, punctuation",
+        .advance = section_advance,
+        .scale = 1.02,
+        .tone = .accent,
+    },
     .{
         .text = "English: resolution-independent text remains crisp while the view moves.",
         .tone = .body,
     },
     .{
-        .text = "日本語: かなと漢字を同じパイプラインで描画します。",
-        .tone = .accent,
-    },
-    .{
-        .text = "中文: 漢字、假名、Latin、数字 0123456789。",
+        .text = "Kerning: AV WA To Yo Ta LT, VAWa, ToTo, office affine flow.",
         .tone = .body,
     },
     .{
-        .text = "Русский: кириллица проверяет контуры и кернинг.",
+        .text = "Ligatures: fi fl ffi, affine, office, efficient, shuffle, cliff.",
         .tone = .body,
     },
     .{
-        .text = "Ελληνικά: γεωμετρία, χρώμα, κίνηση.",
+        .text = "Numbers: 0123456789 12.345e-6 1/2 3/4 99.9%.",
         .tone = .body,
     },
     .{
-        .text = "Español Français Português Deutsch: acción, façade, coração, Größe.",
+        .text = "Accents: naïve façade coöperate São Tomé Ångström; Größe, cœur, mañana.",
+        .tone = .body,
+    },
+    .{
+        .text = "Punctuation: “quotes” ‘marks’ — – … · • ※ 〒 〆 々.",
         .tone = .body,
     },
     .{ .text = "", .advance = group_gap },
     .{
-        .text = "Controls: drag to pan, right-drag to spin, wheel or +/- to zoom, B toggles appearance.",
-        .advance = subtitle_advance,
-        .scale = 0.84,
-        .tone = .subtitle,
+        .text = "CJK and kana",
+        .advance = section_advance,
+        .scale = 1.02,
+        .tone = .accent,
+    },
+    .{
+        .text = "日本語: 回転・拡大・縮小しても輪郭は滑らかです。",
+        .tone = .body,
+    },
+    .{
+        .text = "かな: あいうえお アイウエオ ぱぴぷぺぽ キャッシュ、ビュー、メッシュ。",
+        .tone = .body,
+    },
+    .{
+        .text = "中文: 高精度向量文字，平移、縮放、旋轉都清晰。",
+        .tone = .body,
+    },
+    .{
+        .text = "繁體: 解析式覆蓋、曲線細分、像素中心與填充規則。",
+        .tone = .body,
+    },
+    .{
+        .text = "Fullwidth: ＡＢＣ１２３，。、：；？！「heavy-slug」《輪郭》【解析】",
+        .tone = .body,
+    },
+    .{
+        .text = "Counters: 一二三四五 六七八九十 百千万億兆、日月火水木金土。",
+        .tone = .body,
+    },
+    .{
+        .text = "Dense CJK: 永字八法、骨格、筆画、重心、曲率、輪郭、隙間。",
+        .tone = .body,
+    },
+    .{ .text = "", .advance = group_gap },
+    .{
+        .text = "Greek and Cyrillic",
+        .advance = section_advance,
+        .scale = 1.02,
+        .tone = .accent,
+    },
+    .{
+        .text = "Greek: Ελληνικά γεωμετρία, τόνος, κύβος, Ωμέγα, π≈3.14159.",
+        .tone = .body,
+    },
+    .{
+        .text = "Cyrillic: Русский текст проверяет кернинг, контуры и движение.",
+        .tone = .body,
+    },
+    .{
+        .text = "Caps: ΑΒΓΔΕΖΗΘ ΙΚΛΜΝΞΟΠ ΡΣΤΥΦΧΨΩ · АБВГДЕЖЗ ИКЛМНОП РСТУФХЦЧШЩ.",
+        .tone = .body,
+    },
+    .{
+        .text = "Mixed cache: あああ 漢漢漢 ααα ЖЖЖ 000 OOO lIl, small kana ぁぃぅぇぉ.",
+        .tone = .body,
+    },
+    .{ .text = "", .advance = group_gap },
+    .{
+        .text = "Symbols and outline stress",
+        .advance = section_advance,
+        .scale = 1.02,
+        .tone = .accent,
+    },
+    .{
+        .text = "Math: ∂x/∂t ∇·v ∑i √2 ∞ ≤ ≥ ≠ ≈ ±×÷, brackets 〈〉《》【】.",
+        .tone = .body,
+    },
+    .{
+        .text = "Scientific: matrix ATA, x^2+y^2=r^2, μm, nm, kg, ms, Hz, deg C.",
+        .tone = .body,
+    },
+    .{
+        .text = "Arrows: ← ↑ → ↓ ↔ ↕ ⇐ ⇒ ⇧ ⇩, pixel centers, h-bands, cubic spans.",
+        .tone = .body,
+    },
+    .{
+        .text = "Scale: tiny stems, large bowls, fractional DPI, subpixel motion, high zoom.",
+        .tone = .body,
+    },
+    .{
+        .text = "Diagnostics: glyph ids, byte offsets, meshlets, frame tokens, GPU stats.",
+        .tone = .body,
+    },
+    .{
+        .text = "Stress: IIIlll111, O0〇○, rn/m, cl/d, punctuation density !!! ??? ;;;.",
+        .tone = .body,
+    },
+    .{ .text = "", .advance = group_gap },
+    .{
+        .text = "Controls",
+        .advance = section_advance,
+        .scale = 1.02,
+        .tone = .accent,
+    },
+    .{
+        .text = "Drag to pan, right-drag to spin, wheel or +/- to zoom.",
+        .tone = .body,
+    },
+    .{
+        .text = "B toggles light/dark, Space animates, R resets view, Esc quits.",
+        .tone = .body,
+    },
+    .{
+        .text = "Date: 2026-05-21 16:09:37 +08:00, #heavy-slug.",
+        .tone = .body,
     },
 };
 
@@ -487,7 +596,18 @@ fn screenSpaceTextTransform(view: heavy_slug.View, screen_from_text: heavy_slug.
 }
 
 test "demo scene exposes shared content settings" {
-    try std.testing.expect(sample_lines.len > 1);
+    var visible_lines: usize = 0;
+    var section_breaks: usize = 0;
+    for (sample_lines) |line| {
+        if (line.text.len == 0) {
+            section_breaks += 1;
+        } else {
+            visible_lines += 1;
+        }
+    }
+
+    try std.testing.expect(visible_lines >= 28);
+    try std.testing.expect(section_breaks >= 5);
     try std.testing.expect(content_width > 0);
     try std.testing.expect(content_height > 0);
 }
@@ -499,20 +619,29 @@ test "demo scene uses the multilingual Noto Sans JP asset" {
 test "demo scene sample text covers supported scripts" {
     var saw_latin = false;
     var saw_japanese = false;
+    var saw_chinese = false;
     var saw_cyrillic = false;
     var saw_greek = false;
+    var saw_symbols = false;
+    var saw_fullwidth = false;
 
     for (sample_lines) |line| {
-        saw_latin = saw_latin or std.mem.indexOf(u8, line.text, "English") != null;
+        saw_latin = saw_latin or std.mem.indexOf(u8, line.text, "Latin") != null;
         saw_japanese = saw_japanese or std.mem.indexOf(u8, line.text, "日本語") != null;
+        saw_chinese = saw_chinese or std.mem.indexOf(u8, line.text, "中文") != null;
         saw_cyrillic = saw_cyrillic or std.mem.indexOf(u8, line.text, "Русский") != null;
         saw_greek = saw_greek or std.mem.indexOf(u8, line.text, "Ελληνικά") != null;
+        saw_symbols = saw_symbols or std.mem.indexOf(u8, line.text, "Math") != null;
+        saw_fullwidth = saw_fullwidth or std.mem.indexOf(u8, line.text, "Fullwidth") != null;
     }
 
     try std.testing.expect(saw_latin);
     try std.testing.expect(saw_japanese);
+    try std.testing.expect(saw_chinese);
     try std.testing.expect(saw_cyrillic);
     try std.testing.expect(saw_greek);
+    try std.testing.expect(saw_symbols);
+    try std.testing.expect(saw_fullwidth);
 }
 
 test "demo scene Noto font covers all sample text" {

@@ -250,10 +250,11 @@ Metal, Wayland, Cocoa, or a window toolkit.
 The demos are native host examples, not a portability layer. Vulkan uses Win32
 or Wayland; Metal uses SwiftUI/AppKit with a `CAMetalLayer`. All demos use `B`
 to switch between explicit light and dark appearance. The shared scene uses
-`NotoSansJP-Regular.otf` for multilingual sample text and a screen-space
-metrics overlay for FPS, relative view zoom, and native display scale. Vulkan
-demo window titles are validated UTF-8; Win32 presents them as UTF-16 native
-titles, and Wayland publishes the exact title through xdg-shell.
+`NotoSansJP-Regular.otf` for a dense vertically grouped multilingual and symbol
+sample corpus, plus a screen-space metrics overlay for FPS, relative view zoom,
+and native display scale. Vulkan demo window titles are validated UTF-8; Win32
+presents them as UTF-16 native titles, and Wayland publishes the exact title
+through xdg-shell.
 
 Vulkan hosts report completed GPU work with `Renderer.markFrameComplete(token)`.
 The Metal backend tracks completion through bridge-managed frame slots and waits
