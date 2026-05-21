@@ -9,6 +9,7 @@ const windows = std.os.windows;
 const ntdll = windows.ntdll;
 const vk = @import("vulkan");
 const demo_input = @import("demo_input");
+const demo_title = @import("demo_title");
 
 const HRESULT = windows.LONG;
 const LRESULT = isize;
@@ -387,16 +388,15 @@ pub const Window = struct {
 
     pub fn init(self: *Window, allocator: std.mem.Allocator, width: c_int, height: c_int, title: []const u8) !void {
         if (self.hwnd != null) return error.WindowAlreadyInitialized;
-        if (title.len == 0) return error.EmptyWindowTitle;
+
+        const title_w = try demo_title.allocUtf16LeZ(allocator, title);
+        defer allocator.free(title_w);
 
         try loadNativeUserApi();
         try loadVulkanLoader();
 
         const hinstance: windows.HINSTANCE = @ptrCast(windows.peb().ImageBaseAddress);
         try registerClass(hinstance);
-
-        const title_w = try std.unicode.utf8ToUtf16LeAllocZ(allocator, title);
-        defer allocator.free(title_w);
 
         self.* = .{
             .hinstance = hinstance,
@@ -922,6 +922,15 @@ test "Win32 style keeps the native title bar and system commands" {
     try std.testing.expect(Win32.Style.standard_titled_window & Win32.Style.caption != 0);
     try std.testing.expect(Win32.Style.standard_titled_window & Win32.Style.sysmenu != 0);
     try std.testing.expect(Win32.Style.standard_titled_window & Win32.Style.thickframe != 0);
+}
+
+test "Win32 title encoding preserves Unicode and rejects sentinel truncation" {
+    const title = try demo_title.allocUtf16LeZ(std.testing.allocator, "heavy-slug 日本語");
+    defer std.testing.allocator.free(title);
+
+    try std.testing.expectEqual(@as(u16, 0), title[title.len]);
+    try std.testing.expect(std.mem.indexOfScalar(u16, title, 0) == null);
+    try std.testing.expectError(error.InvalidWindowTitle, demo_title.allocUtf16LeZ(std.testing.allocator, "heavy\x00slug"));
 }
 
 test "Win32 DPI scaling follows positive MulDiv-style rounding" {

@@ -89,6 +89,9 @@ implementation history belongs in commits and code review notes.
 
 ### Fixed
 
+- **Vulkan demo window titles:** Win32 and Wayland demo titles now share strict
+  UTF-8 validation, reject embedded NUL truncation, and keep Wayland's
+  client-drawn headerbar from byte-rendering unsupported Unicode.
 - **Vulkan Windows demo startup:** mesh shader objects are created and bound
   with the no-task path, unused shader-object stages are cleared, and swapchain
   extent, minimized-window, suboptimal-image, and present-semaphore handling are

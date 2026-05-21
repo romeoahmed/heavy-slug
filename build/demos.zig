@@ -78,6 +78,7 @@ pub fn buildVulkan(
     });
 
     const demo_input = buildDemoInputModule(b, target, optimize);
+    const demo_title = buildDemoTitleModule(b, target, optimize);
     const demo_scene = buildDemoSceneModule(b, target, optimize, core_mod, demo_input);
     const demo_platform = buildVulkanPlatformModule(
         b,
@@ -85,6 +86,7 @@ pub fn buildVulkan(
         optimize,
         backend.bindings,
         demo_input,
+        demo_title,
         wayland_protocols_src,
         exe,
     );
@@ -164,6 +166,18 @@ fn buildDemoInputModule(
     });
 }
 
+fn buildDemoTitleModule(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Module {
+    return b.createModule(.{
+        .root_source_file = b.path("demo/common/title.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+}
+
 fn buildDemoSceneModule(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -188,6 +202,7 @@ fn buildVulkanPlatformModule(
     optimize: std.builtin.OptimizeMode,
     vulkan_mod: *std.Build.Module,
     demo_input: *std.Build.Module,
+    demo_title: *std.Build.Module,
     wayland_protocols_src: ?*std.Build.Dependency,
     exe: *std.Build.Step.Compile,
 ) *std.Build.Module {
@@ -202,6 +217,7 @@ fn buildVulkanPlatformModule(
                 .optimize = optimize,
                 .imports = &.{
                     .{ .name = "demo_input", .module = demo_input },
+                    .{ .name = "demo_title", .module = demo_title },
                     .{ .name = "vulkan", .module = vulkan_mod },
                 },
             });
@@ -227,6 +243,7 @@ fn buildVulkanPlatformModule(
                 .optimize = optimize,
                 .imports = &.{
                     .{ .name = "demo_input", .module = demo_input },
+                    .{ .name = "demo_title", .module = demo_title },
                     .{ .name = "vulkan", .module = vulkan_mod },
                     .{ .name = "wayland_c", .module = wayland_c },
                 },

@@ -212,6 +212,11 @@ fn addDemoCommonTests(
         .target = opts.target,
         .optimize = opts.optimize,
     });
+    const demo_title = b.createModule(.{
+        .root_source_file = b.path("demo/common/title.zig"),
+        .target = opts.target,
+        .optimize = opts.optimize,
+    });
     const demo_scene = b.createModule(.{
         .root_source_file = b.path("demo/common/scene.zig"),
         .target = opts.target,
@@ -221,6 +226,16 @@ fn addDemoCommonTests(
             .{ .name = "demo_input", .module = demo_input },
         },
     });
+    const wayland_title = b.createModule(.{
+        .root_source_file = b.path("demo/platform/wayland_title.zig"),
+        .target = opts.target,
+        .optimize = opts.optimize,
+        .imports = &.{
+            .{ .name = "demo_title", .module = demo_title },
+        },
+    });
+    addModuleTest(b, test_step, "heavy_slug_demo_title", demo_title);
+    addModuleTest(b, test_step, "heavy_slug_demo_wayland_title", wayland_title);
     addModuleTest(b, test_step, "heavy_slug_demo_common", demo_scene);
 }
 
