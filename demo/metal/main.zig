@@ -41,20 +41,19 @@ pub fn main() !void {
         if (window.should_close or window.input().getKey(.escape)) break;
 
         const now = window.time();
-        const dt: f32 = @floatCast(now - last_time);
+        const dt = now - last_time;
         last_time = now;
 
         const size = window.framebufferSize();
         if (size[0] == 0 or size[1] == 0) continue;
 
-        const w: f32 = @floatFromInt(size[0]);
-        const h: f32 = @floatFromInt(size[1]);
-        scene.update(window.input(), dt, now, w, h);
+        const frame_metrics = demo_scene.FrameMetrics.init(size[0], size[1], window.displayScale()) orelse continue;
+        scene.update(window.input(), dt, now, frame_metrics);
         window.setColorScheme(if (scene.darkModeEnabled()) .dark else .light);
 
-        const view = scene.frameView(w, h);
+        const view = scene.frameView(frame_metrics);
         var text_frame = try text_renderer.beginFrame(view);
-        try scene.draw(&text_frame, font, view);
+        try scene.draw(&text_frame, font, view, frame_metrics);
         _ = try text_frame.submit(.{
             .clear_color = scene.clearColor(),
         });

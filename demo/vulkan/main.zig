@@ -38,7 +38,7 @@ pub fn main() !void {
         if (window.should_close or window.input().getKey(.escape)) break;
 
         const now = window.time();
-        const dt: f32 = @floatCast(now - last_time);
+        const dt = now - last_time;
         last_time = now;
 
         if (host.needsResize(window.framebufferSize())) {
@@ -46,9 +46,12 @@ pub fn main() !void {
         }
         if (!host.hasDrawableSwapchain()) continue;
 
-        const w: f32 = @floatFromInt(host.swapchain_extent.width);
-        const h: f32 = @floatFromInt(host.swapchain_extent.height);
-        scene.update(window.input(), dt, now, w, h);
+        const frame_metrics = demo_scene.FrameMetrics.init(
+            host.swapchain_extent.width,
+            host.swapchain_extent.height,
+            window.displayScale(),
+        ) orelse continue;
+        scene.update(window.input(), dt, now, frame_metrics);
         window.setDarkMode(scene.darkModeEnabled());
         host.clear_color = scene.clearColor();
 
@@ -62,9 +65,9 @@ pub fn main() !void {
             stats_log_time = now;
         }
 
-        const view = scene.frameView(w, h);
+        const view = scene.frameView(frame_metrics);
         var text_frame = try text_renderer.beginFrame(view);
-        try scene.draw(&text_frame, font, view);
+        try scene.draw(&text_frame, font, view, frame_metrics);
         submitted_text_tokens[frame.frame_index] = try text_frame.submit(.{
             .command_buffer = frame.cmd,
         });

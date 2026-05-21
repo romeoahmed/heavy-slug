@@ -85,6 +85,29 @@ const content_height: f64 = measureContentHeight();
 const content_cx: f64 = content_width / 2;
 const content_cy: f64 = content_height / 2;
 
+pub const FrameMetrics = struct {
+    framebuffer_width: u32,
+    framebuffer_height: u32,
+    display_scale: f64,
+
+    pub fn init(framebuffer_width: u32, framebuffer_height: u32, display_scale: f64) ?FrameMetrics {
+        if (framebuffer_width == 0 or framebuffer_height == 0) return null;
+        return .{
+            .framebuffer_width = framebuffer_width,
+            .framebuffer_height = framebuffer_height,
+            .display_scale = sanitizeDisplayScale(display_scale),
+        };
+    }
+
+    pub fn width(self: FrameMetrics) f64 {
+        return @floatFromInt(self.framebuffer_width);
+    }
+
+    pub fn height(self: FrameMetrics) f64 {
+        return @floatFromInt(self.framebuffer_height);
+    }
+};
+
 pub const ColorScheme = enum {
     light,
     dark,
@@ -134,8 +157,21 @@ pub const ColorScheme = enum {
 
 const ViewState = struct {
     scale: f64 = 1.0,
+    fit_scale: f64 = 1.0,
     pan_x: f64 = 0,
     pan_y: f64 = 0,
+
+    fn zoom(self: ViewState) f64 {
+        if (!std.math.isFinite(self.scale) or
+            !std.math.isFinite(self.fit_scale) or
+            self.scale <= 0 or
+            self.fit_scale <= 0)
+        {
+            return 1.0;
+        }
+        const value = self.scale / self.fit_scale;
+        return if (std.math.isFinite(value) and value > 0) value else 1.0;
+    }
 };
 
 const FpsMeter = struct {
@@ -160,12 +196,6 @@ const FpsMeter = struct {
     fn fps(self: FpsMeter) f64 {
         if (self.displayed_fps > 0) return self.displayed_fps;
         return self.sampleRate();
-    }
-
-    fn writeLabel(self: FpsMeter, buffer: []u8) []const u8 {
-        const value = self.fps();
-        if (!std.math.isFinite(value) or value <= 0) return "FPS --";
-        return std.fmt.bufPrint(buffer, "FPS {d:.1}", .{value}) catch "FPS --";
     }
 
     fn publish(self: *FpsMeter) void {
@@ -202,12 +232,11 @@ pub const Scene = struct {
     drag_angle_delta: f64 = 0,
     drag_dt: f64 = 0,
 
-    pub fn update(self: *Scene, input: *demo_input.State, dt: f32, now: f64, width: f32, height: f32) void {
-        if (width <= 0 or height <= 0) return;
-        const width64: f64 = width;
-        const height64: f64 = height;
-        const dt64: f64 = dt;
-        self.fps_meter.update(dt64);
+    pub fn update(self: *Scene, input: *demo_input.State, dt: f64, now: f64, frame: FrameMetrics) void {
+        const width64 = frame.width();
+        const height64 = frame.height();
+        const frame_dt = if (std.math.isFinite(dt) and dt > 0) dt else 0;
+        self.fps_meter.update(frame_dt);
 
         if (!self.view_initialized) {
             self.view = contentFit(width64, height64);
@@ -229,12 +258,12 @@ pub const Scene = struct {
         self.space_was_pressed = space_pressed;
 
         const pan_speed: f64 = 400 / self.view.scale;
-        if (input.getKey(.up)) self.view.pan_y += pan_speed * dt64;
-        if (input.getKey(.down)) self.view.pan_y -= pan_speed * dt64;
-        if (input.getKey(.left)) self.view.pan_x += pan_speed * dt64;
-        if (input.getKey(.right)) self.view.pan_x -= pan_speed * dt64;
+        if (input.getKey(.up)) self.view.pan_y += pan_speed * frame_dt;
+        if (input.getKey(.down)) self.view.pan_y -= pan_speed * frame_dt;
+        if (input.getKey(.left)) self.view.pan_x += pan_speed * frame_dt;
+        if (input.getKey(.right)) self.view.pan_x -= pan_speed * frame_dt;
 
-        const keyboard_zoom = 2.0 * dt64;
+        const keyboard_zoom = 2.0 * frame_dt;
         if (input.getKey(.equal)) self.zoomAt(width64 * 0.5, height64 * 0.5, 1.0 + keyboard_zoom);
         if (input.getKey(.minus)) self.zoomAt(width64 * 0.5, height64 * 0.5, @max(1.0 - keyboard_zoom, 0.001));
 
@@ -245,8 +274,8 @@ pub const Scene = struct {
             self.zoomAt(cur[0], height64 - cur[1], factor);
         }
 
-        self.updateMouse(input, now, width, height);
-        if (self.animate) self.rotation_angle += self.rotation_speed * dt64;
+        self.updateMouse(input, now, width64, height64);
+        if (self.animate) self.rotation_angle += self.rotation_speed * frame_dt;
     }
 
     pub fn darkModeEnabled(self: Scene) bool {
@@ -265,15 +294,19 @@ pub const Scene = struct {
         return self.fps_meter.fps();
     }
 
-    pub fn frameView(self: Scene, width: f64, height: f64) heavy_slug.View {
-        const view = viewTransform(self.view);
-        const rotation = heavy_slug.Transform.rotationAbout(self.rotation_angle, content_cx, content_cy);
-        return heavy_slug.View.init(width, height, heavy_slug.Transform.compose(view, rotation));
+    pub fn currentZoom(self: Scene) f64 {
+        return self.view.zoom();
     }
 
-    pub fn draw(self: Scene, renderer: anytype, font: anytype, view: heavy_slug.View) !void {
+    pub fn frameView(self: Scene, frame: FrameMetrics) heavy_slug.View {
+        const view = viewTransform(self.view);
+        const rotation = heavy_slug.Transform.rotationAbout(self.rotation_angle, content_cx, content_cy);
+        return heavy_slug.View.init(frame.width(), frame.height(), heavy_slug.Transform.compose(view, rotation));
+    }
+
+    pub fn draw(self: Scene, renderer: anytype, font: anytype, view: heavy_slug.View, frame: FrameMetrics) !void {
         try self.drawContent(renderer, font);
-        try self.drawOverlay(renderer, font, view);
+        try self.drawOverlay(renderer, font, view, frame);
     }
 
     fn drawContent(self: Scene, renderer: anytype, font: anytype) !void {
@@ -296,9 +329,9 @@ pub const Scene = struct {
         }
     }
 
-    fn drawOverlay(self: Scene, renderer: anytype, font: anytype, view: heavy_slug.View) !void {
-        var label_buffer: [32]u8 = undefined;
-        const label = self.fps_meter.writeLabel(&label_buffer);
+    fn drawOverlay(self: Scene, renderer: anytype, font: anytype, view: heavy_slug.View, frame: FrameMetrics) !void {
+        var label_buffer: [96]u8 = undefined;
+        const label = self.writeOverlayLabel(frame, &label_buffer);
         const screen_from_text = heavy_slug.Transform.compose(
             heavy_slug.Transform.translation(overlay_margin, view.height - overlay_baseline_from_top),
             heavy_slug.Transform.scale(overlay_scale, overlay_scale),
@@ -312,6 +345,24 @@ pub const Scene = struct {
         });
     }
 
+    fn writeOverlayLabel(self: Scene, frame: FrameMetrics, buffer: []u8) []const u8 {
+        const zoom = self.view.zoom();
+        const display_scale = frame.display_scale;
+        const fps = self.fps_meter.fps();
+        if (std.math.isFinite(fps) and fps > 0) {
+            return std.fmt.bufPrint(
+                buffer,
+                "FPS {d:.1}  Zoom {d:.2}x  Display {d:.2}x",
+                .{ fps, zoom, display_scale },
+            ) catch "FPS --  Zoom --  Display --";
+        }
+        return std.fmt.bufPrint(
+            buffer,
+            "FPS --  Zoom {d:.2}x  Display {d:.2}x",
+            .{ zoom, display_scale },
+        ) catch "FPS --  Zoom --  Display --";
+    }
+
     fn updateColorScheme(self: *Scene, input: *const demo_input.State) void {
         const pressed = input.getKey(.b);
         if (pressed and !self.color_scheme_key_was_pressed) {
@@ -320,7 +371,7 @@ pub const Scene = struct {
         self.color_scheme_key_was_pressed = pressed;
     }
 
-    fn updateMouse(self: *Scene, input: *const demo_input.State, now: f64, width: f32, height: f32) void {
+    fn updateMouse(self: *Scene, input: *const demo_input.State, now: f64, width: f64, height: f64) void {
         const cursor = input.cursor;
         const left_now = input.getMouseButton(.left);
         const right_now = input.getMouseButton(.right);
@@ -354,8 +405,8 @@ pub const Scene = struct {
         if (right_now and self.right_down) {
             self.updateDragState(cursor);
             if (self.dragged) {
-                const half_w: f64 = @as(f64, width) * 0.5;
-                const half_h: f64 = @as(f64, height) * 0.5;
+                const half_w = width * 0.5;
+                const half_h = height * 0.5;
                 const prev_angle = std.math.atan2(self.last_cursor[1] - half_h, self.last_cursor[0] - half_w);
                 const curr_angle = std.math.atan2(cursor[1] - half_h, cursor[0] - half_w);
                 const delta: f64 = curr_angle - prev_angle;
@@ -409,9 +460,14 @@ fn contentFit(width: f64, height: f64) ViewState {
     const s = 0.9 * @min(width / content_width, height / content_height);
     return .{
         .scale = s,
+        .fit_scale = s,
         .pan_x = width / (2 * s) - content_width / 2,
         .pan_y = height / (2 * s) - content_height / 2,
     };
+}
+
+fn sanitizeDisplayScale(value: f64) f64 {
+    return if (std.math.isFinite(value) and value > 0) value else 1.0;
 }
 
 fn viewTransform(view: ViewState) heavy_slug.Transform {
@@ -480,8 +536,48 @@ test "demo scene Noto font covers all sample text" {
 
 test "demo scene frame view keeps glyph outlines y-up" {
     const view = contentFit(window_width, window_height);
-    const frame_view = (Scene{ .view = view }).frameView(window_width, window_height);
+    const frame_view = (Scene{ .view = view }).frameView(testFrame());
     try std.testing.expect(frame_view.screen_from_world.yy > 0);
+}
+
+test "demo scene frame metrics keep framebuffer pixels and display scale explicit" {
+    const frame = FrameMetrics.init(1920, 1080, 1.5).?;
+    try std.testing.expectEqual(@as(u32, 1920), frame.framebuffer_width);
+    try std.testing.expectEqual(@as(u32, 1080), frame.framebuffer_height);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.5), frame.display_scale, 1.0e-12);
+    try std.testing.expect(FrameMetrics.init(0, 1080, 1.5) == null);
+    try std.testing.expectApproxEqAbs(@as(f64, 1), FrameMetrics.init(1280, 720, std.math.nan(f64)).?.display_scale, 1.0e-12);
+}
+
+test "demo scene overlay label reports fps zoom and platform display scale" {
+    var scene = Scene{
+        .view = contentFit(window_width, window_height),
+        .view_initialized = true,
+    };
+    scene.fps_meter.displayed_fps = 60;
+    scene.zoomAt(640, 360, 2);
+
+    const frame = FrameMetrics.init(window_width, window_height, 2).?;
+    var label_buffer: [96]u8 = undefined;
+    const label = scene.writeOverlayLabel(frame, &label_buffer);
+    try std.testing.expectEqualStrings("FPS 60.0  Zoom 2.00x  Display 2.00x", label);
+}
+
+test "demo scene ignores invalid frame dt for motion state" {
+    var scene = Scene{
+        .view = contentFit(window_width, window_height),
+        .view_initialized = true,
+        .animate = true,
+    };
+    const before = scene.view;
+    var input: demo_input.State = .{};
+    input.setKey(.right, true);
+
+    scene.update(&input, std.math.nan(f64), 0, testFrame());
+
+    try std.testing.expectApproxEqAbs(before.pan_x, scene.view.pan_x, 1.0e-12);
+    try std.testing.expectApproxEqAbs(before.pan_y, scene.view.pan_y, 1.0e-12);
+    try std.testing.expectApproxEqAbs(@as(f64, 0), scene.rotation_angle, 1.0e-12);
 }
 
 test "demo scene starts light and toggles color scheme only on B key edges" {
@@ -493,17 +589,17 @@ test "demo scene starts light and toggles color scheme only on B key edges" {
     try std.testing.expectEqual(ColorScheme.light.clearColor(), scene.clearColor());
 
     input.setKey(.b, true);
-    scene.update(&input, 0, 0, window_width, window_height);
+    scene.update(&input, 0, 0, testFrame());
     try std.testing.expectEqual(ColorScheme.dark, scene.color_scheme);
     try std.testing.expect(scene.darkModeEnabled());
 
-    scene.update(&input, 0, 0, window_width, window_height);
+    scene.update(&input, 0, 0, testFrame());
     try std.testing.expectEqual(ColorScheme.dark, scene.color_scheme);
 
     input.setKey(.b, false);
-    scene.update(&input, 0, 0, window_width, window_height);
+    scene.update(&input, 0, 0, testFrame());
     input.setKey(.b, true);
-    scene.update(&input, 0, 0, window_width, window_height);
+    scene.update(&input, 0, 0, testFrame());
     try std.testing.expectEqual(ColorScheme.light, scene.color_scheme);
     try std.testing.expect(!scene.darkModeEnabled());
 }
@@ -513,9 +609,6 @@ test "demo scene fps meter reports sampled rate without allocating" {
     for (0..30) |_| meter.update(1.0 / 60.0);
 
     try std.testing.expectApproxEqAbs(@as(f64, 60), meter.fps(), 1.0e-9);
-
-    var label_buffer: [32]u8 = undefined;
-    try std.testing.expectEqualStrings("FPS 60.0", meter.writeLabel(&label_buffer));
 }
 
 test "demo scene screen-space overlay cancels content transform" {
@@ -523,7 +616,7 @@ test "demo scene screen-space overlay cancels content transform" {
         .view = contentFit(window_width, window_height),
         .rotation_angle = 0.35,
     };
-    const frame_view = scene.frameView(window_width, window_height);
+    const frame_view = scene.frameView(testFrame());
     const screen_from_text = heavy_slug.Transform.compose(
         heavy_slug.Transform.translation(overlay_margin, @as(f64, @floatFromInt(window_height)) - overlay_baseline_from_top),
         heavy_slug.Transform.scale(overlay_scale, overlay_scale),
@@ -552,4 +645,8 @@ test "demo scene zoom keeps the requested screen anchor stable" {
     const screen = viewTransform(scene.view).apply(world);
     try std.testing.expectApproxEqAbs(anchor[0], screen[0], 1.0e-9);
     try std.testing.expectApproxEqAbs(anchor[1], screen[1], 1.0e-9);
+}
+
+fn testFrame() FrameMetrics {
+    return FrameMetrics.init(window_width, window_height, 1.0).?;
 }

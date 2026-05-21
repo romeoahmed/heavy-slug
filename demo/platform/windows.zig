@@ -456,6 +456,10 @@ pub const Window = struct {
         return .{ self.framebuffer_width, self.framebuffer_height };
     }
 
+    pub fn displayScale(self: *const Window) f64 {
+        return dpiScale(self.dpi);
+    }
+
     pub fn time(self: *const Window) f64 {
         return self.clock.elapsedSeconds() catch 0.0;
     }
@@ -900,6 +904,11 @@ fn dpiFromWparam(value: WPARAM) windows.UINT {
     return if (dpi_x != 0) dpi_x else if (dpi_y != 0) dpi_y else Win32.Dpi.base;
 }
 
+fn dpiScale(dpi: windows.UINT) f64 {
+    if (dpi == 0) return 1.0;
+    return @as(f64, @floatFromInt(dpi)) / @as(f64, @floatFromInt(Win32.Dpi.base));
+}
+
 fn wheelDeltaFromWparam(value: WPARAM) f64 {
     return @as(f64, @floatFromInt(signedHighWordU(value))) / Win32.wheel_delta;
 }
@@ -956,6 +965,8 @@ test "Win32 DPI and rect helpers normalize platform packed values" {
     try std.testing.expectEqual(@as(windows.UINT, 144), dpiFromWparam(makeWparamWords(144, 144)));
     try std.testing.expectEqual(@as(windows.UINT, 168), dpiFromWparam(makeWparamWords(0, 168)));
     try std.testing.expectEqual(@as(windows.UINT, Win32.Dpi.base), dpiFromWparam(0));
+    try std.testing.expectApproxEqAbs(@as(f64, 1.5), dpiScale(144), 1.0e-12);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), dpiScale(0), 1.0e-12);
 
     try std.testing.expectEqual(@as([2]u32, .{ 640, 480 }), rectSize(.{
         .left = 20,

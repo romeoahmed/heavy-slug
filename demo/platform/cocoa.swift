@@ -12,7 +12,7 @@ private let statusError: Int32 = 1
 private let appName = "heavy-slug"
 private let fallbackTitle = "heavy-slug Metal 4 demo"
 private let preciseScrollScale = 0.1
-private let hostProtocolVersion = protocolVersion(major: 2, minor: 0)
+private let hostProtocolVersion = protocolVersion(major: 2, minor: 1)
 
 private func protocolVersion(major: UInt32, minor: UInt32) -> UInt32 {
   (major << 16) | minor
@@ -85,7 +85,7 @@ private enum CreateRequestLayout {
 }
 
 private enum SnapshotLayout {
-  static let byteSize = 64
+  static let byteSize = 72
   static let protocolVersion = 0
   static let reserved0 = 4
   static let reserved1 = 8
@@ -98,6 +98,7 @@ private enum SnapshotLayout {
   static let scrollDelta = 48
   static let framebufferWidth = 56
   static let framebufferHeight = 60
+  static let displayScale = 64
 }
 
 private enum MetalHostLayout {
@@ -358,6 +359,11 @@ private func writeSnapshot(
     toByteOffset: SnapshotLayout.framebufferHeight,
     as: UInt32.self
   )
+  pointer.storeBytes(
+    of: host.displayScale,
+    toByteOffset: SnapshotLayout.displayScale,
+    as: Double.self
+  )
   host.scrollDelta = 0
 }
 
@@ -422,6 +428,7 @@ private final class DemoWindowHost {
   var scrollDelta = 0.0
   var framebufferWidth: UInt32 = 0
   var framebufferHeight: UInt32 = 0
+  var displayScale = 1.0
   var shouldClose = false
 
   init(device: MTLDevice, commandQueue: MTL4CommandQueue, layer: CAMetalLayer) {
@@ -457,6 +464,7 @@ private final class DemoWindowHost {
     guard let view else {
       framebufferWidth = 0
       framebufferHeight = 0
+      displayScale = 1
       return
     }
 
@@ -465,6 +473,7 @@ private final class DemoWindowHost {
     guard bounds.width > 0, bounds.height > 0 else {
       framebufferWidth = 0
       framebufferHeight = 0
+      displayScale = 1
       return
     }
 
@@ -474,14 +483,16 @@ private final class DemoWindowHost {
     guard width > 0, height > 0 else {
       framebufferWidth = 0
       framebufferHeight = 0
+      displayScale = 1
       return
     }
 
-    layer.contentsScale = contentsScale(
-      logicalBounds: bounds, backingBounds: backingBounds, window: window)
+    let scale = contentsScale(logicalBounds: bounds, backingBounds: backingBounds, window: window)
+    layer.contentsScale = scale
     layer.drawableSize = CGSize(width: CGFloat(width), height: CGFloat(height))
     framebufferWidth = width
     framebufferHeight = height
+    displayScale = Double(scale)
   }
 
   func updateCursor(in view: NSView, point: CGPoint) {

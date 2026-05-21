@@ -12,8 +12,9 @@ implementation history belongs in commits and code review notes.
 
 ### Added
 
-- **Demo FPS overlay:** the shared demo scene now renders a backend-neutral
-  frames-per-second readout in screen space.
+- **Demo metrics overlay:** the shared demo scene now renders a
+  backend-neutral screen-space readout for FPS, relative view zoom, and native
+  display scale.
 - **Direct-present demo surface contract:** Vulkan demos now model platform
   presentation as a direct WSI swapchain path. Wayland binds
   linux-dmabuf-v1 feedback when advertised; Windows documents that DXGI shared

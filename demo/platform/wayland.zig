@@ -1220,6 +1220,10 @@ pub const Window = struct {
         return .{ self.framebuffer_width, self.framebuffer_height };
     }
 
+    pub fn displayScale(self: *const Window) f64 {
+        return scaleFloat(self.effectiveScaleNumerator());
+    }
+
     pub fn time(self: *const Window) f64 {
         return monotonicSeconds() - self.start_time;
     }
@@ -2512,4 +2516,7 @@ test "Wayland: fractional scale owns buffer sizing" {
     try std.testing.expect(!scale.update(150));
     try std.testing.expect(!scale.update(0));
     try std.testing.expectEqual(@as(u32, 150), scale.numerator);
+
+    var window: Window = .{ .scale_state = scale };
+    try std.testing.expectApproxEqAbs(@as(f64, 1.25), window.displayScale(), 1.0e-12);
 }

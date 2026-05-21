@@ -38,7 +38,7 @@ const cocoa_mouse_button_count: usize = 2;
 const key_count = @typeInfo(demo_input.Key).@"enum".fields.len;
 const mouse_button_count = @typeInfo(demo_input.MouseButton).@"enum".fields.len;
 
-const window_protocol_version = ProtocolVersion.init(2, 0);
+const window_protocol_version = ProtocolVersion.init(2, 1);
 const window_protocol_version_word: u32 = window_protocol_version.word();
 
 const HostPointers = extern struct {
@@ -97,6 +97,7 @@ const Snapshot = extern struct {
     scroll_delta: f64 = 0,
     framebuffer_width: u32 = 0,
     framebuffer_height: u32 = 0,
+    display_scale: f64 = 1,
 };
 
 extern fn hs_demo_cocoa_window_create(
@@ -145,6 +146,7 @@ pub const Window = struct {
     input_state: demo_input.State = .{},
     framebuffer_width: u32 = 0,
     framebuffer_height: u32 = 0,
+    display_scale: f64 = 1,
     should_close: bool = false,
 
     pub fn init(self: *Window, options: Options) Error!void {
@@ -190,6 +192,10 @@ pub const Window = struct {
 
     pub fn framebufferSize(self: *const Window) [2]u32 {
         return .{ self.framebuffer_width, self.framebuffer_height };
+    }
+
+    pub fn displayScale(self: *const Window) f64 {
+        return sanitizeDisplayScale(self.display_scale);
     }
 
     pub fn time(self: *const Window) f64 {
@@ -242,12 +248,17 @@ pub const Window = struct {
         self.input_state.addScroll(snapshot.scroll_delta);
         self.framebuffer_width = snapshot.framebuffer_width;
         self.framebuffer_height = snapshot.framebuffer_height;
+        self.display_scale = sanitizeDisplayScale(snapshot.display_scale);
         self.should_close = snapshot.should_close != 0;
     }
 };
 
 fn validInitialExtent(width: c_int, height: c_int) bool {
     return width > 0 and height > 0;
+}
+
+fn sanitizeDisplayScale(value: f64) f64 {
+    return if (std.math.isFinite(value) and value > 0) value else 1.0;
 }
 
 comptime {
@@ -289,7 +300,7 @@ test "Cocoa window requires positive initial extents" {
 }
 
 test "Cocoa window protocol uses shared major minor encoding" {
-    try std.testing.expectEqual(ProtocolVersion.init(2, 0).word(), window_protocol_version_word);
+    try std.testing.expectEqual(ProtocolVersion.init(2, 1).word(), window_protocol_version_word);
 }
 
 test "Cocoa create request ABI layout is explicit" {
@@ -324,7 +335,7 @@ test "Cocoa create request carries explicit initial color scheme" {
 
 test "Cocoa snapshot ABI layout is explicit" {
     try std.testing.expectEqual(@as(usize, 8), @alignOf(Snapshot));
-    try std.testing.expectEqual(@as(usize, 64), @sizeOf(Snapshot));
+    try std.testing.expectEqual(@as(usize, 72), @sizeOf(Snapshot));
     try std.testing.expectEqual(@as(usize, 0), @offsetOf(Snapshot, "protocol_version"));
     try std.testing.expectEqual(@as(usize, 16), @offsetOf(Snapshot, "keys"));
     try std.testing.expectEqual(@as(usize, 26), @offsetOf(Snapshot, "mouse_buttons"));
@@ -334,6 +345,8 @@ test "Cocoa snapshot ABI layout is explicit" {
     try std.testing.expectEqual(@as(usize, 48), @offsetOf(Snapshot, "scroll_delta"));
     try std.testing.expectEqual(@as(usize, 56), @offsetOf(Snapshot, "framebuffer_width"));
     try std.testing.expectEqual(@as(usize, 60), @offsetOf(Snapshot, "framebuffer_height"));
+    try std.testing.expectEqual(@as(usize, 64), @offsetOf(Snapshot, "display_scale"));
+    try std.testing.expectApproxEqAbs(@as(f64, 1), sanitizeDisplayScale(std.math.inf(f64)), 1.0e-12);
 }
 
 test "Cocoa Metal host ABI layout is explicit" {
