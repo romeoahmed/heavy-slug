@@ -263,9 +263,16 @@ fn parseVersionPart(text: []const u8) ?usize {
     return std.fmt.parseInt(usize, text, 10) catch null;
 }
 
-// Swift object files record these in LC_LINKER_OPTION, but Zig 0.16 does not
-// consume Swift autolink commands from standalone object files. Keep this list
-// in sync with `otool -l` for the bridge sources compiled by Swift 6.3.
+// Swift object files record these in LC_LINKER_OPTION, but Zig 0.16's
+// self-hosted Mach-O linker does not yet consume autolink commands from
+// standalone object files. This list mirrors what `otool -l <bridge>.o` emits
+// for the Swift 6.3 bridge sources; keep it in sync when the bridge gains a
+// new `import` that pulls in a runtime overlay.
+//
+// TODO: drop this manual list once Zig parses LC_LINKER_OPTION from input
+// objects. Tracked indirectly by the Mach-O self-hosted linker umbrella
+// (ziglang/zig#8727); no dedicated issue exists for autolink-directive
+// consumption yet.
 const swift_libraries = [_][]const u8{
     "swiftCore",
     "swiftCoreFoundation",
