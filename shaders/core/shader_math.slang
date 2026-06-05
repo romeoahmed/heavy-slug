@@ -15,6 +15,10 @@ public static const int kI32Min = -2147483647 - 1;
 public static const int kI32Max = 2147483647;
 public static const int kExactF32IntRadius = 16777216;
 
+// kI32MinFloat is exactly representable in f32 (-2^31), but the matching
+// positive boundary is not: 2147483647 rounds up to 2^31, which would
+// overflow on conversion. 2147483520 = 2^31 - 128 is the largest f32 value
+// that rounds down to an i32 (f32 ULP at 2^31 is 128).
 static const float kI32MinFloat = -2147483648.0;
 static const float kI32MaxFloat = 2147483520.0;
 
