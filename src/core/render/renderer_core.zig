@@ -459,6 +459,25 @@ pub const RendererCore = struct {
         }
     }
 
+    /// Record the GPU frame token after which any newly-queued retirement
+    /// is safe to free. Backends invoke this three times per frame, and each
+    /// call is intentional:
+    ///
+    ///   1. Before `unloadFont` — token = `last_submitted_frame`. Evictions
+    ///      from the cache removal wait for the most recent in-flight frame
+    ///      that may still reference the font's blobs.
+    ///   2. Inside `reserveFrameSlot`, immediately before `beginFrame` —
+    ///      token = `last_submitted_frame`. Any mid-frame eviction triggered
+    ///      by `ensureGlyphCached` (cache full) is bound to the latest
+    ///      already-submitted frame, not the one we are about to record.
+    ///   3. After a successful `submitFrame` — token = the freshly bumped
+    ///      `last_submitted_frame`. From this point on, evictions queued for
+    ///      later frames are protected against the work we just submitted.
+    ///
+    /// The token written by call (2) intentionally trails by one frame so
+    /// that resources newly inserted *this* frame — which never enter the
+    /// retirement queue because they live in the hot/cold cache tier — are
+    /// never freed beneath a GPU that is still consuming them.
     pub fn setRetireAfterToken(self: *RendererCore, token: FrameToken) void {
         self.store.setRetireAfterToken(token);
     }
