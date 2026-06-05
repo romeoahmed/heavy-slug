@@ -12,17 +12,16 @@ private let frameSlotCount = 3
 private let drawRequestProtocolVersion = protocolVersion(major: 1, minor: 1)
 private let drawRequestFlagClearOnly: UInt32 = 1 << 0
 private let drawRequestKnownFlags = drawRequestFlagClearOnly
+// Buffer-slot constants mirror src/gpu/resource_model.zig::BufferBinding.
+// `frameParams` is pinned to slot 4 via an explicit `register(b4)` on the
+// Slang push-constant declaration, so the index — and the argument-table
+// bind count — are independent of the shader-stats build flag.
 private let bufferGlyphPool: UInt32 = 0
 private let bufferGlyphs: UInt32 = 1
 private let bufferMeshlets: UInt32 = 2
 private let bufferShaderStats: UInt32 = 3
-#if HEAVY_SLUG_SHADER_STATS
-  private let bufferFrameParams: UInt32 = 4
-  private let bufferBindCount = 5
-#else
-  private let bufferFrameParams: UInt32 = 3
-  private let bufferBindCount = 4
-#endif
+private let bufferFrameParams: UInt32 = 4
+private let bufferBindCount = 5
 private let objectThreadgroupSize = 0
 private let meshThreadgroupSize = 32
 private let maxMeshThreadgroupsPerDraw: UInt32 = 1024
