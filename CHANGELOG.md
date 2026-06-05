@@ -53,6 +53,51 @@ implementation history belongs in commits and code review notes.
   old shape needed for `Core (macOS)` and `Metal`. `zig build msl` moves to
   the macOS runner because it shells out to `xcrun -sdk macosx metal`, which
   only exists on Apple toolchains.
+- **Metal `frame_params` buffer slot pinned to 4:** the Slang push-constant
+  declaration in `shaders/backend_metal/resources.slang` carries an explicit
+  `register(b4)` so the emitted MSL parameter always lands in Metal
+  `[[buffer(4)]]` regardless of whether the optional shader-stats
+  `RWStructuredBuffer` at slot 3 is compiled in. `BufferBinding.frame_params`
+  joins the shared resource model, the Swift bridge drops its
+  `#if HEAVY_SLUG_SHADER_STATS` slot-shuffling, and the Metal argument-table
+  bind count is now a constant 5.
+- **Vulkan shader-object stage indices derived from a `GraphicsStage` enum:**
+  the previous magic constants (`mesh_bind_index = 5`,
+  `fragment_bind_index = 6`) and the parallel `graphics_bind_stages` array
+  are now built from a single seven-variant enum, removing the duplicated
+  enumeration of pre-raster graphics stages.
+- **Vulkan analytic coverage solver gains margin and a short-circuit:**
+  `solveMonotoneCubicAt` in `shaders/core/coverage_integral.slang` (and the
+  matching CPU `solveMonotoneCubicAtForTest` in `src/core/outline/encode.zig`)
+  raises its iteration cap from 24 to 40 and folds the `abs(f) <= eps`
+  early-exit into the loop guard so well-conditioned curves still finish in
+  single digits while extreme renderer-policy scales reliably converge.
+- **`resolveCoverage` even-odd branch no longer multiplies through unused
+  sign factors:** the previous `fillSign * detSign * windingCoverage`
+  multiplication was discarded on the even-odd path; the shader now returns
+  the triangle-wave coverage directly and the non-zero path is the only one
+  that consumes the sign factors.
+- **`cubicAt` written as explicit two-stage de Casteljau:** the inner
+  `(p1*u + p2*t)` blend is computed once and reused for both quadratic
+  outputs instead of relying on downstream common-subexpression elimination.
+- **Vulkan demo `vkAcquireNextImage2KHR` no longer waits forever:** the
+  timeout drops from `UINT64_MAX` to one second; `VK_TIMEOUT` and
+  `VK_NOT_READY` (both spec-listed success codes) are now treated the same
+  as a non-acquirable swapchain image, returning to the host so the next
+  iteration can retry. A wedged compositor or stalled GPU no longer hangs
+  the demo's main loop.
+- **`MetalFrameSlot` cross-thread fields marked `nonisolated(unsafe)`:**
+  `reserved`, `failed`, and `failureMessage` are still serialized through
+  the slot's `DispatchSemaphore`; the explicit annotation lets the Swift 6
+  `-strict-concurrency=complete` analyzer accept the existing
+  happens-before edge without forcing a redundant lock.
+- **`kI32MaxFloat` rationale captured in `shaders/core/shader_math.slang`:**
+  added the derivation `2^31 − 128 = 2147483520` (f32 ULP at `2^31` is 128)
+  inline so the constant no longer reads like a typo of `INT32_MAX`.
+- **Slang internal coverage helpers annotated for visibility intent:** the
+  Gauss-Legendre quadrature weights and parameter/root epsilons in
+  `shaders/core/coverage_integral.slang` carry inline comments distinguishing
+  them from the cross-module `kCoverageEpsilon`.
 
 ### Added
 
