@@ -17,7 +17,7 @@ name: CI
       slang_version:
         description: "Slang release version or tag."
         required: false
-        default: "2026.9"
+        default: "2026.10.2"
         type: string
 
 permissions:
@@ -47,7 +47,7 @@ jobs:
     uses: ./.github/workflows/_shaders.yml
     with:
       zig_version: ${{ github.event.inputs.zig_version || 'from-zon' }}
-      slang_version: ${{ github.event.inputs.slang_version || '2026.9' }}
+      slang_version: ${{ github.event.inputs.slang_version || '2026.10.2' }}
 
   vulkan:
     name: Vulkan
@@ -55,7 +55,7 @@ jobs:
     uses: ./.github/workflows/_vulkan.yml
     with:
       zig_version: ${{ github.event.inputs.zig_version || 'from-zon' }}
-      slang_version: ${{ github.event.inputs.slang_version || '2026.9' }}
+      slang_version: ${{ github.event.inputs.slang_version || '2026.10.2' }}
 
   metal:
     name: Metal
@@ -63,4 +63,4 @@ jobs:
     uses: ./.github/workflows/_metal.yml
     with:
       zig_version: ${{ github.event.inputs.zig_version || 'from-zon' }}
-      slang_version: ${{ github.event.inputs.slang_version || '2026.9' }}
+      slang_version: ${{ github.event.inputs.slang_version || '2026.10.2' }}

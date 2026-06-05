@@ -9,7 +9,7 @@ name: Reusable Metal
         type: string
       slang_version:
         required: false
-        default: "2026.9"
+        default: "2026.10.2"
         type: string
 
 permissions:
