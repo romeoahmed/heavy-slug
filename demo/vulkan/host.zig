@@ -388,6 +388,14 @@ pub const Host = struct {
             error.OutOfDateKHR => return null,
             else => return err,
         };
+        // VK_TIMEOUT / VK_NOT_READY are success codes that mean the next
+        // drawable isn't available within the bounded wait; just skip this
+        // frame and let the host try again next iteration.
+        switch (acquire_result.result) {
+            .success, .suboptimal_khr => {},
+            .timeout, .not_ready => return null,
+            else => return error.SwapchainImageIndexInvalid,
+        }
         const image_index_usize: usize = @intCast(acquire_result.image_index);
         if (image_index_usize >= self.swapchain_images.len) return error.SwapchainImageIndexInvalid;
         const image_state = &self.swapchain_images[image_index_usize];
@@ -509,10 +517,18 @@ pub const Host = struct {
         _ = try self.endFrame(frame);
     }
 
+    /// Block at most one second for the next swapchain image. A wedged
+    /// compositor or a stalled GPU should not freeze the demo's main loop
+    /// indefinitely; on VK_TIMEOUT we report it the same way as
+    /// VK_NOT_READY and let the caller skip this frame. Per the Vulkan 1.4
+    /// `vkAcquireNextImage2KHR` Return Codes list, both are non-error
+    /// success codes that the wrapper exposes in `.result`.
+    const acquire_timeout_ns: u64 = std.time.ns_per_s;
+
     fn acquireNextImage(self: *Host, semaphore: vk.Semaphore) !AcquiredImage {
         const acquire_info = vk.AcquireNextImageInfoKHR{
             .swapchain = self.swapchain,
-            .timeout = std.math.maxInt(u64),
+            .timeout = acquire_timeout_ns,
             .semaphore = semaphore,
             .fence = .null_handle,
             .device_mask = 1,
