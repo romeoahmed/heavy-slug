@@ -192,6 +192,15 @@ Cubic subCubic(Cubic curve, float ta, float tb)
     }
 }
 
+// Precondition: `curve` must be monotone in BOTH x and y over [0, 1].
+// The only caller is `integrateCurve` (below), which guarantees this by
+// splitting the input cubic at every dy/dt = 0 and dx/dt = 0 root before
+// calling. With monotonicity in y, mapping clip planes y = ±0.5 back to
+// parameter space reduces to one Newton solve in `solveMonotoneCubicAt`;
+// with monotonicity in x, the x = ±0.5 crossings produce at most two
+// split parameters (`r0`, `r1`), yielding the three Gauss-integrated
+// spans below. Passing a non-monotone curve will silently undercount
+// crossings and corrupt the signed area.
 [ForceInline] float integrateYMonotoneCoverage(Cubic curve)
 {
     float curveStartY = curve.p0.y;
