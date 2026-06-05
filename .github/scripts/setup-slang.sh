@@ -21,7 +21,7 @@ case "${1:-}" in
 esac
 
 tool_root="${HEAVY_SLUG_TOOL_ROOT:-$HOME/.cache/heavy-slug/toolchains}"
-requested="${SLANG_VERSION:-2026.9}"
+requested="${SLANG_VERSION:-2026.10.2}"
 
 require_command() {
     if ! command -v "$1" >/dev/null 2>&1; then

@@ -170,7 +170,7 @@ $toolRoot = if ($env:HEAVY_SLUG_TOOL_ROOT) {
 } else {
     Join-Path (HomeDir) '.cache/heavy-slug/toolchains'
 }
-$requested = if ($env:SLANG_VERSION) { $env:SLANG_VERSION } else { '2026.9' }
+$requested = if ($env:SLANG_VERSION) { $env:SLANG_VERSION } else { '2026.10.2' }
 $platform = if ($env:SLANG_PLATFORM) { $env:SLANG_PLATFORM } else { InferPlatform }
 $assetPattern = if ($env:SLANG_ASSET_PATTERN) { $env:SLANG_ASSET_PATTERN } else { '' }
 

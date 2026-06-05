@@ -5,7 +5,7 @@ inputs:
   version:
     description: Slang release version or tag.
     required: false
-    default: "2026.9"
+    default: "2026.10.2"
 
 outputs:
   version:
