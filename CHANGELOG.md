@@ -106,6 +106,21 @@ implementation history belongs in commits and code review notes.
   Vulkan/Metal blend equation, and `Color.straight(r, g, b, a)` /
   `Color.premultiplied(r, g, b, a)` constructors replace the ambiguous
   `Color.fromRgba`. Debug builds assert premultiplied invariants.
+- **Renderer lifetime invariants written down:** `RendererCore.setRetireAfterToken`
+  documents why the three intentional per-frame calls (pre-unload, pre-begin,
+  post-submit) all use `last_submitted_frame` and what the trailing-by-one
+  semantics protect; `backend_contract.zig` records the `uploadBlob` /
+  `retireBlob` / `pool_alloc` invariant that lets the bundled Vulkan and
+  Metal backends treat `retireBlob` as a no-op alongside the mandatory
+  `pool_alloc.free`. `Rect.init`'s doc-comment now spells out the Zig 0.16
+  `@min`/`@max` NaN behavior (NaN inputs are silently replaced by the other
+  extent rather than propagated). The Slang `integrateYMonotoneCoverage`
+  helper documents that callers must supply a curve monotone in both x and
+  y, with `integrateCurve` enforcing this by splitting at derivative roots.
+  The Cocoa demo's `_ = layer.residencySet` line explains the
+  force-materialise idiom that lets the Metal bridge read
+  `CAMetalLayer.residencySet` (macOS 26.0+, get-only) from an arbitrary
+  thread without a lazy-init race.
 - **Demo metrics overlay:** the shared demo scene now renders a
   backend-neutral screen-space readout for FPS, relative view zoom, and native
   display scale.
