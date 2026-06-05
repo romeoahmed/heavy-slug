@@ -451,9 +451,14 @@ pub const Host = struct {
             .value = 0,
             .device_index = 0,
         };
+        // The command buffer's final GPU writes are color attachment stores;
+        // the present queue only needs to wait on COLOR_ATTACHMENT_OUTPUT
+        // rather than ALL_COMMANDS, allowing the driver to overlap any
+        // subsequent presentation setup with later-stage work.
+        // (Vulkan 1.4 §6.4.4 "Semaphore Signaling and Waiting".)
         const signal_info = vk.SemaphoreSubmitInfo{
             .semaphore = image_state.render_complete,
-            .stage_mask = .{ .all_commands_bit = true },
+            .stage_mask = .{ .color_attachment_output_bit = true },
             .value = 0,
             .device_index = 0,
         };
