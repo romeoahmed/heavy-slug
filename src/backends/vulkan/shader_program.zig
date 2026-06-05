@@ -6,25 +6,45 @@ const gpu_context = @import("context.zig");
 const bindings = @import("bindings.zig");
 const spirv = @import("spirv_shaders");
 
-const shader_object_stages = [_]vk.ShaderStageFlags{
-    .{ .mesh_bit_ext = true },
-    .{ .fragment_bit = true },
+/// Order matches the Vulkan 1.4 `vkCmdBindShadersEXT` graphics-stage list
+/// (§10.7 "Shader Objects"): one slot for every graphics stage that can be
+/// bound through a shader object, so the harness clears every slot it does
+/// not use in one call.
+const GraphicsStage = enum {
+    vertex,
+    tessellation_control,
+    tessellation_evaluation,
+    geometry,
+    task,
+    mesh,
+    fragment,
 };
 
-const graphics_bind_stages = [_]vk.ShaderStageFlags{
-    .{ .vertex_bit = true },
-    .{ .tessellation_control_bit = true },
-    .{ .tessellation_evaluation_bit = true },
-    .{ .geometry_bit = true },
-    .{ .task_bit_ext = true },
+const graphics_stage_count = @typeInfo(GraphicsStage).@"enum".fields.len;
+
+const graphics_bind_stages: [graphics_stage_count]vk.ShaderStageFlags = blk: {
+    var out: [graphics_stage_count]vk.ShaderStageFlags = undefined;
+    out[@intFromEnum(GraphicsStage.vertex)] = .{ .vertex_bit = true };
+    out[@intFromEnum(GraphicsStage.tessellation_control)] = .{ .tessellation_control_bit = true };
+    out[@intFromEnum(GraphicsStage.tessellation_evaluation)] = .{ .tessellation_evaluation_bit = true };
+    out[@intFromEnum(GraphicsStage.geometry)] = .{ .geometry_bit = true };
+    out[@intFromEnum(GraphicsStage.task)] = .{ .task_bit_ext = true };
+    out[@intFromEnum(GraphicsStage.mesh)] = .{ .mesh_bit_ext = true };
+    out[@intFromEnum(GraphicsStage.fragment)] = .{ .fragment_bit = true };
+    break :blk out;
+};
+
+const mesh_bind_index: comptime_int = @intFromEnum(GraphicsStage.mesh);
+const fragment_bind_index: comptime_int = @intFromEnum(GraphicsStage.fragment);
+
+/// Shader-object creation order — only mesh and fragment are linked.
+const shader_object_stages = [_]vk.ShaderStageFlags{
     .{ .mesh_bit_ext = true },
     .{ .fragment_bit = true },
 };
 
 const mesh_shader_index = 0;
 const fragment_shader_index = 1;
-const mesh_bind_index = 5;
-const fragment_bind_index = 6;
 
 pub const ShaderProgram = struct {
     device: vk.Device,
@@ -237,11 +257,12 @@ test "shader object creation stages are linked mesh and fragment" {
 }
 
 test "shader object bind stages explicitly clear unused pre-raster stages" {
-    try std.testing.expect(graphics_bind_stages[0].vertex_bit);
-    try std.testing.expect(graphics_bind_stages[1].tessellation_control_bit);
-    try std.testing.expect(graphics_bind_stages[2].tessellation_evaluation_bit);
-    try std.testing.expect(graphics_bind_stages[3].geometry_bit);
-    try std.testing.expect(graphics_bind_stages[4].task_bit_ext);
+    try std.testing.expectEqual(@as(usize, 7), graphics_stage_count);
+    try std.testing.expect(graphics_bind_stages[@intFromEnum(GraphicsStage.vertex)].vertex_bit);
+    try std.testing.expect(graphics_bind_stages[@intFromEnum(GraphicsStage.tessellation_control)].tessellation_control_bit);
+    try std.testing.expect(graphics_bind_stages[@intFromEnum(GraphicsStage.tessellation_evaluation)].tessellation_evaluation_bit);
+    try std.testing.expect(graphics_bind_stages[@intFromEnum(GraphicsStage.geometry)].geometry_bit);
+    try std.testing.expect(graphics_bind_stages[@intFromEnum(GraphicsStage.task)].task_bit_ext);
     try std.testing.expect(graphics_bind_stages[mesh_bind_index].mesh_bit_ext);
     try std.testing.expect(graphics_bind_stages[fragment_bind_index].fragment_bit);
 }
