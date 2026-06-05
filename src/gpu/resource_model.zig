@@ -8,11 +8,18 @@ pub const ResourceModel = enum {
     single_glyph_pool_cpu_meshlets,
 };
 
+/// Buffer binding indices shared by both backends. Vulkan uses these as the
+/// descriptor `binding` numbers in set 0; Metal uses them directly as
+/// `[[buffer(N)]]` argument-table slots. The `frame_params` slot is pinned
+/// to 4 on Metal via an explicit `register(b4)` in
+/// `shaders/backend_metal/resources.slang`, so the slot is stable whether
+/// the optional `shader_stats` RW buffer at slot 3 is compiled in or not.
 pub const BufferBinding = enum(u32) {
     glyph_pool = 0,
     glyphs = 1,
     meshlets = 2,
     shader_stats = 3,
+    frame_params = 4,
 };
 
 pub const required_bindings = [_]BufferBinding{
@@ -25,20 +32,15 @@ pub const optional_bindings = [_]BufferBinding{
     .shader_stats,
 };
 
+pub const frame_params_binding: u32 = @intFromEnum(BufferBinding.frame_params);
+
 pub fn descriptorBindingCount(comptime shader_stats: bool) u32 {
     return required_bindings.len + @intFromBool(shader_stats);
 }
 
-pub fn frameParamsBinding(comptime shader_stats: bool) u32 {
-    return if (shader_stats)
-        @intFromEnum(BufferBinding.shader_stats) + 1
-    else
-        @intFromEnum(BufferBinding.shader_stats);
-}
-
-pub fn argumentTableBindingCount(comptime shader_stats: bool) u32 {
-    return frameParamsBinding(shader_stats) + 1;
-}
+/// Maximum buffer-binding slot used by the Metal argument table. Stable
+/// across `shader_stats` because `frame_params` is pinned at slot 4.
+pub const argument_table_bind_count: u32 = @intFromEnum(BufferBinding.frame_params) + 1;
 
 pub const max_descriptor_binding_count = descriptorBindingCount(true);
 
@@ -54,10 +56,9 @@ test "buffer bindings are stable across Vulkan and Metal paths" {
     try std.testing.expectEqual(@as(u32, 1), @intFromEnum(BufferBinding.glyphs));
     try std.testing.expectEqual(@as(u32, 2), @intFromEnum(BufferBinding.meshlets));
     try std.testing.expectEqual(@as(u32, 3), @intFromEnum(BufferBinding.shader_stats));
+    try std.testing.expectEqual(@as(u32, 4), @intFromEnum(BufferBinding.frame_params));
     try std.testing.expectEqual(@as(u32, 3), descriptorBindingCount(false));
     try std.testing.expectEqual(@as(u32, 4), descriptorBindingCount(true));
-    try std.testing.expectEqual(@as(u32, 3), frameParamsBinding(false));
-    try std.testing.expectEqual(@as(u32, 4), frameParamsBinding(true));
-    try std.testing.expectEqual(@as(u32, 4), argumentTableBindingCount(false));
-    try std.testing.expectEqual(@as(u32, 5), argumentTableBindingCount(true));
+    try std.testing.expectEqual(@as(u32, 4), frame_params_binding);
+    try std.testing.expectEqual(@as(u32, 5), argument_table_bind_count);
 }

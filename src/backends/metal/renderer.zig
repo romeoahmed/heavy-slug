@@ -486,9 +486,10 @@ test "Metal bridge resource indices match shared Slang ABI" {
     try std.testing.expectEqual(@as(u32, 0), indices.glyph_pool);
     try std.testing.expectEqual(@as(u32, 1), indices.glyphs);
     try std.testing.expectEqual(@as(u32, 2), indices.meshlets);
-    const params_index: u32 = if (backend_options.shader_stats) 4 else 3;
-    try std.testing.expectEqual(params_index, indices.frame_params);
     try std.testing.expectEqual(@as(u32, 3), indices.shader_stats);
+    // frame_params is pinned to slot 4 via `register(b4)` on the Slang
+    // push-constant, independent of the shader-stats build flag.
+    try std.testing.expectEqual(@as(u32, 4), indices.frame_params);
 }
 
 test "Embedded Metal library is a valid metallib container" {

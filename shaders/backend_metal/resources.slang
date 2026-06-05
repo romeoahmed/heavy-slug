@@ -19,5 +19,11 @@ public StructuredBuffer<GlyphMeshlet> meshlets;
 public RWStructuredBuffer<uint> shaderStats;
 #endif
 
+// Metal has no native push-constant slot; Slang materializes the push
+// constant as an ordinary buffer parameter and would otherwise auto-assign
+// its [[buffer(N)]] index. Pin it to slot 4 explicitly via `register(b4)`
+// so the CPU bridge uses a constant index regardless of whether the
+// optional shader-stats RW buffer at slot 3 is compiled in.
+// (Slang Metal target: register(bN)/tN/uN map to [[buffer(N)]].)
 [[vk::push_constant]]
-public FrameParams pc;
+public FrameParams pc : register(b4);
