@@ -54,8 +54,10 @@ modules expose the application-facing flow through `Context`, `Renderer`,
 `Frame`, `Target`, `RendererOptions`, `FontHandle`, `DrawTextResult`,
 `SubmitResult`, `FrameToken`, `Stats`, and
 `shader_stats_enabled`. Vulkan also exposes requirement helpers such as
-`required_api_version` and `required_device_extensions`; Metal exposes `Host`,
-the borrowed native object bundle used to create a backend context.
+`required_api_version` and `required_device_extensions`, plus
+`Renderer.setFixedRenderState(target)` which the host calls once per
+command buffer recording before the first `Frame.submit()`. Metal exposes
+`Host`, the borrowed native object bundle used to create a backend context.
 
 Typical frame shape:
 
