@@ -911,6 +911,12 @@ private func makeMetalLayer(device: MTLDevice) -> CAMetalLayer {
   layer.presentsWithTransaction = false
   layer.allowsNextDrawableTimeout = true
   layer.isOpaque = true
+  // Force CAMetalLayer to materialise its drawable residency set on the
+  // main actor before the Metal bridge reads `layer.residencySet` from
+  // an arbitrary thread in `MetalContext.init`. The get-only property
+  // (Apple, CAMetalLayer/residencySet, macOS 26.0+) lazily creates the
+  // `any MTLResidencySet` on first access; touching it here guarantees
+  // the bridge sees a stable, fully-initialised set.
   _ = layer.residencySet
   return layer
 }
