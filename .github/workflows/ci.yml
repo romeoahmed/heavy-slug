@@ -27,6 +27,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
+# Reusable workflows are organized by runner identity rather than by concern.
+# Each platform job pays checkout + Zig/Slang install + dependency fetch
+# exactly once and then runs every verification that platform can host. This
+# keeps macOS — the most expensive minute on GitHub-hosted CI — to a single
+# runner per CI run.
 jobs:
   quality:
     name: Quality
@@ -34,33 +39,26 @@ jobs:
     with:
       zig_version: ${{ github.event.inputs.zig_version || 'from-zon' }}
 
-  core:
-    name: Core
+  linux:
+    name: Linux
     needs: quality
-    uses: ./.github/workflows/_core.yml
-    with:
-      zig_version: ${{ github.event.inputs.zig_version || 'from-zon' }}
-
-  shaders:
-    name: Shaders
-    needs: quality
-    uses: ./.github/workflows/_shaders.yml
+    uses: ./.github/workflows/_linux.yml
     with:
       zig_version: ${{ github.event.inputs.zig_version || 'from-zon' }}
       slang_version: ${{ github.event.inputs.slang_version || '2026.10.2' }}
 
-  vulkan:
-    name: Vulkan
+  windows:
+    name: Windows
     needs: quality
-    uses: ./.github/workflows/_vulkan.yml
+    uses: ./.github/workflows/_windows.yml
     with:
       zig_version: ${{ github.event.inputs.zig_version || 'from-zon' }}
       slang_version: ${{ github.event.inputs.slang_version || '2026.10.2' }}
 
-  metal:
-    name: Metal
+  macos:
+    name: macOS
     needs: quality
-    uses: ./.github/workflows/_metal.yml
+    uses: ./.github/workflows/_macos.yml
     with:
       zig_version: ${{ github.event.inputs.zig_version || 'from-zon' }}
       slang_version: ${{ github.event.inputs.slang_version || '2026.10.2' }}

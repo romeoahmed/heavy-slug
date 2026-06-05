@@ -1,4 +1,8 @@
-name: Reusable Shaders
+name: Reusable Linux
+
+# Single Ubuntu runner that pays setup once and runs every Linux-eligible
+# verification: core tests, Slang -> SPIR-V compile, Vulkan backend (with the
+# shader-stat variant), and the Wayland Vulkan demo build.
 
 "on":
   workflow_call:
@@ -16,10 +20,10 @@ permissions:
   contents: read
 
 jobs:
-  shaders:
-    name: Shaders
+  linux:
+    name: Linux
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -37,16 +41,31 @@ jobs:
         with:
           version: ${{ inputs.slang_version }}
 
+      - name: Install Wayland demo packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwayland-bin libwayland-dev libxkbcommon-dev wayland-protocols
+
       - name: Fetch Zig dependencies
         uses: ./.github/actions/fetch-zig-deps
         with:
-          build-args: spirv msl
+          build-args: test -Dvulkan=true -Ddemo=true -Ddemo-backend=vulkan
+
+      - name: Run core tests
+        run: zig build test
 
       - name: Compile SPIR-V shaders
         run: zig build spirv
 
-      - name: Compile Metal shaders
-        run: zig build msl
+      - name: Run Vulkan backend tests
+        run: zig build test -Dvulkan=true
+
+      - name: Run Vulkan shader-stat tests
+        run: zig build test -Dvulkan=true -Dshader-stats=true
+
+      - name: Run Vulkan demo build tests
+        run: zig build test -Ddemo=true -Ddemo-backend=vulkan
 
       - name: Save Zig package cache
         uses: ./.github/actions/save-zig-package-cache

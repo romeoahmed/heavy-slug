@@ -1,4 +1,7 @@
-name: Reusable Vulkan
+name: Reusable Windows
+
+# Single Windows runner: core tests, Vulkan backend (with the shader-stat
+# variant), and the Win32 Vulkan demo build.
 
 "on":
   workflow_call:
@@ -16,23 +19,12 @@ permissions:
   contents: read
 
 jobs:
-  vulkan:
-    name: Vulkan (${{ matrix.name }})
-    runs-on: ${{ matrix.os }}
+  windows:
+    name: Windows
+    runs-on: windows-2025-vs2026
     timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Ubuntu
-            os: ubuntu-24.04
-            install_wayland: true
-          - name: Windows
-            os: windows-2025-vs2026
-            install_wayland: false
     steps:
       - name: Enable Git long paths before checkout
-        if: ${{ runner.os == 'Windows' }}
         shell: pwsh
         run: git config --global core.longpaths true
 
@@ -42,7 +34,6 @@ jobs:
           persist-credentials: false
 
       - name: Enable Windows long paths
-        if: ${{ runner.os == 'Windows' }}
         shell: pwsh
         run: ./.github/scripts/enable-windows-long-paths.ps1
 
@@ -57,16 +48,13 @@ jobs:
         with:
           version: ${{ inputs.slang_version }}
 
-      - name: Install Wayland demo packages
-        if: ${{ matrix.install_wayland }}
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libwayland-bin libwayland-dev libxkbcommon-dev wayland-protocols
-
       - name: Fetch Zig dependencies
         uses: ./.github/actions/fetch-zig-deps
         with:
-          build-args: test -Ddemo=true -Ddemo-backend=vulkan
+          build-args: test -Dvulkan=true -Ddemo=true -Ddemo-backend=vulkan
+
+      - name: Run core tests
+        run: zig build test
 
       - name: Run Vulkan backend tests
         run: zig build test -Dvulkan=true

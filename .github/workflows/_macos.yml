@@ -1,4 +1,11 @@
-name: Reusable Metal
+name: Reusable macOS
+
+# Single macOS runner — the most expensive minute on GitHub-hosted CI by a
+# wide margin (about 30x Linux per the GitHub Actions billing page), so this
+# job pays setup once and runs every Apple-only verification: core tests,
+# Swift formatting, Slang -> Metal IR/metallib link (needs xcrun metal, which
+# only exists on macOS), the Metal backend with its shader-stat variant, and
+# the Cocoa Metal demo build.
 
 "on":
   workflow_call:
@@ -16,8 +23,8 @@ permissions:
   contents: read
 
 jobs:
-  metal:
-    name: Metal
+  macos:
+    name: macOS
     runs-on: macos-26
     timeout-minutes: 90
     steps:
@@ -51,7 +58,13 @@ jobs:
       - name: Fetch Zig dependencies
         uses: ./.github/actions/fetch-zig-deps
         with:
-          build-args: test -Ddemo=true -Ddemo-backend=metal
+          build-args: test -Dmetal=true -Ddemo=true -Ddemo-backend=metal
+
+      - name: Run core tests
+        run: zig build test
+
+      - name: Compile Metal shaders
+        run: zig build msl
 
       - name: Run Metal backend tests
         run: zig build test -Dmetal=true
