@@ -44,6 +44,16 @@ implementation history belongs in commits and code review notes.
   emitted; the empty `cmdSetVertexInputEXT(null, null)` remains as a
   defensive no-op for validation-layer cleanliness.
 
+- **CI reusable workflows reorganized by runner identity:** the previous
+  by-concern split (`_core` × 3, `_shaders`, `_vulkan` × 2, `_metal`) is
+  replaced by `_quality`, `_linux`, `_windows`, and `_macos`. Each platform
+  job pays checkout + Zig/Slang setup + dependency fetch once and then runs
+  every verification that runner can host, cutting per-run GitHub-hosted
+  runner spawns from 7 to 4 and ending the duplicated macOS runner that the
+  old shape needed for `Core (macOS)` and `Metal`. `zig build msl` moves to
+  the macOS runner because it shells out to `xcrun -sdk macosx metal`, which
+  only exists on Apple toolchains.
+
 ### Added
 
 - **Premultiplied-alpha color contract documented:** `Color` doc-comment now
