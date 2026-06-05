@@ -35,17 +35,6 @@ public bool localQToScreenExact(
     return isFinite2(screen);
 }
 
-public bool glyphLocalQToScreen(GlyphInstance glyph, int2 localQ, out float2 screen)
-{
-    return localQToScreenExact(
-        glyph.screen_anchor_px,
-        glyph.screen_from_local_2x2,
-        glyph.precision_bits,
-        glyph.glyph_anchor_q,
-        localQ,
-        screen);
-}
-
 public bool meshletLocalQToScreen(GlyphInstance glyph, GlyphMeshlet meshlet, int2 localQ, out float2 screen)
 {
     return localQToScreenExact(

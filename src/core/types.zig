@@ -243,8 +243,7 @@ pub const PrecisionPolicy = extern struct {
     max_condition_number: f64 = 1.0e8,
     min_fraction_bits: u8 = 12,
     max_fraction_bits: u8 = 24,
-    hysteresis_frames: u8 = 8,
-    _pad: u8 = 0,
+    _pad: [6]u8 = .{0} ** 6,
 
     pub fn selectFractionBits(self: PrecisionPolicy, screen_from_local: Transform) PrecisionSelectionError!PrecisionSelection {
         if (!screen_from_local.isFinite()) return error.InvalidTransform;
@@ -290,11 +289,6 @@ pub const PrecisionPolicy = extern struct {
             .sigma = sigma,
             .condition = condition,
         } };
-    }
-
-    pub fn fixedScale(_: PrecisionPolicy, fraction_bits: u8) !i32 {
-        if (fraction_bits > 30) return error.PrecisionUnsupported;
-        return @as(i32, 1) << @intCast(fraction_bits);
     }
 };
 
@@ -357,6 +351,7 @@ comptime {
     std.debug.assert(@sizeOf(Rect) == 32);
     std.debug.assert(@sizeOf(Transform) == 48);
     std.debug.assert(@sizeOf(View) == 64);
+    std.debug.assert(@sizeOf(PrecisionPolicy) == 24);
     std.debug.assert(@sizeOf(FontHandle) == 4);
 }
 

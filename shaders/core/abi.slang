@@ -36,7 +36,6 @@ public struct FrameParams
 };
 
 public static const uint kMeshThreadCount = 32;
-public static const uint kMaxSubdivisionsPerGlyph = 16;
 public static const uint kMeshOutputVertices = 8;
 public static const uint kMeshOutputPrimitives = 6;
 public static const uint kMaxMergedCandidateBands = 8;
