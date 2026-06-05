@@ -277,7 +277,8 @@ fn solveMonotoneCubicAtForTest(p0: f64, p1: f64, p2: f64, p3: f64, value: f64) f
     const denom = p3 - p0;
     var t = if (@abs(denom) > eps) std.math.clamp((value - p0) / denom, 0.0, 1.0) else 0.5;
 
-    for (0..12) |_| {
+    // 40 iterations + early-exit, matching shaders/core/coverage_integral.slang.
+    for (0..40) |_| {
         const f = cubicAtForTest(p0, p1, p2, p3, t) - value;
         if (@abs(f) <= eps) return std.math.clamp(t, 0.0, 1.0);
 

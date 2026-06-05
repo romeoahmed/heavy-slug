@@ -14,18 +14,31 @@ struct Cubic
     float2 p3;
 };
 
+// Shared across modules — fragment.slang reads it for stats reporting.
 public static const float kCoverageEpsilon = 1.0 / 1048576.0;
+
+// Internal — keep within this module.
 static const float kParamEpsilon = 1.0e-8;
 static const float kRootMergeEpsilon = 1.0e-7;
+// 3-point Gauss-Legendre on [-1, 1] (exact for polynomials up to degree 5,
+// which is what (x(t) - x_L) * y'(t) evaluates to for a cubic Bézier curve).
 static const float kGaussRoot = 0.7745966692414834;
 static const float kGaussSideWeight = 0.5555555555555556;
 static const float kGaussCenterWeight = 0.8888888888888888;
 
 [ForceInline] float cubicAt(float p0, float p1, float p2, float p3, float t)
 {
+    // Two-stage de Casteljau: l_i are first-pass linear blends, q_i are
+    // second-pass quadratics. Written out explicitly so the shared
+    // (p1*u + p2*t) blend is computed once rather than relying on the
+    // downstream optimizer to common-subexpression-eliminate it.
     float u = 1.0 - t;
-    return ((p0 * u + p1 * t) * u + (p1 * u + p2 * t) * t) * u +
-           ((p1 * u + p2 * t) * u + (p2 * u + p3 * t) * t) * t;
+    float l0 = p0 * u + p1 * t;
+    float l1 = p1 * u + p2 * t;
+    float l2 = p2 * u + p3 * t;
+    float q0 = l0 * u + l1 * t;
+    float q1 = l1 * u + l2 * t;
+    return q0 * u + q1 * t;
 }
 
 [ForceInline] float cubicAxisDerivative(float p0, float p1, float p2, float p3, float t)
@@ -52,12 +65,13 @@ static const float kGaussCenterWeight = 0.8888888888888888;
     float denom = p3 - p0;
     float t = abs(denom) > kCoverageEpsilon ? saturate((value - p0) / denom) : 0.5;
 
-    for (uint i = 0; i < 24; i++)
+    // 40 iterations (was 24): at extreme renderer-policy scales the inner
+    // bisection-fallback worst case needed extra steps to drive the residual
+    // below kCoverageEpsilon. The early-exit guard turns the cap into a
+    // loose upper bound that converges in single digits for normal curves.
+    float f = cubicAt(p0, p1, p2, p3, t) - value;
+    for (uint i = 0; i < 40 && abs(f) > kCoverageEpsilon; i++)
     {
-        float f = cubicAt(p0, p1, p2, p3, t) - value;
-        if (abs(f) <= kCoverageEpsilon)
-            return saturate(t);
-
         float df = cubicAxisDerivative(p0, p1, p2, p3, t);
         bool sameSideAsLo = (f <= 0.0 && flo <= 0.0) || (f >= 0.0 && flo >= 0.0);
         if (sameSideAsLo)
@@ -73,6 +87,7 @@ static const float kGaussCenterWeight = 0.8888888888888888;
         float newton = t - f / df;
         bool useBisect = abs(df) < kCoverageEpsilon || newton <= lo || newton >= hi || !isfinite(newton);
         t = useBisect ? (lo + hi) * 0.5 : newton;
+        f = cubicAt(p0, p1, p2, p3, t) - value;
     }
 
     return saturate(t);
@@ -412,21 +427,16 @@ Cubic subCubic(Cubic curve, float ta, float tb)
 
 [ForceInline] public float resolveCoverage(float signedArea, float fillSign, float detSign, uint flags)
 {
-    float windingCoverage = signedArea;
-    float coverage = fillSign * detSign * windingCoverage;
-
     bool evenOdd = (flags & 1u) != 0u;
     if (evenOdd)
     {
-        coverage = abs(windingCoverage);
-        coverage = 1.0 - abs(1.0 - frac(coverage * 0.5) * 2.0);
-    }
-    else
-    {
-        coverage = saturate(coverage);
+        // Even-odd is a triangle wave on |signedArea|; the sign of the
+        // accumulated area (and hence fillSign / detSign) drops out.
+        float w = abs(signedArea);
+        return 1.0 - abs(1.0 - frac(w * 0.5) * 2.0);
     }
 
-    return coverage;
+    return saturate(fillSign * detSign * signedArea);
 }
 
 [ForceInline] public bool integrateCurvePayload(
