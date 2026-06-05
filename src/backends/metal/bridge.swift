@@ -252,9 +252,15 @@ private final class MetalFrameSlot: @unchecked Sendable {
   private let semaphore = DispatchSemaphore(value: 1)
   let allocator: MTL4CommandAllocator
   let arguments: MTL4ArgumentTable
-  var reserved = false
-  private var failed = false
-  private var failureMessage: String?
+  // `reserved`, `failed`, and `failureMessage` cross threads but rely on the
+  // happens-before edge that `semaphore.wait()` and `semaphore.signal()`
+  // already establish (Swift Concurrency Manifesto §"Adopting Strict
+  // Concurrency Checking"). Mark them `nonisolated(unsafe)` so the
+  // `-strict-concurrency=complete` mode under Swift 6 stops flagging them
+  // without forcing an unnecessary additional lock.
+  nonisolated(unsafe) var reserved = false
+  nonisolated(unsafe) private var failed = false
+  nonisolated(unsafe) private var failureMessage: String?
 
   init(device: MTLDevice, index: Int) throws {
     let allocatorDescriptor = MTL4CommandAllocatorDescriptor()
