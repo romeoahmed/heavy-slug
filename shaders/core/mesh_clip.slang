@@ -13,7 +13,7 @@ static const uint kClipPlaneBottom = 2;
 static const uint kClipPlaneTop = 3;
 static const float kMinClipArea2 = 1.0e-12;
 
-float planeDistance(float2 p, uint plane)
+[ForceInline] float planeDistance(float2 p, uint plane)
 {
     if (plane == kClipPlaneLeft)
         return p.x + 1.0;
@@ -24,7 +24,7 @@ float planeDistance(float2 p, uint plane)
     return 1.0 - p.y;
 }
 
-void appendVertex(inout float2 poly[kMeshOutputVertices], inout uint count, float2 p)
+[ForceInline] void appendVertex(inout float2 poly[kMeshOutputVertices], inout uint count, float2 p)
 {
     if (count < kMeshOutputVertices && isFinite2(p))
     {
@@ -33,13 +33,13 @@ void appendVertex(inout float2 poly[kMeshOutputVertices], inout uint count, floa
     }
 }
 
-void clearPolygon(out float2 poly[kMeshOutputVertices])
+[ForceInline] void clearPolygon(out float2 poly[kMeshOutputVertices])
 {
     for (uint i = 0; i < kMeshOutputVertices; i++)
         poly[i] = float2(0.0, 0.0);
 }
 
-void clipAgainstPlane(
+[ForceInline] void clipAgainstPlane(
     float2 inPoly[kMeshOutputVertices],
     uint inCount,
     uint plane,
@@ -76,7 +76,7 @@ void clipAgainstPlane(
     }
 }
 
-float polygonArea2(float2 poly[kMeshOutputVertices], uint count)
+[ForceInline] float polygonArea2(float2 poly[kMeshOutputVertices], uint count)
 {
     float area2 = 0.0;
     if (count < 3)
@@ -92,7 +92,7 @@ float polygonArea2(float2 poly[kMeshOutputVertices], uint count)
     return area2;
 }
 
-public bool clipNdcQuad(
+[ForceInline] public bool clipNdcQuad(
     float2 p0,
     float2 p1,
     float2 p2,

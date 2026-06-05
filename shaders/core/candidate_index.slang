@@ -61,7 +61,7 @@ CandidateCursor loadCandidateCursor(
     return cursor;
 }
 
-uint minCandidateHead(CandidateCursor cursors[kMaxMergedCandidateBands])
+[ForceInline] uint minCandidateHead(CandidateCursor cursors[kMaxMergedCandidateBands])
 {
     uint curveIndex = kInvalidCurveIndex;
     for (uint band = 0; band < kMaxMergedCandidateBands; band++)
@@ -69,7 +69,7 @@ uint minCandidateHead(CandidateCursor cursors[kMaxMergedCandidateBands])
     return curveIndex;
 }
 
-void consumeCandidateHead(
+[ForceInline] void consumeCandidateHead(
     inout CandidateCursor cursors[kMaxMergedCandidateBands],
     BlobReader blob,
     uint idBase,
@@ -87,7 +87,7 @@ void consumeCandidateHead(
     }
 }
 
-void integrateCandidateCurve(
+[ForceInline] void integrateCandidateCurve(
     inout CandidateResult result,
     BlobReader blob,
     uint curveBase,

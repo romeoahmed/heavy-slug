@@ -181,22 +181,18 @@ private func checkedInt(_ value: UInt, _ label: String) throws -> Int {
   return Int(value)
 }
 
-private func shaderSource(_ data: UnsafePointer<UInt8>?, _ size: UInt, label: String) throws
-  -> String
-{
+private func libraryData(_ data: UnsafePointer<UInt8>?, _ size: UInt) throws -> DispatchData {
   guard let data else {
-    throw fail("\(label) source pointer is null")
+    throw fail("Metal library pointer is null")
   }
   guard size > 0 else {
-    throw fail("\(label) source is empty")
+    throw fail("Metal library byte slice is empty")
   }
 
-  let count = try checkedInt(size, "\(label) source size")
-  let bytes = UnsafeBufferPointer(start: data, count: count)
-  guard let source = String(bytes: bytes, encoding: .utf8) else {
-    throw fail("failed to decode \(label) source as UTF-8")
-  }
-  return source
+  let count = try checkedInt(size, "Metal library size")
+  // DispatchData copies the bytes, matching the semantics
+  // MTLDevice.makeLibrary(data:) expects from a dispatch_data_t input.
+  return DispatchData(bytes: UnsafeRawBufferPointer(start: data, count: count))
 }
 
 private func borrowedDevice(_ pointer: UnsafeMutableRawPointer?) throws -> MTLDevice {
@@ -332,13 +328,17 @@ private final class MetalContext {
     devicePointer: UnsafeMutableRawPointer?,
     commandQueuePointer: UnsafeMutableRawPointer?,
     layerPointer: UnsafeMutableRawPointer?,
-    meshSource: String,
-    fragmentSource: String
+    library: DispatchData
   ) throws {
     let device = try borrowedDevice(devicePointer)
     let commandQueue = try borrowedCommandQueue(commandQueuePointer, device: device)
     let layer = try borrowedLayer(layerPointer, device: device)
     let drawableResidency = layer.residencySet
+
+    // Build-graph precompiled metallib loaded with MTLDevice.makeLibrary(data:)
+    // (Apple, "Retrieve and load a library"). Skips the ~50–150 ms MSL parse
+    // that MTL4Compiler.makeLibrary(descriptor:) would perform on every init.
+    let mtlLibrary = try device.makeLibrary(data: library as __DispatchData)
 
     let compilerDescriptor = MTL4CompilerDescriptor()
     compilerDescriptor.label = "heavy-slug compiler"
@@ -346,8 +346,7 @@ private final class MetalContext {
     let pipeline = try Self.makePipeline(
       compiler: compiler,
       colorFormat: layer.pixelFormat,
-      meshSource: meshSource,
-      fragmentSource: fragmentSource
+      library: mtlLibrary
     )
 
     let residencyDescriptor = MTLResidencySetDescriptor()
@@ -371,21 +370,6 @@ private final class MetalContext {
     self.slots = slots
   }
 
-  private static func makeLibrary(
-    compiler: MTL4Compiler,
-    source: String,
-    label: String
-  ) throws -> MTLLibrary {
-    let options = MTLCompileOptions()
-    options.languageVersion = .version4_0
-
-    let descriptor = MTL4LibraryDescriptor()
-    descriptor.name = label
-    descriptor.source = source
-    descriptor.options = options
-    return try compiler.makeLibrary(descriptor: descriptor)
-  }
-
   private static func functionDescriptor(library: MTLLibrary, name: String)
     -> MTL4LibraryFunctionDescriptor
   {
@@ -398,19 +382,14 @@ private final class MetalContext {
   private static func makePipeline(
     compiler: MTL4Compiler,
     colorFormat: MTLPixelFormat,
-    meshSource: String,
-    fragmentSource: String
+    library: MTLLibrary
   ) throws -> MTLRenderPipelineState {
-    let meshLibrary = try makeLibrary(compiler: compiler, source: meshSource, label: "mesh shader")
-    let fragmentLibrary = try makeLibrary(
-      compiler: compiler, source: fragmentSource, label: "fragment shader")
-
     let descriptor = MTL4MeshRenderPipelineDescriptor()
     descriptor.label = "heavy-slug mesh pipeline"
     descriptor.objectFunctionDescriptor = nil
-    descriptor.meshFunctionDescriptor = functionDescriptor(library: meshLibrary, name: "meshMain")
+    descriptor.meshFunctionDescriptor = functionDescriptor(library: library, name: "meshMain")
     descriptor.fragmentFunctionDescriptor = functionDescriptor(
-      library: fragmentLibrary, name: "fragmentMain")
+      library: library, name: "fragmentMain")
     descriptor.maxTotalThreadsPerObjectThreadgroup = objectThreadgroupSize
     descriptor.maxTotalThreadsPerMeshThreadgroup = meshThreadgroupSize
     descriptor.requiredThreadsPerObjectThreadgroup = MTLSize(width: 0, height: 0, depth: 0)
@@ -737,10 +716,8 @@ public func hsMetalContextCreate(
   _ device: UnsafeMutableRawPointer?,
   _ commandQueue: UnsafeMutableRawPointer?,
   _ layer: UnsafeMutableRawPointer?,
-  _ meshSourceData: UnsafePointer<UInt8>?,
-  _ meshSourceSize: UInt,
-  _ fragmentSourceData: UnsafePointer<UInt8>?,
-  _ fragmentSourceSize: UInt,
+  _ libraryDataPtr: UnsafePointer<UInt8>?,
+  _ librarySize: UInt,
   _ errorData: UnsafeMutablePointer<UInt8>?,
   _ errorSize: UInt
 ) -> Int32 {
@@ -753,15 +730,12 @@ public func hsMetalContextCreate(
     outContext.pointee = nil
 
     do {
-      let meshSource = try shaderSource(meshSourceData, meshSourceSize, label: "mesh shader")
-      let fragmentSource = try shaderSource(
-        fragmentSourceData, fragmentSourceSize, label: "fragment shader")
+      let library = try libraryData(libraryDataPtr, librarySize)
       let context = try MetalContext(
         devicePointer: device,
         commandQueuePointer: commandQueue,
         layerPointer: layer,
-        meshSource: meshSource,
-        fragmentSource: fragmentSource
+        library: library
       )
       outContext.pointee = retainedHandle(context)
       return statusOK

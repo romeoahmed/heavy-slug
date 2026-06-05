@@ -481,7 +481,7 @@ test "Metal view size conversion rejects zero rounded extents" {
     try std.testing.expect(viewSizeU32(core_types.View.identity(1, 0.25)) == null);
 }
 
-test "Metal bridge resource indices match generated Slang MSL" {
+test "Metal bridge resource indices match shared Slang ABI" {
     const indices = metal.resourceIndices();
     try std.testing.expectEqual(@as(u32, 0), indices.glyph_pool);
     try std.testing.expectEqual(@as(u32, 1), indices.glyphs);
@@ -489,37 +489,15 @@ test "Metal bridge resource indices match generated Slang MSL" {
     const params_index: u32 = if (backend_options.shader_stats) 4 else 3;
     try std.testing.expectEqual(params_index, indices.frame_params);
     try std.testing.expectEqual(@as(u32, 3), indices.shader_stats);
+}
 
-    const params_pattern = if (backend_options.shader_stats)
-        "constant* pc_1 [[buffer(4)]]"
-    else
-        "constant* pc_1 [[buffer(3)]]";
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "GlyphInstance_0 device* glyphs_1 [[buffer(1)]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "GlyphMeshlet_0 device* meshlets_1 [[buffer(2)]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "glyphPool_") == null);
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "[[buffer(0)]]") == null);
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, params_pattern) != null);
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "uint32_t device* glyphPool_") != null);
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "GlyphInstance_0 device* glyphs_1 [[buffer(1)]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "GlyphMeshlet_0 device* meshlets_1 [[buffer(2)]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "[[buffer(0)]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, params_pattern) != null);
-    if (backend_options.shader_stats) {
-        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "shaderStats_") != null);
-        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "[[buffer(3)]]") != null);
-        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "shaderStats_") != null);
-        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "[[buffer(3)]]") != null);
-    } else {
-        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "shaderStats_") == null);
-        try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "shaderStats_") == null);
-    }
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "[[user(TEXCOORD_1)]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "[[user(TEXCOORD_2)]]") == null);
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.mesh, "[[user(TEXCOORD_6)]]") == null);
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "[[user(TEXCOORD_1)]]") != null);
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "[[user(TEXCOORD_2)]]") == null);
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "[[user(TEXCOORD_6)]]") == null);
-    try std.testing.expect(std.mem.indexOf(u8, msl_shaders.fragment, "user(TEXCOORD__1)") == null);
+test "Embedded Metal library is a valid metallib container" {
+    // The build graph links mesh.ir + fragment.ir into a single metallib that
+    // the bridge loads with MTLDevice.makeLibrary(data:). A real metallib
+    // always begins with the four-byte 'MTLB' magic; a stale source-string
+    // path would embed Slang-emitted MSL text starting with `#`/`//`.
+    try std.testing.expect(msl_shaders.library.len >= 4);
+    try std.testing.expectEqualSlices(u8, "MTLB", msl_shaders.library[0..4]);
 }
 
 test "Metal bridge geometry limits match shared mesh ABI" {

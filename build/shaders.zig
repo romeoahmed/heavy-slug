@@ -43,8 +43,13 @@ pub const SpirvBundle = struct {
 };
 
 pub const MslBundle = struct {
+    /// Generated Metal Shading Language source per entry (install-only).
     mesh: std.Build.LazyPath,
     fragment: std.Build.LazyPath,
+    /// Precompiled, linked Metal library containing both shader entries.
+    /// Loaded at runtime with `MTLDevice.makeLibrary(data:)`.
+    metallib: std.Build.LazyPath,
+    /// Zig module exposing the metallib bytes via `@embedFile`.
     module: *std.Build.Module,
 };
 
@@ -71,19 +76,58 @@ pub fn compileMsl(b: *std.Build, shader_stats: bool) MslBundle {
     const mesh_msl = compileStage(b, .msl, .mesh, shader_stats);
     const fragment_msl = compileStage(b, .msl, .fragment, shader_stats);
 
+    // Apple's official two-step toolchain (Building a shader library by
+    // precompiling source files): `metal -c <src>.metal` for each entry,
+    // then `metal -o lib.metallib <ir>...` to link. Shared core/* helpers
+    // are tagged `[ForceInline]` in their Slang modules so each emitted
+    // MSL TU contains them by inlining only, leaving no external symbols
+    // to collide at link time.
+    const mesh_ir = compileMetalIr(b, mesh_msl, "mesh");
+    const fragment_ir = compileMetalIr(b, fragment_msl, "fragment");
+    const metallib = linkMetallib(b, mesh_ir, fragment_ir);
+
     const files = b.addWriteFiles();
-    _ = files.addCopyFile(mesh_msl, "mesh.metal");
-    _ = files.addCopyFile(fragment_msl, "fragment.metal");
+    _ = files.addCopyFile(metallib, "heavy_slug.metallib");
     const module_zig = files.add("msl_shaders.zig",
-        \\pub const mesh: []const u8 = @embedFile("mesh.metal");
-        \\pub const fragment: []const u8 = @embedFile("fragment.metal");
+        \\pub const library: []const u8 = @embedFile("heavy_slug.metallib");
     );
 
     return .{
         .mesh = mesh_msl,
         .fragment = fragment_msl,
+        .metallib = metallib,
         .module = b.createModule(.{ .root_source_file = module_zig }),
     };
+}
+
+fn compileMetalIr(b: *std.Build, msl: std.Build.LazyPath, name: []const u8) std.Build.LazyPath {
+    const cmd = b.addSystemCommand(&.{ "xcrun", "-sdk", "macosx", "metal" });
+    cmd.setName(b.fmt("metal -c {s}", .{name}));
+    cmd.addArg("-c");
+    cmd.addArg("-O3");
+    // Slang emits `uint _Sxxx = atomic_fetch_add_explicit(...)` to consume
+    // counter increments; the binding is unused by construction. Suppress
+    // the otherwise-fatal warning without disabling the rest of -Werror.
+    cmd.addArg("-Wno-unused-variable");
+    cmd.addArg("-o");
+    const ir = cmd.addOutputFileArg(b.fmt("{s}.ir", .{name}));
+    cmd.addFileArg(msl);
+    return ir;
+}
+
+fn linkMetallib(
+    b: *std.Build,
+    mesh_ir: std.Build.LazyPath,
+    fragment_ir: std.Build.LazyPath,
+) std.Build.LazyPath {
+    const cmd = b.addSystemCommand(&.{ "xcrun", "-sdk", "macosx", "metal" });
+    cmd.setName("metal -o heavy_slug.metallib");
+    cmd.addArg("-O3");
+    cmd.addArg("-o");
+    const out = cmd.addOutputFileArg("heavy_slug.metallib");
+    cmd.addFileArg(mesh_ir);
+    cmd.addFileArg(fragment_ir);
+    return out;
 }
 
 pub fn installSpirv(
@@ -104,8 +148,10 @@ pub fn installMsl(
 ) void {
     const install_mesh = b.addInstallFile(msl.mesh, "shaders/msl/mesh.metal");
     const install_fragment = b.addInstallFile(msl.fragment, "shaders/msl/fragment.metal");
+    const install_metallib = b.addInstallFile(msl.metallib, "shaders/msl/heavy_slug.metallib");
     step.dependOn(&install_mesh.step);
     step.dependOn(&install_fragment.step);
+    step.dependOn(&install_metallib.step);
 }
 
 fn generateReflectionJson(b: *std.Build) std.Build.LazyPath {
