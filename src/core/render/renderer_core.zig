@@ -299,6 +299,19 @@ const CachedGlyph = struct {
     mesh_metadata: cache_mod.MeshMetadata,
 };
 
+/// Run-level state produced by `prepareRunFrame` and consumed by the per-glyph
+/// driver. Holds the shaped buffers and the already-validated, already-finite
+/// run-level transform, so the per-glyph step never has to re-check them.
+const RunPlan = struct {
+    font_id: u32,
+    font_entry: *FontEntry,
+    infos: []const hb.Buffer.GlyphInfo,
+    positions: []const hb.Buffer.GlyphPosition,
+    run_screen_from_text: core_types.Transform,
+    color: [4]f32,
+    flags: u32,
+};
+
 const TextSpace = enum {
     world,
     screen,
@@ -551,188 +564,250 @@ pub const RendererCore = struct {
             }
         }
         if (!view.hasFiniteViewport()) return Error.InvalidView;
+
         var result: DrawTextResult = .{};
-        if (run.space == .world and !view.hasFiniteWorldTransform()) {
-            self.recordRunReject(&result, .invalid_world_transform);
-            return result;
+        const plan = (try self.prepareRunFrame(view, run, &result)) orelse return result;
+
+        const start_glyph_count = batch.glyph_count;
+        const start_meshlet_count = batch.meshlet_count;
+        errdefer batch.rollback(start_glyph_count, start_meshlet_count);
+
+        var pen_x: i64 = 0;
+        var pen_y: i64 = 0;
+        for (plan.infos, plan.positions) |info, pos| {
+            try self.processGlyph(backend, batch, view, plan, info, pos, &pen_x, &pen_y, &result);
         }
-        const font = run.font;
-        const font_entry = self.fonts.get(font.id) orelse return Error.ShapingFailed;
+        return result;
+    }
+
+    /// Validate the run-level inputs and shape `run.text`. Returns:
+    /// - `null` after recording the appropriate reject (`invalid_world_transform`
+    ///   or every-glyph `invalid_transform`) so the caller can return its
+    ///   `result` unchanged with no batch mutation.
+    /// - a populated `RunPlan` carrying the shaped buffers and the composed
+    ///   run-level transform, ready for the per-glyph driver loop.
+    /// Only the structural errors (`ShapingFailed`) leave through `!`.
+    fn prepareRunFrame(
+        self: *RendererCore,
+        view: core_types.View,
+        run: InternalTextRun,
+        result: *DrawTextResult,
+    ) !?RunPlan {
+        if (run.space == .world and !view.hasFiniteWorldTransform()) {
+            self.recordRunReject(result, .invalid_world_transform);
+            return null;
+        }
+        const font_entry = self.fonts.get(run.font.id) orelse return Error.ShapingFailed;
 
         const shaped = font_entry.loaded.shape(&self.shape_plan, run.text, .{}) catch return Error.ShapingFailed;
-        const infos = shaped.infos;
-        const positions = shaped.positions;
-        self.recordShapedRun(&result, @intCast(infos.len));
+        self.recordShapedRun(result, @intCast(shaped.infos.len));
         if (@import("builtin").mode == .Debug) {
             self.stats.runs_shaped += 1;
-            self.stats.glyphs_shaped += @intCast(infos.len);
+            self.stats.glyphs_shaped += @intCast(shaped.infos.len);
         }
+
         const run_screen_from_text = switch (run.space) {
             .world => core_types.Transform.compose(view.screen_from_world, run.transform),
             .screen => run.transform,
         };
-        const color = run.color.rgba;
-        const flags = run.fill_rule.shaderFlags();
-        const start_glyph_count = batch.glyph_count;
-        const start_meshlet_count = batch.meshlet_count;
-        errdefer {
-            batch.rollback(start_glyph_count, start_meshlet_count);
-        }
-
-        var pen_x: i64 = 0;
-        var pen_y: i64 = 0;
-
         if (!run_screen_from_text.isFinite()) {
-            for (infos) |_| self.recordGlyphReject(&result, .invalid_transform);
-            return result;
+            for (shaped.infos) |_| self.recordGlyphReject(result, .invalid_transform);
+            return null;
         }
 
-        for (infos, positions) |info, pos| {
-            const glyph_x_hb = std.math.add(i64, pen_x, pos.x_offset) catch return Error.TextPositionOverflow;
-            const glyph_y_hb = std.math.add(i64, pen_y, pos.y_offset) catch return Error.TextPositionOverflow;
-            const glyph_x = units.hb26p6ToPixelsI64(glyph_x_hb);
-            const glyph_y = units.hb26p6ToPixelsI64(glyph_y_hb);
-            const screen_from_glyph_pixels = run_screen_from_text.translate(glyph_x, glyph_y);
-            const screen_from_local = screen_from_glyph_pixels.scaleLinear(1.0 / units.hb_subpixels_per_pixel_f64);
-            const local_from_screen = screen_from_local.inverse() orelse {
-                self.recordGlyphReject(&result, .invalid_transform);
-                try advancePen(&pen_x, &pen_y, pos);
-                continue;
-            };
-            const precision_bits = switch (self.precision_policy.selectFractionBits(screen_from_local) catch |err| switch (err) {
-                error.InvalidTransform => {
-                    self.recordGlyphReject(&result, .invalid_transform);
-                    try advancePen(&pen_x, &pen_y, pos);
-                    continue;
-                },
-                error.InvalidPrecisionPolicy => return Error.InvalidPrecisionPolicy,
-            }) {
-                .supported => |supported| blk: {
-                    self.recordPrecisionSelection(supported.sigma, supported.required_bits);
-                    break :blk supported.fraction_bits;
-                },
-                .unsupported => |unsupported| {
-                    self.recordPrecisionSelection(unsupported.sigma, unsupported.required_bits);
-                    self.recordGlyphReject(&result, .precision_unsupported);
-                    try advancePen(&pen_x, &pen_y, pos);
-                    continue;
-                },
-            };
+        return RunPlan{
+            .font_id = run.font.id,
+            .font_entry = font_entry,
+            .infos = shaped.infos,
+            .positions = shaped.positions,
+            .run_screen_from_text = run_screen_from_text,
+            .color = run.color.rgba,
+            .flags = run.fill_rule.shaderFlags(),
+        };
+    }
 
-            const cache_key = cache_mod.CacheKey{
-                .font_id = font.id,
-                .glyph_id = info.codepoint,
-                .precision_bits = precision_bits,
-                .variation_key = font_entry.variation_key,
-            };
-            const frame_promotions_before = if (@import("builtin").mode == .Debug)
-                self.store.glyph_cache.frame_promotions
-            else
-                0;
-            const cached_glyph = if (self.store.glyph_cache.lookup(cache_key)) |entry| blk: {
-                if (@import("builtin").mode == .Debug) self.stats.cache_hits += 1;
-                if (@import("builtin").mode == .Debug) {
-                    self.stats.tier_promotions += self.store.glyph_cache.frame_promotions - frame_promotions_before;
-                }
-                break :blk CachedGlyph{
-                    .blob_ref = entry.blob_ref,
-                    .bounds_q = entry.bounds_q,
-                    .precision_bits = entry.precision_bits,
-                    .mesh_metadata = entry.mesh_metadata,
-                };
-            } else blk: {
-                if (@import("builtin").mode == .Debug) self.stats.cache_misses += 1;
-                break :blk self.ensureGlyphCached(backend, font_entry, cache_key, precision_bits) catch |err| switch (err) {
-                    error.CacheEncodeUnsupported => {
-                        self.recordGlyphReject(&result, .cache_encode_unsupported);
-                        try advancePen(&pen_x, &pen_y, pos);
-                        continue;
-                    },
-                    else => return err,
-                };
-            };
+    /// Drive one shaped glyph through transform validation → precision tier
+    /// selection → cache lookup or encode → bounds / culling / chart-cast
+    /// checks → batch append. Each reject branch records its reason on the
+    /// shared diagnostics and advances the pen before returning normally;
+    /// only the structural errors (capacity, pool exhaustion, overflow)
+    /// propagate through `!`.
+    fn processGlyph(
+        self: *RendererCore,
+        backend: anytype,
+        batch: anytype,
+        view: core_types.View,
+        plan: RunPlan,
+        info: anytype,
+        pos: anytype,
+        pen_x: *i64,
+        pen_y: *i64,
+        result: *DrawTextResult,
+    ) !void {
+        const glyph_x_hb = std.math.add(i64, pen_x.*, pos.x_offset) catch return Error.TextPositionOverflow;
+        const glyph_y_hb = std.math.add(i64, pen_y.*, pos.y_offset) catch return Error.TextPositionOverflow;
+        const glyph_x = units.hb26p6ToPixelsI64(glyph_x_hb);
+        const glyph_y = units.hb26p6ToPixelsI64(glyph_y_hb);
+        const screen_from_glyph_pixels = plan.run_screen_from_text.translate(glyph_x, glyph_y);
+        const screen_from_local = screen_from_glyph_pixels.scaleLinear(1.0 / units.hb_subpixels_per_pixel_f64);
+        const local_from_screen = screen_from_local.inverse() orelse {
+            self.recordGlyphReject(result, .invalid_transform);
+            return advancePen(pen_x, pen_y, pos);
+        };
 
-            if (!cached_glyph.blob_ref.isEmpty()) {
-                const local_bounds = mesh_plan.localRectFromFixed(cached_glyph.bounds_q, cached_glyph.precision_bits);
-                const screen_bounds = screen_from_local.applyRect(local_bounds);
-                if (!screen_bounds.isFinite() or screen_bounds.isEmpty()) {
-                    self.recordGlyphReject(&result, .nonfinite_bounds);
-                    try advancePen(&pen_x, &pen_y, pos);
-                    continue;
-                }
-                if (!screen_bounds.intersects(mesh_plan.inflatedViewportRect(view, 1.0))) {
-                    self.recordGlyphReject(&result, .host_culled);
-                    try advancePen(&pen_x, &pen_y, pos);
-                    continue;
-                }
+        const precision_bits = switch (self.precision_policy.selectFractionBits(screen_from_local) catch |err| switch (err) {
+            error.InvalidTransform => {
+                self.recordGlyphReject(result, .invalid_transform);
+                return advancePen(pen_x, pen_y, pos);
+            },
+            error.InvalidPrecisionPolicy => return Error.InvalidPrecisionPolicy,
+        }) {
+            .supported => |supported| blk: {
+                self.recordPrecisionSelection(supported.sigma, supported.required_bits);
+                break :blk supported.fraction_bits;
+            },
+            .unsupported => |unsupported| {
+                self.recordPrecisionSelection(unsupported.sigma, unsupported.required_bits);
+                self.recordGlyphReject(result, .precision_unsupported);
+                return advancePen(pen_x, pen_y, pos);
+            },
+        };
 
-                const glyph_anchor_q = mesh_plan.chooseGlyphAnchorQ(
-                    cached_glyph.bounds_q,
-                    cached_glyph.precision_bits,
-                    local_from_screen,
-                    .{
-                        view.width * 0.5,
-                        view.height * 0.5,
-                    },
-                );
-                const anchor_local = mesh_plan.localPointFromFixed(glyph_anchor_q, cached_glyph.precision_bits);
-                const screen_anchor = screen_from_local.apply(anchor_local);
-                const screen_anchor_px = mesh_plan.castPoint2F32(screen_anchor) orelse {
-                    self.recordGlyphReject(&result, .f32_chart_overflow);
-                    try advancePen(&pen_x, &pen_y, pos);
-                    continue;
-                };
-                const screen_from_local_2x2 = mesh_plan.castAffineLinear2x2F32(screen_from_local) orelse {
-                    self.recordGlyphReject(&result, .f32_chart_overflow);
-                    try advancePen(&pen_x, &pen_y, pos);
-                    continue;
-                };
-                const local_from_screen_2x2 = mesh_plan.castAffineLinear2x2F32(local_from_screen) orelse {
-                    self.recordGlyphReject(&result, .f32_chart_overflow);
-                    try advancePen(&pen_x, &pen_y, pos);
-                    continue;
-                };
+        const cache_key = cache_mod.CacheKey{
+            .font_id = plan.font_id,
+            .glyph_id = info.codepoint,
+            .precision_bits = precision_bits,
+            .variation_key = plan.font_entry.variation_key,
+        };
+        const cached_glyph = (try self.lookupOrEncodeGlyph(backend, plan.font_entry, cache_key, precision_bits, result)) orelse
+            return advancePen(pen_x, pen_y, pos);
 
-                const GlyphInstance = backend_contract.glyphInstanceType(@TypeOf(backend));
-                const glyph_payload: GlyphInstance = .{
-                    .color = color,
-                    .blob_ref = cached_glyph.blob_ref.value,
-                    .flags = flags,
-                    .precision_bits = cached_glyph.precision_bits,
-                    .glyph_anchor_q = glyph_anchor_q,
-                    .screen_anchor_px = screen_anchor_px,
-                    .screen_from_local_2x2 = screen_from_local_2x2,
-                    .local_from_screen_2x2 = local_from_screen_2x2,
-                };
+        if (cached_glyph.blob_ref.isEmpty()) {
+            self.recordGlyphReject(result, .empty_glyph);
+            return advancePen(pen_x, pen_y, pos);
+        }
 
-                const glyph_mark = batch.glyph_count;
-                const meshlet_mark = batch.meshlet_count;
-                const glyph_index = try batch.appendGlyph(glyph_payload);
-                try mesh_plan.appendGlyphMeshlets(
-                    batch,
-                    glyph_payload,
-                    glyph_index,
-                    cached_glyph.mesh_metadata,
-                    cached_glyph.bounds_q,
-                    cached_glyph.precision_bits,
-                    local_from_screen,
-                    view,
-                    screen_bounds,
-                );
-                if (batch.meshlet_count == meshlet_mark) {
-                    batch.rollback(glyph_mark, meshlet_mark);
-                    self.recordGlyphReject(&result, .meshlet_empty);
-                } else {
-                    self.recordEmitted(&result, 1, batch.meshlet_count - meshlet_mark);
-                }
-            } else {
-                self.recordGlyphReject(&result, .empty_glyph);
+        try self.emitGlyphInstance(backend, batch, view, plan, cached_glyph, screen_from_local, local_from_screen, result);
+        return advancePen(pen_x, pen_y, pos);
+    }
+
+    /// Cache-aware glyph lookup. Returns the cached glyph metadata on hit or
+    /// after a successful encode-and-insert, `null` after recording a
+    /// `cache_encode_unsupported` reject. Other encode errors propagate.
+    fn lookupOrEncodeGlyph(
+        self: *RendererCore,
+        backend: anytype,
+        font_entry: *FontEntry,
+        cache_key: cache_mod.CacheKey,
+        precision_bits: u8,
+        result: *DrawTextResult,
+    ) !?CachedGlyph {
+        const frame_promotions_before = if (@import("builtin").mode == .Debug)
+            self.store.glyph_cache.frame_promotions
+        else
+            0;
+        if (self.store.glyph_cache.lookup(cache_key)) |entry| {
+            if (@import("builtin").mode == .Debug) {
+                self.stats.cache_hits += 1;
+                self.stats.tier_promotions += self.store.glyph_cache.frame_promotions - frame_promotions_before;
             }
+            return CachedGlyph{
+                .blob_ref = entry.blob_ref,
+                .bounds_q = entry.bounds_q,
+                .precision_bits = entry.precision_bits,
+                .mesh_metadata = entry.mesh_metadata,
+            };
+        }
+        if (@import("builtin").mode == .Debug) self.stats.cache_misses += 1;
+        return self.ensureGlyphCached(backend, font_entry, cache_key, precision_bits) catch |err| switch (err) {
+            error.CacheEncodeUnsupported => {
+                self.recordGlyphReject(result, .cache_encode_unsupported);
+                return null;
+            },
+            else => return err,
+        };
+    }
 
-            try advancePen(&pen_x, &pen_y, pos);
+    /// Build the backend `GlyphInstance` for a fully-cached, non-empty glyph
+    /// and append it (plus its meshlets) to the frame batch. Records the
+    /// matching reject for any per-glyph guard (`nonfinite_bounds`,
+    /// `host_culled`, `f32_chart_overflow`, `meshlet_empty`); only batch
+    /// capacity errors propagate.
+    fn emitGlyphInstance(
+        self: *RendererCore,
+        backend: anytype,
+        batch: anytype,
+        view: core_types.View,
+        plan: RunPlan,
+        cached_glyph: CachedGlyph,
+        screen_from_local: core_types.Transform,
+        local_from_screen: core_types.Transform,
+        result: *DrawTextResult,
+    ) !void {
+        const local_bounds = mesh_plan.localRectFromFixed(cached_glyph.bounds_q, cached_glyph.precision_bits);
+        const screen_bounds = screen_from_local.applyRect(local_bounds);
+        if (!screen_bounds.isFinite() or screen_bounds.isEmpty()) {
+            self.recordGlyphReject(result, .nonfinite_bounds);
+            return;
+        }
+        if (!screen_bounds.intersects(mesh_plan.inflatedViewportRect(view, 1.0))) {
+            self.recordGlyphReject(result, .host_culled);
+            return;
         }
 
-        return result;
+        const glyph_anchor_q = mesh_plan.chooseGlyphAnchorQ(
+            cached_glyph.bounds_q,
+            cached_glyph.precision_bits,
+            local_from_screen,
+            .{ view.width * 0.5, view.height * 0.5 },
+        );
+        const anchor_local = mesh_plan.localPointFromFixed(glyph_anchor_q, cached_glyph.precision_bits);
+        const screen_anchor = screen_from_local.apply(anchor_local);
+        const screen_anchor_px = mesh_plan.castPoint2F32(screen_anchor) orelse {
+            self.recordGlyphReject(result, .f32_chart_overflow);
+            return;
+        };
+        const screen_from_local_2x2 = mesh_plan.castAffineLinear2x2F32(screen_from_local) orelse {
+            self.recordGlyphReject(result, .f32_chart_overflow);
+            return;
+        };
+        const local_from_screen_2x2 = mesh_plan.castAffineLinear2x2F32(local_from_screen) orelse {
+            self.recordGlyphReject(result, .f32_chart_overflow);
+            return;
+        };
+
+        const GlyphInstance = backend_contract.glyphInstanceType(@TypeOf(backend));
+        const glyph_payload: GlyphInstance = .{
+            .color = plan.color,
+            .blob_ref = cached_glyph.blob_ref.value,
+            .flags = plan.flags,
+            .precision_bits = cached_glyph.precision_bits,
+            .glyph_anchor_q = glyph_anchor_q,
+            .screen_anchor_px = screen_anchor_px,
+            .screen_from_local_2x2 = screen_from_local_2x2,
+            .local_from_screen_2x2 = local_from_screen_2x2,
+        };
+
+        const glyph_mark = batch.glyph_count;
+        const meshlet_mark = batch.meshlet_count;
+        const glyph_index = try batch.appendGlyph(glyph_payload);
+        try mesh_plan.appendGlyphMeshlets(
+            batch,
+            glyph_payload,
+            glyph_index,
+            cached_glyph.mesh_metadata,
+            cached_glyph.bounds_q,
+            cached_glyph.precision_bits,
+            local_from_screen,
+            view,
+            screen_bounds,
+        );
+        if (batch.meshlet_count == meshlet_mark) {
+            batch.rollback(glyph_mark, meshlet_mark);
+            self.recordGlyphReject(result, .meshlet_empty);
+        } else {
+            self.recordEmitted(result, 1, batch.meshlet_count - meshlet_mark);
+        }
     }
 
     fn recordShapedRun(self: *RendererCore, result: *DrawTextResult, glyphs: u32) void {
@@ -1262,6 +1337,103 @@ test "render: RendererCore defers evicted glyph retirement until frame token com
     try std.testing.expectEqual(@as(usize, 0), core.store.retirements.entries.items.len);
     if (@import("builtin").mode == .Debug) {
         try std.testing.expectEqual(@as(u32, 1), core.stats.retirements_completed);
+    }
+}
+
+test "render: host_culled records non-blocking reject when glyph lies outside viewport" {
+    // Translate every glyph far past the viewport so screen_bounds fails the
+    // viewport-inflated intersect, exercising the host_culled branch. The
+    // reject must count as non-blocking and must not trigger an
+    // empty_after_blocking_rejects warning when it is the only outcome.
+    var core = try RendererCore.init(std.testing.allocator, .{ .max_glyphs_per_frame = 4 });
+    defer core.deinit();
+
+    var pool: [16 * 1024]u8 = undefined;
+    var backend = FakeBackend{ .pool = &pool };
+    var glyphs: [4]TestGlyphInstance = undefined;
+    var meshlets: [4 * mesh_limits.max_subdivisions_per_glyph]TestGlyphMeshlet = undefined;
+    var batch = frame_batch_mod.FrameBatch(TestGlyphInstance, TestGlyphMeshlet).init(&glyphs, &meshlets);
+
+    const font = try core.loadFont(.{ .path = test_font_path }, .{ .size_px = 24 });
+    core.beginFrame(0, &backend);
+
+    const result = try core.appendRun(&backend, &batch, test_view, .{
+        .font = font,
+        .text = "A",
+        .transform = core_types.Transform.translation(-100_000.0, -100_000.0),
+        .color = .white,
+    });
+
+    try std.testing.expectEqual(@as(u32, 0), batch.glyphCount());
+    try std.testing.expect(result.shaped_glyphs > 0);
+    try std.testing.expectEqual(result.shaped_glyphs, result.glyph_rejects.host_culled);
+    try std.testing.expectEqual(@as(u32, 0), result.glyph_rejects.totalBlocking());
+    try std.testing.expect(!result.glyph_rejects.hasBlocking());
+
+    const diags = core.frameDiagnostics();
+    try std.testing.expect(!diags.hasBlockingRejects());
+    try std.testing.expectEqual(@as(?FrameBlockingReason, null), diags.first_blocking_reason);
+    // host_culled is intentionally absent from FrameWarning, so a frame whose
+    // only reject is host_culled must surface no warnings.
+    try std.testing.expectEqual(@as(usize, 0), diags.warnings().slice().len);
+}
+
+test "FrameDiagnostics: warnings cover every blocking reject reason plus the empty-after-blocking sentinel" {
+    // Direct unit test on the diagnostic aggregation surface — independent of
+    // any appendTextRun control-flow refactor. If a future refactor drops a
+    // reason from the warnings() lift, this test catches it without needing a
+    // pathological font/transform combination to exercise the live path.
+    var diags: FrameDiagnostics = .{
+        .shaped_glyphs = 1,
+        .run_rejects = .{ .invalid_world_transform = 1 },
+        .glyph_rejects = .{
+            .invalid_transform = 1,
+            .precision_unsupported = 1,
+            .cache_encode_unsupported = 1,
+            .nonfinite_bounds = 1,
+            .f32_chart_overflow = 1,
+            .meshlet_empty = 1,
+            .host_culled = 1,
+            .empty_glyph = 1,
+        },
+    };
+    const warnings = diags.warnings();
+    var seen: [@typeInfo(FrameWarning).@"enum".fields.len]bool = .{false} ** @typeInfo(FrameWarning).@"enum".fields.len;
+    for (warnings.slice()) |w| seen[@intFromEnum(w)] = true;
+    // Every FrameWarning enumerant must be lifted from at least one counter.
+    inline for (@typeInfo(FrameWarning).@"enum".fields) |field| {
+        try std.testing.expect(seen[field.value]);
+    }
+
+    // Sentinel rule: empty_after_blocking_rejects requires both no visible
+    // payload AND at least one blocking reject. With visible payload it stays
+    // absent even though blocking counters remain non-zero.
+    diags.emitted_glyphs = 1;
+    diags.emitted_meshlets = 1;
+    const with_payload = diags.warnings();
+    for (with_payload.slice()) |w| {
+        try std.testing.expect(w != .empty_after_blocking_rejects);
+    }
+}
+
+test "RejectCounters: blocking vs non-blocking partitions match GlyphRejectReason taxonomy" {
+    // Mirrors isBlockingGlyphReject so a future taxonomy change cannot drift
+    // between the counter rollups and the per-reason classifier silently.
+    inline for (@typeInfo(GlyphRejectReason).@"enum".fields) |field| {
+        const reason: GlyphRejectReason = @enumFromInt(field.value);
+        var counters: RejectCounters = .{};
+        incrementGlyphReject(&counters, reason);
+        const blocking = isBlockingGlyphReject(reason);
+        try std.testing.expectEqual(@as(u32, 1), counters.total());
+        if (blocking) {
+            try std.testing.expectEqual(@as(u32, 1), counters.totalBlocking());
+            try std.testing.expectEqual(@as(u32, 0), counters.totalNonBlocking());
+            try std.testing.expect(counters.hasBlocking());
+        } else {
+            try std.testing.expectEqual(@as(u32, 0), counters.totalBlocking());
+            try std.testing.expectEqual(@as(u32, 1), counters.totalNonBlocking());
+            try std.testing.expect(!counters.hasBlocking());
+        }
     }
 }
 
