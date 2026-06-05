@@ -90,6 +90,14 @@ const token = switch (submit) {
 };
 ```
 
+`Color` is linear, premultiplied-alpha RGBA. Use `Color.straight(r, g, b, a)`
+for conventional non-premultiplied input (the constructor multiplies the
+RGB channels by `a` for you) and `Color.premultiplied(r, g, b, a)` only when
+the caller already owns premultiplied data. The Vulkan and Metal backends
+blend with `src = ONE, dst = ONE_MINUS_SRC_ALPHA`, so straight RGBA passed
+through the wrong constructor would render as a too-bright haloed glyph
+against any non-opaque background.
+
 Useful commands:
 
 | Goal | Command |

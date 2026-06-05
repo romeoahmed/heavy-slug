@@ -317,6 +317,18 @@ pub const FillRule = enum(u32) {
     }
 };
 
+/// Linear, premultiplied-alpha RGBA color in the renderer's working space.
+///
+/// The four channels are stored premultiplied by `a`, which is the form the
+/// fragment shader and the Vulkan/Metal blend equations consume directly:
+///
+///     out_rgb   = src_rgb * coverage + dst_rgb * (1 - src_a * coverage)
+///     out_alpha = src_a   * coverage + dst_a   * (1 - src_a * coverage)
+///
+/// Use `Color.straight` when the input is conventional non-premultiplied RGBA
+/// (e.g. `(1, 1, 1, 0.5)` for a half-transparent white); the constructor
+/// performs the multiplication. Use `Color.premultiplied` only when the
+/// caller already owns premultiplied data (image decoders, GPU readbacks).
 pub const Color = extern struct {
     rgba: [4]f32,
 
@@ -324,7 +336,20 @@ pub const Color = extern struct {
     pub const white: Color = .{ .rgba = .{ 1, 1, 1, 1 } };
     pub const transparent: Color = .{ .rgba = .{ 0, 0, 0, 0 } };
 
-    pub fn fromRgba(r: f32, g: f32, b: f32, a: f32) Color {
+    /// Construct from non-premultiplied (straight) RGBA. `a` must be finite
+    /// and in `[0, 1]`. RGB channels are scaled by `a` so the result is in
+    /// the renderer's premultiplied form.
+    pub fn straight(r: f32, g: f32, b: f32, a: f32) Color {
+        return .{ .rgba = .{ r * a, g * a, b * a, a } };
+    }
+
+    /// Construct from already-premultiplied RGBA. In debug builds, asserts
+    /// that each color channel lies in `[0, a]`.
+    pub fn premultiplied(r: f32, g: f32, b: f32, a: f32) Color {
+        std.debug.assert(a >= 0 and a <= 1);
+        std.debug.assert(r >= 0 and r <= a);
+        std.debug.assert(g >= 0 and g <= a);
+        std.debug.assert(b >= 0 and b <= a);
         return .{ .rgba = .{ r, g, b, a } };
     }
 };
@@ -355,11 +380,26 @@ comptime {
     std.debug.assert(@sizeOf(FontHandle) == 4);
 }
 
-test "Color exposes common constants and RGBA constructor" {
+test "Color exposes common constants and premultiplied constructors" {
     try std.testing.expectEqual(@as(f32, 0), Color.black.rgba[0]);
     try std.testing.expectEqual(@as(f32, 1), Color.white.rgba[3]);
-    const c = Color.fromRgba(0.25, 0.5, 0.75, 1);
-    try std.testing.expectEqual(@as(f32, 0.75), c.rgba[2]);
+
+    // straight() premultiplies RGB by alpha so the channels enter the
+    // renderer in the form the blend equation expects.
+    const half_white = Color.straight(1, 1, 1, 0.5);
+    try std.testing.expectEqual(@as(f32, 0.5), half_white.rgba[0]);
+    try std.testing.expectEqual(@as(f32, 0.5), half_white.rgba[1]);
+    try std.testing.expectEqual(@as(f32, 0.5), half_white.rgba[2]);
+    try std.testing.expectEqual(@as(f32, 0.5), half_white.rgba[3]);
+
+    // premultiplied() preserves the data verbatim for callers that already
+    // own premultiplied input.
+    const pre = Color.premultiplied(0.25, 0.5, 0.75, 1);
+    try std.testing.expectEqual(@as(f32, 0.75), pre.rgba[2]);
+
+    // a == 0 collapses to fully transparent regardless of source RGB.
+    const ghost = Color.straight(1, 1, 1, 0);
+    try std.testing.expectEqual(Color.transparent, ghost);
 }
 
 test "Transform is the public f64 affine transform" {

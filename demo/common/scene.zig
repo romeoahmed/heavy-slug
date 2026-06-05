@@ -245,31 +245,31 @@ pub const ColorScheme = enum {
     fn color(self: ColorScheme, tone: TextTone) heavy_slug.Color {
         return switch (self) {
             .light => switch (tone) {
-                .title => heavy_slug.Color.fromRgba(0.055, 0.07, 0.065, 1),
-                .subtitle => heavy_slug.Color.fromRgba(0.33, 0.38, 0.36, 1),
-                .body => heavy_slug.Color.fromRgba(0.105, 0.12, 0.112, 1),
-                .accent => heavy_slug.Color.fromRgba(0.02, 0.34, 0.38, 1),
+                .title => heavy_slug.Color.straight(0.055, 0.07, 0.065, 1),
+                .subtitle => heavy_slug.Color.straight(0.33, 0.38, 0.36, 1),
+                .body => heavy_slug.Color.straight(0.105, 0.12, 0.112, 1),
+                .accent => heavy_slug.Color.straight(0.02, 0.34, 0.38, 1),
             },
             .dark => switch (tone) {
-                .title => heavy_slug.Color.fromRgba(0.92, 0.95, 0.92, 1),
-                .subtitle => heavy_slug.Color.fromRgba(0.63, 0.69, 0.66, 1),
-                .body => heavy_slug.Color.fromRgba(0.82, 0.86, 0.83, 1),
-                .accent => heavy_slug.Color.fromRgba(0.48, 0.86, 0.9, 1),
+                .title => heavy_slug.Color.straight(0.92, 0.95, 0.92, 1),
+                .subtitle => heavy_slug.Color.straight(0.63, 0.69, 0.66, 1),
+                .body => heavy_slug.Color.straight(0.82, 0.86, 0.83, 1),
+                .accent => heavy_slug.Color.straight(0.48, 0.86, 0.9, 1),
             },
         };
     }
 
     fn overlayColor(self: ColorScheme) heavy_slug.Color {
         return switch (self) {
-            .light => heavy_slug.Color.fromRgba(0.06, 0.16, 0.16, 1),
-            .dark => heavy_slug.Color.fromRgba(0.7, 0.92, 0.86, 1),
+            .light => heavy_slug.Color.straight(0.06, 0.16, 0.16, 1),
+            .dark => heavy_slug.Color.straight(0.7, 0.92, 0.86, 1),
         };
     }
 
     fn alertColor(self: ColorScheme) heavy_slug.Color {
         return switch (self) {
-            .light => heavy_slug.Color.fromRgba(0.82, 0.05, 0.02, 1),
-            .dark => heavy_slug.Color.fromRgba(1.0, 0.36, 0.12, 1),
+            .light => heavy_slug.Color.straight(0.82, 0.05, 0.02, 1),
+            .dark => heavy_slug.Color.straight(1.0, 0.36, 0.12, 1),
         };
     }
 };
