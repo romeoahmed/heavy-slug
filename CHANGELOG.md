@@ -10,6 +10,40 @@ implementation history belongs in commits and code review notes.
 
 ## [Unreleased]
 
+### Changed
+
+- **Metal backend loads a precompiled `.metallib` at runtime:** the build
+  graph now drives `xcrun metal -c` per Slang entry and links the resulting
+  IRs into a single `heavy_slug.metallib` that the Swift bridge hands to
+  `MTLDevice.makeLibrary(data:)`. Shared `shaders/core/*.slang` helpers are
+  marked `[ForceInline]` so each entry's MSL translation unit no longer
+  emits external symbols that would collide at link time. Removes the
+  per-context source-string MSL compile through `MTL4Compiler` and the
+  associated ~50–150 ms startup cost.
+- **Vulkan backend prefers ReBAR memory for host-written buffers:** the
+  memory-type search now picks `DEVICE_LOCAL | HOST_VISIBLE | HOST_COHERENT`
+  when the driver advertises it, falling back to the previous plain
+  host-visible coherent type on GPUs without resizable BAR / SAM exposure.
+- **Vulkan fixed dynamic state hoisted out of the per-frame bind:**
+  `Renderer.setFixedRenderState(target)` is a new entry the host should call
+  once per command buffer recording; `ShaderProgram.bind()` now only issues
+  the `vkCmdBindShadersEXT` call, cutting ~30 redundant dynamic-state writes
+  per submitted text batch.
+- **Mesh shader reads SSBOs only from the workgroup leader:** the mesh entry
+  in `shaders/entries/mesh.slang` no longer broadcasts `meshlets[]` and
+  `glyphs[]` loads across every thread; thread 0 reads, plans, and publishes
+  through groupshared memory. Eliminates the 31× redundant structured-buffer
+  reads per workgroup that the audit measured at multi-GB/s on dense frames.
+- **Vulkan demo present-wait stage tightened:** the swapchain semaphore
+  signal mask is now `COLOR_ATTACHMENT_OUTPUT_BIT` rather than
+  `ALL_COMMANDS_BIT`, matching the actual last GPU write stage of the text
+  pass and letting the driver overlap presentation setup with later work.
+- **Vulkan shader-object setup drops a redundant call:** mesh-shading
+  pipelines do not consume vertex input state (Vulkan 1.4 §15.2.2), so the
+  `vkCmdBindVertexBuffers2(0, &.{}, &.{}, null, null)` call is no longer
+  emitted; the empty `cmdSetVertexInputEXT(null, null)` remains as a
+  defensive no-op for validation-layer cleanliness.
+
 ### Added
 
 - **Premultiplied-alpha color contract documented:** `Color` doc-comment now
