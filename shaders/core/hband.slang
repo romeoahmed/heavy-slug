@@ -7,24 +7,24 @@ import shader_math;
 
 static const float kHBandEpsilon = 1.0 / 1048576.0;
 
-public int anchoredHBandIndexQ(int deltaYQ, int anchorYQ, int bandHeightQ)
+[ForceInline] public int anchoredHBandIndexQ(int deltaYQ, int anchorYQ, int bandHeightQ)
 {
     int k = floorDivInt(anchorYQ, bandHeightQ);
     int r = anchorYQ - k * bandHeightQ;
     return k + floorDivInt(saturatingAddInt(r, deltaYQ), bandHeightQ);
 }
 
-public int floorLocalToQ(float value, uint fractionBits)
+[ForceInline] public int floorLocalToQ(float value, uint fractionBits)
 {
     return boundedQFromFloat(value * exp2(float(fractionBits)), false);
 }
 
-public int ceilLocalToQ(float value, uint fractionBits)
+[ForceInline] public int ceilLocalToQ(float value, uint fractionBits)
 {
     return boundedQFromFloat(value * exp2(float(fractionBits)), true);
 }
 
-public bool conservativeHBandRange(
+[ForceInline] public bool conservativeHBandRange(
     float2 renderCoord,
     float2 dx,
     float invDet,

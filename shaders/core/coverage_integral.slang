@@ -21,25 +21,25 @@ static const float kGaussRoot = 0.7745966692414834;
 static const float kGaussSideWeight = 0.5555555555555556;
 static const float kGaussCenterWeight = 0.8888888888888888;
 
-float cubicAt(float p0, float p1, float p2, float p3, float t)
+[ForceInline] float cubicAt(float p0, float p1, float p2, float p3, float t)
 {
     float u = 1.0 - t;
     return ((p0 * u + p1 * t) * u + (p1 * u + p2 * t) * t) * u +
            ((p1 * u + p2 * t) * u + (p2 * u + p3 * t) * t) * t;
 }
 
-float cubicAxisDerivative(float p0, float p1, float p2, float p3, float t)
+[ForceInline] float cubicAxisDerivative(float p0, float p1, float p2, float p3, float t)
 {
     float u = 1.0 - t;
     return 3.0 * (u * u * (p1 - p0) + 2.0 * u * t * (p2 - p1) + t * t * (p3 - p2));
 }
 
-bool crossesValue(float a, float b, float value)
+[ForceInline] bool crossesValue(float a, float b, float value)
 {
     return (a < value && b > value) || (a > value && b < value);
 }
 
-float solveMonotoneCubicAt(float p0, float p1, float p2, float p3, float value)
+[ForceInline] float solveMonotoneCubicAt(float p0, float p1, float p2, float p3, float value)
 {
     float f0 = p0 - value;
     float f1 = p3 - value;
@@ -78,7 +78,7 @@ float solveMonotoneCubicAt(float p0, float p1, float p2, float p3, float value)
     return saturate(t);
 }
 
-void splitCubic(Cubic curve, float t, out Cubic left, out Cubic right)
+[ForceInline] void splitCubic(Cubic curve, float t, out Cubic left, out Cubic right)
 {
     float2 p01 = lerp(curve.p0, curve.p1, t);
     float2 p12 = lerp(curve.p1, curve.p2, t);
@@ -120,14 +120,14 @@ Cubic subCubic(Cubic curve, float ta, float tb)
     return curve;
 }
 
-float evalXDy(Cubic curve, float xLeft, float t)
+[ForceInline] float evalXDy(Cubic curve, float xLeft, float t)
 {
     float x = cubicAt(curve.p0.x, curve.p1.x, curve.p2.x, curve.p3.x, t);
     float dy = cubicAxisDerivative(curve.p0.y, curve.p1.y, curve.p2.y, curve.p3.y, t);
     return (x - xLeft) * dy;
 }
 
-float integrateInsideXDy(Cubic curve, float xLeft, float a, float b)
+[ForceInline] float integrateInsideXDy(Cubic curve, float xLeft, float a, float b)
 {
     float half = (b - a) * 0.5;
     if (abs(half) <= kParamEpsilon)
@@ -142,7 +142,7 @@ float integrateInsideXDy(Cubic curve, float xLeft, float a, float b)
     );
 }
 
-float integrateClampedSpan(Cubic curve, float a, float b)
+[ForceInline] float integrateClampedSpan(Cubic curve, float a, float b)
 {
     if (b <= a + kParamEpsilon)
         return 0.0;
@@ -160,7 +160,7 @@ float integrateClampedSpan(Cubic curve, float a, float b)
     return integrateInsideXDy(curve, -0.5, a, b);
 }
 
-void addSplitRoot(inout float r0, inout float r1, inout uint rootCount, float root, float ta, float tb)
+[ForceInline] void addSplitRoot(inout float r0, inout float r1, inout uint rootCount, float root, float ta, float tb)
 {
     if (root <= ta + kParamEpsilon || root >= tb - kParamEpsilon)
         return;
@@ -177,7 +177,7 @@ void addSplitRoot(inout float r0, inout float r1, inout uint rootCount, float ro
     }
 }
 
-float integrateYMonotoneCoverage(Cubic curve)
+[ForceInline] float integrateYMonotoneCoverage(Cubic curve)
 {
     float curveStartY = curve.p0.y;
     float curveEndY = curve.p3.y;
@@ -257,7 +257,7 @@ float integrateYMonotoneCoverage(Cubic curve)
     return area + integrateClampedSpan(curve, r0, r1) + integrateClampedSpan(curve, r1, tb);
 }
 
-void appendRoot(inout float roots[6], inout uint rootCount, float root)
+[ForceInline] void appendRoot(inout float roots[6], inout uint rootCount, float root)
 {
     if (root <= kParamEpsilon || root >= 1.0 - kParamEpsilon)
         return;
@@ -275,7 +275,7 @@ void appendRoot(inout float roots[6], inout uint rootCount, float root)
     }
 }
 
-void appendDerivativeRoots(inout float roots[6], inout uint rootCount, float p0, float p1, float p2, float p3)
+[ForceInline] void appendDerivativeRoots(inout float roots[6], inout uint rootCount, float p0, float p1, float p2, float p3)
 {
     float a = -p0 + 3.0 * p1 - 3.0 * p2 + p3;
     float b = 2.0 * (p0 - 2.0 * p1 + p2);
@@ -301,7 +301,7 @@ void appendDerivativeRoots(inout float roots[6], inout uint rootCount, float p0,
     appendRoot(roots, rootCount, (-qb + d) * inv);
 }
 
-void sortRoots(inout float roots[6], uint rootCount)
+[ForceInline] void sortRoots(inout float roots[6], uint rootCount)
 {
     for (uint i = 1; i < rootCount; i++)
     {
@@ -316,7 +316,7 @@ void sortRoots(inout float roots[6], uint rootCount)
     }
 }
 
-float integrateCurve(Cubic curve)
+[ForceInline] float integrateCurve(Cubic curve)
 {
     float roots[6];
     roots[0] = 0.0;
@@ -341,7 +341,7 @@ float integrateCurve(Cubic curve)
     return area;
 }
 
-float2 toPixelLocal(float2 p, float2 center, float2 dx, float2 dy, float invDet)
+[ForceInline] float2 toPixelLocal(float2 p, float2 center, float2 dx, float2 dy, float invDet)
 {
     float2 d = p - center;
     return float2(
@@ -351,7 +351,7 @@ float2 toPixelLocal(float2 p, float2 center, float2 dx, float2 dy, float invDet)
 }
 
 // Blob header bounds are packed as [min_x, min_y, max_x, max_y].
-public bool rectBoundsRelativeTo(int4 boundsQ, int2 anchorQ, float invScale, out float4 bounds)
+[ForceInline] public bool rectBoundsRelativeTo(int4 boundsQ, int2 anchorQ, float invScale, out float4 bounds)
 {
     bounds = float4(0.0, 0.0, 0.0, 0.0);
     int minX;
@@ -369,12 +369,12 @@ public bool rectBoundsRelativeTo(int4 boundsQ, int2 anchorQ, float invScale, out
 }
 
 // Per-curve bounds are packed as [min_x, min_y, max_x, max_y].
-float4 curveBoundsRelativeTo(float4 bbox)
+[ForceInline] float4 curveBoundsRelativeTo(float4 bbox)
 {
     return bbox;
 }
 
-bool localCurveBboxMayContribute(float4 bbox, float2 center, float2 dx, float2 dy, float invDet)
+[ForceInline] bool localCurveBboxMayContribute(float4 bbox, float2 center, float2 dx, float2 dy, float invDet)
 {
     float2 bboxMin = bbox.xy;
     float2 bboxMax = bbox.zw;
@@ -400,7 +400,7 @@ bool localCurveBboxMayContribute(float4 bbox, float2 center, float2 dx, float2 d
     return true;
 }
 
-public bool curveBboxMayContribute(
+[ForceInline] public bool curveBboxMayContribute(
     float4 bbox,
     float2 center,
     float2 dx,
@@ -410,7 +410,7 @@ public bool curveBboxMayContribute(
     return localCurveBboxMayContribute(curveBoundsRelativeTo(bbox), center, dx, dy, invDet);
 }
 
-public float resolveCoverage(float signedArea, float fillSign, float detSign, uint flags)
+[ForceInline] public float resolveCoverage(float signedArea, float fillSign, float detSign, uint flags)
 {
     float windingCoverage = signedArea;
     float coverage = fillSign * detSign * windingCoverage;
@@ -429,7 +429,7 @@ public float resolveCoverage(float signedArea, float fillSign, float detSign, ui
     return coverage;
 }
 
-public bool integrateCurvePayload(
+[ForceInline] public bool integrateCurvePayload(
     BlobReader blob,
     uint curveBase,
     uint curveIndex,
@@ -457,7 +457,7 @@ public bool integrateCurvePayload(
     return true;
 }
 
-public bool integrateCurveFromBlob(
+[ForceInline] public bool integrateCurveFromBlob(
     BlobReader blob,
     uint curveBase,
     uint curveIndex,
@@ -489,7 +489,7 @@ public bool integrateCurveFromBlob(
     return integrateCurvePayload(blob, curveBase, curveIndex, anchorQ, invScale, renderCoord, dx, dy, invDet, contribution);
 }
 
-public float integrateFullScan(
+[ForceInline] public float integrateFullScan(
     BlobReader blob,
     uint curveBase,
     uint curveCount,
@@ -512,7 +512,7 @@ public float integrateFullScan(
 }
 
 #if HEAVY_SLUG_SHADER_STATS
-public float integrateCurveFromBlobWithStats(
+[ForceInline] public float integrateCurveFromBlobWithStats(
     BlobReader blob,
     uint curveBase,
     uint curveIndex,
@@ -540,7 +540,7 @@ public float integrateCurveFromBlobWithStats(
     return integrated ? contribution : 0.0;
 }
 
-public float integrateFullScanWithStats(
+[ForceInline] public float integrateFullScanWithStats(
     BlobReader blob,
     uint curveBase,
     uint curveCount,

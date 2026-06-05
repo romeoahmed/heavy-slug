@@ -16,7 +16,7 @@ public struct LocalFrame
     public float2 dy;
 };
 
-public bool localQToScreenExact(
+[ForceInline] public bool localQToScreenExact(
     float2 screenAnchorPx,
     float4 screenFromLocal,
     uint precisionBits,
@@ -35,7 +35,7 @@ public bool localQToScreenExact(
     return isFinite2(screen);
 }
 
-public bool meshletLocalQToScreen(GlyphInstance glyph, GlyphMeshlet meshlet, int2 localQ, out float2 screen)
+[ForceInline] public bool meshletLocalQToScreen(GlyphInstance glyph, GlyphMeshlet meshlet, int2 localQ, out float2 screen)
 {
     return localQToScreenExact(
         meshlet.screen_anchor_px,
@@ -46,20 +46,20 @@ public bool meshletLocalQToScreen(GlyphInstance glyph, GlyphMeshlet meshlet, int
         screen);
 }
 
-public float2 screenToNdc(float2 screen, float2 viewportSize)
+[ForceInline] public float2 screenToNdc(float2 screen, float2 viewportSize)
 {
     return float2(
         screen.x * (2.0 / viewportSize.x) - 1.0,
         screen.y * (2.0 / viewportSize.y) - 1.0);
 }
 
-public float2 framebufferToScreenYUp(float2 framebuffer, FrameParams params)
+[ForceInline] public float2 framebufferToScreenYUp(float2 framebuffer, FrameParams params)
 {
     return mul2x2(params.screen_from_framebuffer_2x2, framebuffer) +
         params.screen_from_framebuffer_offset;
 }
 
-public LocalFrame localFrameFromScreenYUp(float2 screen, float2 screenAnchorPx, float4 localFromScreen)
+[ForceInline] public LocalFrame localFrameFromScreenYUp(float2 screen, float2 screenAnchorPx, float4 localFromScreen)
 {
     float2 d = screen - screenAnchorPx;
     LocalFrame frame;

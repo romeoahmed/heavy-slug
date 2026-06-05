@@ -67,12 +67,12 @@ public struct BlobHeader
     public uint bandBaseWords;
     public uint idBaseWords;
 
-    public float invScale()
+    [ForceInline] public float invScale()
     {
         return exp2(-float(fractionBits));
     }
 
-    public bool isSupported()
+    [ForceInline] public bool isSupported()
     {
         if (protocolMagic != BLOB_PROTOCOL_MAGIC)
             return false;
@@ -87,7 +87,7 @@ public struct BlobHeader
         return curveCount <= (wordCount - curveBaseWords) / CURVE_WORD_LEN;
     }
 
-    public bool hasCandidateIndex()
+    [ForceInline] public bool hasCandidateIndex()
     {
         if (bandCount == 0 || bandHeightQ <= 0)
             return false;
@@ -113,22 +113,22 @@ public struct BlobReader
     public ByteAddressBuffer buf;
     public uint base;
 
-    public uint byteAddress(uint word)
+    [ForceInline] public uint byteAddress(uint word)
     {
         return base + word * 4;
     }
 
-    public uint loadU32(uint word)
+    [ForceInline] public uint loadU32(uint word)
     {
         return buf.Load(byteAddress(word));
     }
 
-    public int loadI32(uint word)
+    [ForceInline] public int loadI32(uint word)
     {
         return asint(loadU32(word));
     }
 
-    public BlobHeader readHeader()
+    [ForceInline] public BlobHeader readHeader()
     {
         BlobHeader h;
         h.protocolMagic = loadU32(HEADER_PROTOCOL_MAGIC);
@@ -153,7 +153,7 @@ public struct BlobReader
         return h;
     }
 
-    public CurveQ readCurveQ(uint curveBaseWords, uint curveIndex)
+    [ForceInline] public CurveQ readCurveQ(uint curveBaseWords, uint curveIndex)
     {
         uint off = curveBaseWords + curveIndex * CURVE_WORD_LEN;
         CurveQ c;
@@ -169,7 +169,7 @@ public struct BlobReader
         return c;
     }
 
-    public int4 readCurveBoundsQ(uint curveBaseWords, uint curveIndex)
+    [ForceInline] public int4 readCurveBoundsQ(uint curveBaseWords, uint curveIndex)
     {
         uint off = curveBaseWords + curveIndex * CURVE_WORD_LEN;
         return int4(
@@ -179,7 +179,7 @@ public struct BlobReader
             loadI32(off + CURVE_BBOX_MAX_Y_Q));
     }
 
-    public bool readCurveBoundsRelativeExact(
+    [ForceInline] public bool readCurveBoundsRelativeExact(
         uint curveBaseWords,
         uint curveIndex,
         int2 anchorQ,
@@ -202,7 +202,7 @@ public struct BlobReader
         return true;
     }
 
-    public bool curvePointsRelativeExact(
+    [ForceInline] public bool curvePointsRelativeExact(
         CurveQ c,
         int2 anchorQ,
         float invScale,
@@ -233,7 +233,7 @@ public struct BlobReader
         return true;
     }
 
-    public bool readCurvePointsRelativeExact(
+    [ForceInline] public bool readCurvePointsRelativeExact(
         uint curveBaseWords,
         uint curveIndex,
         int2 anchorQ,
@@ -246,14 +246,14 @@ public struct BlobReader
         return curvePointsRelativeExact(readCurveQ(curveBaseWords, curveIndex), anchorQ, invScale, p0, p1, p2, p3);
     }
 
-    public void readBand(uint bandBaseWords, uint bandIndex, out uint idStart, out uint bandIdCount)
+    [ForceInline] public void readBand(uint bandBaseWords, uint bandIndex, out uint idStart, out uint bandIdCount)
     {
         uint off = bandBaseWords + bandIndex * BAND_WORD_LEN;
         idStart = loadU32(off);
         bandIdCount = loadU32(off + 1);
     }
 
-    public uint readCurveId(uint idBaseWords, uint idIndex)
+    [ForceInline] public uint readCurveId(uint idBaseWords, uint idIndex)
     {
         return loadU32(idBaseWords + idIndex);
     }

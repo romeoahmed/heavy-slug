@@ -4,6 +4,12 @@ module shader_math;
 // Small, shared numeric helpers for the Slang hot path. Keep this module free
 // of resource bindings so it can be imported by every stage and by CPU-side
 // reflection shaders without changing the GPU ABI.
+//
+// Every callable is marked [ForceInline] so the Metal backend can compile each
+// entry-point translation unit independently without emitting duplicate
+// external symbols for shared helpers. With Apple's `metal a.ir b.ir` link
+// step (Building a shader library by precompiling source files), unattributed
+// helpers would collide; ForceInline removes them from the emitted MSL.
 
 public static const int kI32Min = -2147483647 - 1;
 public static const int kI32Max = 2147483647;
@@ -12,17 +18,17 @@ public static const int kExactF32IntRadius = 16777216;
 static const float kI32MinFloat = -2147483648.0;
 static const float kI32MaxFloat = 2147483520.0;
 
-public bool isFinite2(float2 v)
+[ForceInline] public bool isFinite2(float2 v)
 {
     return isfinite(v.x) && isfinite(v.y);
 }
 
-public float2 mul2x2(float4 m, float2 v)
+[ForceInline] public float2 mul2x2(float4 m, float2 v)
 {
     return float2(m.x * v.x + m.z * v.y, m.y * v.x + m.w * v.y);
 }
 
-public int saturatingAddInt(int a, int b)
+[ForceInline] public int saturatingAddInt(int a, int b)
 {
     if (b > 0 && a > kI32Max - b)
         return kI32Max;
@@ -31,7 +37,7 @@ public int saturatingAddInt(int a, int b)
     return a + b;
 }
 
-public int boundedQFromFloat(float v, bool upper)
+[ForceInline] public int boundedQFromFloat(float v, bool upper)
 {
     if (!isfinite(v))
         return upper ? kI32Max : kI32Min;
@@ -44,7 +50,7 @@ public int boundedQFromFloat(float v, bool upper)
     return int(rounded);
 }
 
-public int floorDivInt(int a, int b)
+[ForceInline] public int floorDivInt(int a, int b)
 {
     int q = a / b;
     int r = a - q * b;
@@ -53,7 +59,7 @@ public int floorDivInt(int a, int b)
     return q;
 }
 
-bool diffGreaterThanExactRadius(int valueQ, int anchorQ)
+[ForceInline] bool diffGreaterThanExactRadius(int valueQ, int anchorQ)
 {
     if (valueQ <= anchorQ)
         return false;
@@ -62,7 +68,7 @@ bool diffGreaterThanExactRadius(int valueQ, int anchorQ)
     return valueQ > anchorQ + kExactF32IntRadius;
 }
 
-bool diffLessThanNegativeExactRadius(int valueQ, int anchorQ)
+[ForceInline] bool diffLessThanNegativeExactRadius(int valueQ, int anchorQ)
 {
     if (valueQ >= anchorQ)
         return false;
@@ -71,7 +77,7 @@ bool diffLessThanNegativeExactRadius(int valueQ, int anchorQ)
     return valueQ < anchorQ - kExactF32IntRadius;
 }
 
-public bool relativeExactQ(int valueQ, int anchorQ, out int deltaQ)
+[ForceInline] public bool relativeExactQ(int valueQ, int anchorQ, out int deltaQ)
 {
     deltaQ = 0;
     if (diffGreaterThanExactRadius(valueQ, anchorQ) ||
@@ -82,7 +88,7 @@ public bool relativeExactQ(int valueQ, int anchorQ, out int deltaQ)
     return true;
 }
 
-public bool relativeExactQ2(int2 valueQ, int2 anchorQ, out int2 deltaQ)
+[ForceInline] public bool relativeExactQ2(int2 valueQ, int2 anchorQ, out int2 deltaQ)
 {
     deltaQ = int2(0, 0);
     int dx;

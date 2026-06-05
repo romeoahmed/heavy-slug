@@ -35,12 +35,12 @@ public static const uint kMeshletCullZeroArea = 3;
 public static const uint kMeshletCullClipEmpty = 4;
 public static const uint kMeshletCullNonFinite = 5;
 
-public void addShaderStat(RWStructuredBuffer<uint> counters, uint index, uint value)
+[ForceInline] public void addShaderStat(RWStructuredBuffer<uint> counters, uint index, uint value)
 {
     InterlockedAdd(counters[index], value);
 }
 
-public void addMeshletStat(RWStructuredBuffer<uint> counters, bool emitted, uint cullReason)
+[ForceInline] public void addMeshletStat(RWStructuredBuffer<uint> counters, bool emitted, uint cullReason)
 {
     if (emitted)
     {
