@@ -12,6 +12,11 @@ implementation history belongs in commits and code review notes.
 
 ### Added
 
+- **Premultiplied-alpha color contract documented:** `Color` doc-comment now
+  describes the storage as linear premultiplied RGBA matching the
+  Vulkan/Metal blend equation, and `Color.straight(r, g, b, a)` /
+  `Color.premultiplied(r, g, b, a)` constructors replace the ambiguous
+  `Color.fromRgba`. Debug builds assert premultiplied invariants.
 - **Demo metrics overlay:** the shared demo scene now renders a
   backend-neutral screen-space readout for FPS, relative view zoom, and native
   display scale.
@@ -85,10 +90,11 @@ implementation history belongs in commits and code review notes.
   success.
 - **Native demo hosts rewritten:** Windows uses a titled Windows 11 native
   host with per-monitor DPI, DWM titlebar theming, a modern manifest, and
-  selected ntdll/win32u calls; Wayland uses a GNOME-oriented xdg-shell CSD path
-  with fractional-scale, viewporter, cursor-shape, and title painting; macOS
-  uses SwiftUI/AppKit with native menus, normal window chrome, and a
-  `CAMetalLayer`.
+  documented `extern "user32"` calls (NTDLL only for `RtlQueryPerformance*`
+  and optional `LdrLoadDll` of dwmapi/vulkan-1); Wayland uses a
+  GNOME-oriented xdg-shell CSD path with fractional-scale, viewporter,
+  cursor-shape, and title painting; macOS uses SwiftUI/AppKit with native
+  menus, normal window chrome, and a `CAMetalLayer`.
 - **Vulkan demo host rewritten:** WSI dispatch, physical-device selection,
   surface planning, swapchain image state, synchronization2 transitions,
   acquire/present fencing, and renderer-aligned frame slots now live in an
@@ -140,6 +146,26 @@ implementation history belongs in commits and code review notes.
 
 ### Removed
 
+- **`Color.fromRgba` removed:** replaced by explicit `Color.straight` (which
+  premultiplies) and `Color.premultiplied` constructors so non-opaque colors
+  enter the premultiplied-alpha blend pipeline correctly.
+- **`PrecisionPolicy.hysteresis_frames` and `PrecisionPolicy.fixedScale()`
+  removed:** neither had any reader in the codebase; the extern struct keeps
+  its 24-byte ABI footprint via widened explicit padding.
+- **`kMaxSubdivisionsPerGlyph` shader constant removed:** the value lived only
+  in `shaders/core/abi.slang` and the reflection manifest; no Slang shader
+  referenced it and `src/gpu/mesh_limits.zig::max_subdivisions_per_glyph`
+  remains the single CPU truth source.
+- **`glyphLocalQToScreen` Slang helper removed:** all mesh shader paths use
+  the meshlet-anchored variant; the glyph-anchored helper had no caller.
+- **HLSL `register(...)` annotations removed from Metal resource shim:**
+  `slangc -target metal` routes binding through `[[vk::binding]]` and ignores
+  HLSL `register()`, matching `shaders/backend_vulkan/resources.slang`.
+- **`NtUser*` / `win32u.dll` path removed from the Windows demo:**
+  `DestroyWindow`, `ReleaseCapture`, `SetCapture`, `SetWindowPos`, and
+  `ShowWindow` now go through documented `extern "user32"` symbols. The
+  `NativeUser` dispatch table, `loadNativeUserApi()`, and the win32u
+  `LdrLoadDll` startup step are removed.
 - **GLFW demo dependency removed:** demos are now native Win32, Wayland, and
   SwiftUI/AppKit hosts.
 - **Objective-C++ bridge removed:** Metal backend and Cocoa demo bridge code are
