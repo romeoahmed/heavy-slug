@@ -10,6 +10,14 @@ pub const Rect = extern struct {
     x_max: f64,
     y_max: f64,
 
+    /// Construct a Rect from a pair of (possibly unordered) extents, sorting
+    /// each axis so `*_min <= *_max`.
+    ///
+    /// Callers must pass finite values. Zig 0.16 `@min`/`@max` "return the
+    /// smallest/largest non-NaN value included" (Zig 0.16 builtins reference),
+    /// so a NaN input is silently replaced by the other extent — producing a
+    /// collapsed-but-finite Rect that satisfies `isFinite()` and `isEmpty()`.
+    /// If NaN-resilient parsing is needed, validate inputs before calling.
     pub fn init(x_min: f64, y_min: f64, x_max: f64, y_max: f64) Rect {
         return .{
             .x_min = @min(x_min, x_max),
