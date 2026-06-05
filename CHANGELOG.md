@@ -43,6 +43,30 @@ implementation history belongs in commits and code review notes.
   `vkCmdBindVertexBuffers2(0, &.{}, &.{}, null, null)` call is no longer
   emitted; the empty `cmdSetVertexInputEXT(null, null)` remains as a
   defensive no-op for validation-layer cleanliness.
+- **Swift autolink TODO points at the right upstream:** `build/swift.zig`
+  documents that the hand-maintained `swift_libraries` list exists because
+  Zig 0.16's self-hosted Mach-O linker does not yet consume
+  `LC_LINKER_OPTION` autolink directives from input objects, and notes the
+  closest upstream tracking issue (ziglang/zig#8727).
+- **`RendererCore.appendTextRun` split into focused helpers:** the previous
+  ~200-line monolith now reads as a 14-line driver loop on top of
+  `prepareRunFrame` (run validation + shaping + run-level transform),
+  `processGlyph` (per-glyph transform / precision / cache / emit),
+  `lookupOrEncodeGlyph` (cache lookup with `cache_encode_unsupported`
+  translation), and `emitGlyphInstance` (bounds / culling / chart-cast /
+  meshlet append). All reject-counter, diagnostic-aggregation, debug-stat,
+  and batch-rollback semantics are preserved; new tests pin the diagnostic
+  surface (`FrameWarning` coverage, blocking/non-blocking taxonomy) plus
+  the `host_culled` non-blocking path so future refactors cannot drop a
+  reason silently.
+- **`PoolAllocator` free-block search bounded by the starting bin:** the
+  bin scan no longer best-fits each chain. Within the starting bin
+  (`binForSize(aligned_size)`) it accepts the first member with
+  `size >= aligned_size`; in every higher bin, the chain head is by
+  construction large enough and is returned in O(1). Worst-case search is
+  now proportional to the starting bin's chain length rather than total
+  free-block count. Tests cover the head-selection rule and a 64-entry
+  same-bin chain.
 
 - **CI reusable workflows reorganized by runner identity:** the previous
   by-concern split (`_core` × 3, `_shaders`, `_vulkan` × 2, `_metal`) is
