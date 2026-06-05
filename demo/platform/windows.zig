@@ -1,8 +1,8 @@
 //! Native Windows 11 demo window, input, clock, and Vulkan surface glue.
 //!
-//! USER32 still owns the documented class, message-loop, DPI, and Vulkan WSI
-//! ABI. One-to-one lower-level operations use win32u/ntdll directly where the
-//! Windows 11 NtUser entry points have stable signatures in current phnt.
+//! All window-management calls go through the documented USER32 ABI. NTDLL is
+//! used only for `RtlQueryPerformanceCounter`/`Frequency` and `LdrLoadDll` of
+//! the optional `dwmapi.dll` / `vulkan-1.dll` shared libraries.
 
 const std = @import("std");
 const windows = std.os.windows;
@@ -107,6 +107,7 @@ extern "user32" fn DefWindowProcW(
     wparam: WPARAM,
     lparam: windows.LPARAM,
 ) callconv(.winapi) LRESULT;
+extern "user32" fn DestroyWindow(hWnd: windows.HWND) callconv(.winapi) windows.BOOL;
 extern "user32" fn DispatchMessageW(lpMsg: *const MSG) callconv(.winapi) LRESULT;
 extern "user32" fn GetClientRect(hWnd: windows.HWND, lpRect: *RECT) callconv(.winapi) windows.BOOL;
 extern "user32" fn GetDpiForWindow(hwnd: windows.HWND) callconv(.winapi) windows.UINT;
@@ -120,12 +121,24 @@ extern "user32" fn PeekMessageW(
     wRemoveMsg: windows.UINT,
 ) callconv(.winapi) windows.BOOL;
 extern "user32" fn RegisterClassExW(lpWndClass: *const WNDCLASSEXW) callconv(.winapi) windows.ATOM;
+extern "user32" fn ReleaseCapture() callconv(.winapi) windows.BOOL;
 extern "user32" fn ScreenToClient(hWnd: windows.HWND, lpPoint: *POINT) callconv(.winapi) windows.BOOL;
+extern "user32" fn SetCapture(hWnd: windows.HWND) callconv(.winapi) ?windows.HWND;
 extern "user32" fn SetWindowLongPtrW(
     hWnd: windows.HWND,
     nIndex: c_int,
     dwNewLong: windows.LONG_PTR,
 ) callconv(.winapi) windows.LONG_PTR;
+extern "user32" fn SetWindowPos(
+    hWnd: windows.HWND,
+    hWndInsertAfter: ?windows.HWND,
+    X: c_int,
+    Y: c_int,
+    cx: c_int,
+    cy: c_int,
+    uFlags: windows.UINT,
+) callconv(.winapi) windows.BOOL;
+extern "user32" fn ShowWindow(hWnd: windows.HWND, nCmdShow: c_int) callconv(.winapi) windows.BOOL;
 extern "user32" fn TranslateMessage(lpMsg: *const MSG) callconv(.winapi) windows.BOOL;
 
 const Win32 = struct {
@@ -133,7 +146,6 @@ const Win32 = struct {
 
     const ModuleName = struct {
         const dwmapi = std.unicode.utf8ToUtf16LeStringLiteral("dwmapi.dll");
-        const win32u = std.unicode.utf8ToUtf16LeStringLiteral("win32u.dll");
         const vulkan_loader = std.unicode.utf8ToUtf16LeStringLiteral("vulkan-1.dll");
     };
 
@@ -187,7 +199,7 @@ const Win32 = struct {
     };
 
     const Show = struct {
-        const normal = 5;
+        const normal: c_int = 5;
     };
 
     const Style = struct {
@@ -200,9 +212,9 @@ const Win32 = struct {
     };
 
     const WindowPosition = struct {
-        const no_move = 0x0002;
-        const no_z_order = 0x0004;
-        const no_activate = 0x0010;
+        const no_move: windows.UINT = 0x0002;
+        const no_z_order: windows.UINT = 0x0004;
+        const no_activate: windows.UINT = 0x0010;
     };
 
     const VirtualKey = struct {
@@ -290,56 +302,6 @@ const NativeDll = struct {
     }
 };
 
-const NativeUser = struct {
-    destroy_window: NtUserDestroyWindowFn,
-    release_capture: NtUserReleaseCaptureFn,
-    set_capture: NtUserSetCaptureFn,
-    set_window_pos: NtUserSetWindowPosFn,
-    show_window: NtUserShowWindowFn,
-
-    const NtUserDestroyWindowFn = *const fn (windows.HWND) callconv(.winapi) windows.BOOL;
-    const NtUserReleaseCaptureFn = *const fn () callconv(.winapi) windows.LOGICAL;
-    const NtUserSetCaptureFn = *const fn (windows.HWND) callconv(.winapi) ?windows.HWND;
-    const NtUserSetWindowPosFn = *const fn (
-        windows.HWND,
-        ?windows.HWND,
-        windows.LONG,
-        windows.LONG,
-        windows.LONG,
-        windows.LONG,
-        windows.ULONG,
-    ) callconv(.winapi) windows.BOOL;
-    const NtUserShowWindowFn = *const fn (windows.HWND, windows.LONG) callconv(.winapi) windows.BOOL;
-
-    const Procedure = enum {
-        destroy_window,
-        release_capture,
-        set_capture,
-        set_window_pos,
-        show_window,
-    };
-
-    fn load(module: NativeDll) !NativeUser {
-        return .{
-            .destroy_window = try module.requiredProcedure(NtUserDestroyWindowFn, procedureName(.destroy_window)),
-            .release_capture = try module.requiredProcedure(NtUserReleaseCaptureFn, procedureName(.release_capture)),
-            .set_capture = try module.requiredProcedure(NtUserSetCaptureFn, procedureName(.set_capture)),
-            .set_window_pos = try module.requiredProcedure(NtUserSetWindowPosFn, procedureName(.set_window_pos)),
-            .show_window = try module.requiredProcedure(NtUserShowWindowFn, procedureName(.show_window)),
-        };
-    }
-
-    fn procedureName(procedure: Procedure) [:0]const u8 {
-        return switch (procedure) {
-            .destroy_window => "NtUserDestroyWindow",
-            .release_capture => "NtUserReleaseCapture",
-            .set_capture => "NtUserSetCapture",
-            .set_window_pos => "NtUserSetWindowPos",
-            .show_window => "NtUserShowWindow",
-        };
-    }
-};
-
 const Clock = struct {
     frequency: i64 = 0,
     origin: i64 = 0,
@@ -367,8 +329,6 @@ const required_instance_extensions = [_][*:0]const u8{
 
 var vulkan_loader: ?NativeDll = null;
 var vk_get_instance_proc_addr: ?vk.PfnGetInstanceProcAddr = null;
-var win32u: ?NativeDll = null;
-var native_user: ?NativeUser = null;
 var dwmapi: ?NativeDll = null;
 var dwm_set_window_attribute: ?DwmSetWindowAttributeFn = null;
 var dwm_dark_mode_available = true;
@@ -392,7 +352,6 @@ pub const Window = struct {
         const title_w = try demo_title.allocUtf16LeZ(allocator, title);
         defer allocator.free(title_w);
 
-        try loadNativeUserApi();
         try loadVulkanLoader();
 
         const hinstance: windows.HINSTANCE = @ptrCast(windows.peb().ImageBaseAddress);
@@ -417,7 +376,7 @@ pub const Window = struct {
             hinstance,
             self,
         ) orelse return error.WindowCreationFailed;
-        errdefer _ = nativeUser().destroy_window(hwnd);
+        errdefer _ = DestroyWindow(hwnd);
 
         self.hwnd = hwnd;
         self.updateDpiFromWindow();
@@ -425,13 +384,13 @@ pub const Window = struct {
         self.refreshFramebufferSize();
         setDwmWindowCornerPreference(hwnd);
         self.setDarkMode(false);
-        _ = nativeUser().show_window(hwnd, Win32.Show.normal);
+        _ = ShowWindow(hwnd, Win32.Show.normal);
     }
 
     pub fn deinit(self: *Window) void {
         const hwnd = self.hwnd orelse return;
         _ = SetWindowLongPtrW(hwnd, Win32.WindowLong.user_data, 0);
-        _ = nativeUser().destroy_window(hwnd);
+        _ = DestroyWindow(hwnd);
         self.hwnd = null;
     }
 
@@ -521,7 +480,7 @@ pub const Window = struct {
         ).toBool()) {
             return error.WindowRectFailed;
         }
-        if (!nativeUser().set_window_pos(
+        if (!SetWindowPos(
             hwnd,
             null,
             0,
@@ -542,19 +501,6 @@ pub fn getRequiredInstanceExtensions() []const [*:0]const u8 {
 pub fn getInstanceProcAddress(instance: vk.Instance, name: [*:0]const u8) vk.PfnVoidFunction {
     const get_proc = vk_get_instance_proc_addr orelse return null;
     return get_proc(instance, name);
-}
-
-fn loadNativeUserApi() !void {
-    if (native_user != null) return;
-
-    const module = NativeDll.load(Win32.ModuleName.win32u) catch return error.NativeUserApiUnavailable;
-    const api = NativeUser.load(module) catch return error.NativeUserApiUnavailable;
-    win32u = module;
-    native_user = api;
-}
-
-fn nativeUser() NativeUser {
-    return native_user orelse unreachable;
 }
 
 fn loadVulkanLoader() !void {
@@ -684,7 +630,7 @@ fn windowProc(hwnd: windows.HWND, msg: windows.UINT, wparam: WPARAM, lparam: win
         Win32.Message.erase_background => return 1,
         Win32.Message.dpi_changed => {
             const suggested: *const RECT = ptrFromLparam(RECT, lparam);
-            _ = nativeUser().set_window_pos(
+            _ = SetWindowPos(
                 hwnd,
                 null,
                 suggested.left,
@@ -788,11 +734,11 @@ fn clearTransientInput(maybe_window: ?*Window) void {
 }
 
 fn setCapture(hwnd: windows.HWND) void {
-    _ = nativeUser().set_capture(hwnd);
+    _ = SetCapture(hwnd);
 }
 
 fn releaseCapture() void {
-    _ = nativeUser().release_capture();
+    _ = ReleaseCapture();
 }
 
 fn updateCapture(hwnd: windows.HWND, window: *Window) void {
@@ -991,14 +937,6 @@ test "Win32 DWM chrome helpers encode COLORREF palettes" {
     const dark = chromePalette(.dark);
     try std.testing.expect(light.caption != dark.caption);
     try std.testing.expect(light.text != dark.text);
-}
-
-test "Win32 native user table resolves Windows 11 direct NtUser entry points" {
-    try std.testing.expectEqualStrings("NtUserDestroyWindow", NativeUser.procedureName(.destroy_window));
-    try std.testing.expectEqualStrings("NtUserReleaseCapture", NativeUser.procedureName(.release_capture));
-    try std.testing.expectEqualStrings("NtUserSetCapture", NativeUser.procedureName(.set_capture));
-    try std.testing.expectEqualStrings("NtUserSetWindowPos", NativeUser.procedureName(.set_window_pos));
-    try std.testing.expectEqualStrings("NtUserShowWindow", NativeUser.procedureName(.show_window));
 }
 
 test "Win32 surface capabilities keep zero-copy present on Vulkan WSI" {

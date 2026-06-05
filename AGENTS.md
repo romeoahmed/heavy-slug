@@ -156,8 +156,10 @@ where the host platform supports them.
 ## Platform Demo Rules
 
 - Windows demo: keep a direct native Win32 host with `std.os.windows` types,
-  selected ntdll/win32u calls, dynamic Vulkan/DWM loading, per-monitor DPI,
-  native system commands, and the manifest in `demo/platform/windows.manifest`.
+  documented `extern "user32"` window-management calls, ntdll only for
+  `RtlQueryPerformanceCounter`/`Frequency` and `LdrLoadDll`, dynamic Vulkan/DWM
+  loading, per-monitor DPI, native system commands, and the manifest in
+  `demo/platform/windows.manifest`.
 - Wayland demo: keep xdg-shell client-side decorations, logical sizing,
   fractional-scale buffer sizing, viewporter destination sizing,
   cursor-shape-v1, xkbcommon keymaps, xdg move/resize delegation, and
