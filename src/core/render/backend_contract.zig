@@ -1,4 +1,24 @@
 //! Compile-time shape checks for renderer backends used by `RendererCore`.
+//!
+//! Backend resource-lifetime invariant
+//! ===================================
+//!
+//! `uploadBlob` is handed a `byte_pool.Allocation` carved from the renderer's
+//! single glyph-pool buffer, plus the encoded blob bytes. It must return a
+//! `GlyphBlobRef` that, together with the input allocation, identifies the
+//! **same physical resource**: in the bundled Vulkan and Metal backends the
+//! ref is literally the pool byte offset, so the pool allocation already
+//! encodes the ref and no per-blob GPU object exists. Consequently
+//! `retireBlob` is permitted to be a no-op — `GlyphStore.retireCompleted`
+//! calls `pool_alloc.free(allocation)` alongside `retireBlob(ref)`, and the
+//! pool free is the only mandatory step for a pool-resident backend.
+//!
+//! A backend that allocates a *separate* GPU object per blob (image,
+//! descriptor, …) must release it in `retireBlob`; in that case `retireBlob`
+//! and the matching `pool_alloc.free` together free both halves of the same
+//! logical resource. Either way, `ensureGlyphCached` cleans up partial state
+//! through `errdefer pool_alloc.free` + `errdefer backend.retireBlob`, so the
+//! pair must be safe to call back-to-back on the same ref/allocation.
 
 const std = @import("std");
 
