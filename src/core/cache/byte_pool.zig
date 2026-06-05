@@ -200,23 +200,28 @@ pub const PoolAllocator = struct {
         return result;
     }
 
+    /// Bin `b` holds blocks with size in [2^b, 2^(b+1)). For the starting bin
+    /// `start = binForSize(aligned_size)`, members can sit on either side of
+    /// `aligned_size`, so we walk the chain and accept the first fit. For
+    /// every bin above, the lower-bound 2^(start+1) already exceeds the
+    /// upper bound 2^(start+1) − 1 of `aligned_size`, so the chain head
+    /// trivially satisfies the request — O(1) per higher bin, with no
+    /// scan-to-smallest tax. Net cost is bounded by the starting bin's chain
+    /// length rather than total free-block count.
     fn findReusableBlock(self: *const PoolAllocator, aligned_size: u32) ?Link {
-        var bin = binForSize(aligned_size);
-        while (bin < bin_count) : (bin += 1) {
-            var best: Link = none;
-            var best_size: u32 = std.math.maxInt(u32);
+        const start_bin = binForSize(aligned_size);
 
-            var index = self.bin_heads[bin];
-            while (index != none) {
-                const block = self.nodeConst(index);
-                if (block.size >= aligned_size and block.size < best_size) {
-                    best = index;
-                    best_size = block.size;
-                    if (best_size == aligned_size) break;
-                }
-                index = block.next_bin;
-            }
-            if (best != none) return best;
+        var index = self.bin_heads[start_bin];
+        while (index != none) {
+            const block = self.nodeConst(index);
+            if (block.size >= aligned_size) return index;
+            index = block.next_bin;
+        }
+
+        var bin = start_bin + 1;
+        while (bin < bin_count) : (bin += 1) {
+            const head = self.bin_heads[bin];
+            if (head != none) return head;
         }
         return null;
     }
@@ -711,6 +716,55 @@ test "PoolAllocator: free coalesces adjacent blocks" {
 
     const big = pa.alloc(144).?;
     try std.testing.expectEqual(@as(u32, 0), big.offset);
+    try expectConsistent(&pa);
+}
+
+test "PoolAllocator: higher bins return the chain head without scanning to smallest" {
+    // Within the starting bin we walk to the first fit; for any bin above
+    // start, every member trivially satisfies size >= aligned_size, so the
+    // search picks the head directly. The first-freed block lands at the
+    // head of bin 5 below; the second free pushes that block to the next_bin
+    // slot. A request that maps to start_bin = 4 (alignment-rounded 32)
+    // skips bin 4 (empty) and must return whichever block currently sits at
+    // bin 5's head — i.e. the most recently freed one — without scanning.
+    var pa = try PoolAllocator.init(std.testing.allocator, 4096, 16);
+    defer pa.deinit();
+
+    const a = pa.alloc(48).?;
+    _ = pa.alloc(16);
+    const b = pa.alloc(48).?;
+    _ = pa.alloc(16);
+
+    pa.free(a); // bin 5 head = block at a.offset
+    pa.free(b); // bin 5 head = block at b.offset (linkBin inserts at head)
+
+    const reused = pa.alloc(32).?;
+    try std.testing.expectEqual(b.offset, reused.offset);
+    try expectConsistent(&pa);
+}
+
+test "PoolAllocator: dense same-bin chain finds a fit without scanning past it" {
+    // Populate one bin chain with many entries whose sizes straddle the
+    // request size. The within-bin walk must accept the first fit it
+    // encounters; this exercise would have produced quadratic search time
+    // under the previous best-fit-within-bin implementation.
+    var pa = try PoolAllocator.init(std.testing.allocator, 16 * 1024, 16);
+    defer pa.deinit();
+
+    const chain_len = 64;
+    var freed: [chain_len]Allocation = undefined;
+    for (&freed, 0..) |*slot, i| {
+        const size: u32 = @intCast(80 + (i % 8) * 16); // 80..208, all in bin 6 (64..127) or bin 7
+        slot.* = pa.alloc(size).?;
+        // Sandwich every free block with a live one so frees do not coalesce.
+        _ = pa.alloc(16).?;
+    }
+    for (freed) |allocation| pa.free(allocation);
+
+    // Request that lands in bin 6's lower half; many chain members are large
+    // enough, many are not.
+    const reused = pa.alloc(96).?;
+    try std.testing.expect(reused.size == 96);
     try expectConsistent(&pa);
 }
 
