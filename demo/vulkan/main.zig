@@ -70,6 +70,7 @@ pub fn main() !void {
         }
 
         const view = scene.frameView(frame_metrics);
+        text_renderer.setFixedRenderState(.{ .command_buffer = frame.cmd });
         var text_frame = try text_renderer.beginFrame(view);
         var text_frame_open = true;
         errdefer if (text_frame_open) text_frame.discard();

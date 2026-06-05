@@ -317,6 +317,17 @@ pub const Renderer = struct {
         };
     }
 
+    /// Configure shader-object dynamic state that this renderer requires but
+    /// never varies (topology, blend equation, color write mask,
+    /// depth/stencil/multisample disables, …). Callers should invoke this
+    /// once per command buffer recording, before the first `Frame.submit()`
+    /// that targets the buffer. Splitting this out of `bind()` keeps the
+    /// per-batch hot path cheap (one `vkCmdBindShadersEXT` instead of 30+
+    /// dynamic-state writes).
+    pub fn setFixedRenderState(self: *Renderer, target: Target) void {
+        self.shader_program.setFixedRenderState(target.command_buffer);
+    }
+
     pub fn markFrameComplete(self: *Renderer, token: render.FrameToken) void {
         if (token > self.completed_frame) {
             self.captureCompletedShaderStats(token);

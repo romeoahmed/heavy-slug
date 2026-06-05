@@ -74,11 +74,27 @@ pub const ShaderProgram = struct {
         };
     }
 
+    /// Bind the mesh + fragment shader objects and clear the unused graphics
+    /// pre-raster stages. Cheap; called once per submitted text batch.
+    ///
+    /// This does NOT set the dozens of dynamic states that are constant for
+    /// this renderer (topology, blend equation, write mask, depth/stencil
+    /// off, …). Those live in `setFixedRenderState` and should be set once
+    /// per command buffer recording by the host.
     pub fn bind(self: ShaderProgram, command_buffer: vk.CommandBuffer) void {
         var bound_shaders = [_]vk.ShaderEXT{.null_handle} ** graphics_bind_stages.len;
         bound_shaders[mesh_bind_index] = self.shaders[mesh_shader_index];
         bound_shaders[fragment_bind_index] = self.shaders[fragment_shader_index];
         self.dispatch.cmdBindShadersEXT(command_buffer, &graphics_bind_stages, &bound_shaders);
+    }
+
+    /// Set every shader-object dynamic state the renderer requires but never
+    /// varies between frames (topology, blend equation, color write mask,
+    /// depth/stencil/multisample disables, …). Hosts that record command
+    /// buffers fresh each frame should call this once between
+    /// `vkBeginCommandBuffer` and the first `vkCmdDrawMeshTasksEXT`; hosts
+    /// that build command buffers ahead of time may call it during recording.
+    pub fn setFixedRenderState(self: ShaderProgram, command_buffer: vk.CommandBuffer) void {
         setFixedDynamicState(self.dispatch, command_buffer);
     }
 
@@ -147,8 +163,10 @@ fn destroyShaders(
 }
 
 fn setFixedDynamicState(dispatch: gpu_context.DeviceDispatch, command_buffer: vk.CommandBuffer) void {
+    // Mesh-shading pipelines do not consume vertex input state (Vulkan 1.4
+    // §15.2.2 "Mesh Shading"), so we publish an empty vertex input state
+    // for validation-layer cleanliness but do not bind any vertex buffers.
     dispatch.cmdSetVertexInputEXT(command_buffer, null, null);
-    dispatch.cmdBindVertexBuffers2(command_buffer, 0, &.{}, &.{}, null, null);
     dispatch.cmdSetPrimitiveTopology(command_buffer, .triangle_list);
     dispatch.cmdSetPrimitiveRestartEnable(command_buffer, .false);
 
