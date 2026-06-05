@@ -127,13 +127,19 @@ void meshMain(
         addShaderStat(shaderStats, kShaderStatMeshWorkgroups, 1);
 #endif
 
+    // meshletIndex is a function of pc.meshlet_base + gid, both uniform across
+    // the workgroup, so every thread computes the same value without an SSBO
+    // load. The expensive reads (meshlets[], glyphs[]) happen only in the
+    // leader; the other threads consume the resulting per-vertex data through
+    // groupshared memory after the barrier below.
     uint meshletIndex = pc.meshlet_base + gid;
-    bool inRange = gid < pc.meshlet_count;
-    GlyphMeshlet meshlet = inRange ? meshlets[meshletIndex] : (GlyphMeshlet)0;
-    GlyphInstance glyph = inRange ? glyphs[meshlet.glyph_index] : (GlyphInstance)0;
 
     if (gtid == 0)
     {
+        bool inRange = gid < pc.meshlet_count;
+        GlyphMeshlet meshlet = inRange ? meshlets[meshletIndex] : (GlyphMeshlet)0;
+        GlyphInstance glyph = inRange ? glyphs[meshlet.glyph_index] : (GlyphInstance)0;
+
         float2 clipped[kMeshOutputVertices];
         uint clippedCount = 0;
         uint cullReason = kMeshletCullNone;
